@@ -184,7 +184,8 @@ partition by hand, and nothing in the image can `apk upgrade` them.
 
 ## First boot
 
-The `uflinux-device` OpenRC service (from the `uflinux` package) runs early in the
+The `uflinux-device` OpenRC service (from the `uflinux-device` package, which is
+published in the release repository but not bundled in the live ISO) runs early in the
 `boot` runlevel. It is inert unless `/etc/uflinux/device` exists, so it does nothing
 on an ordinary installed system; a device image writes that file with the board id.
 When armed it runs `growpart` on the root partition once and then grows the

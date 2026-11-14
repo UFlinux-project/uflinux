@@ -144,6 +144,13 @@ available for installation but not automatically installed at live boot. It is
 not a claim that every cached package is running. Build/verify environment package
 lists also contain build or test tools and are labeled by stage.
 
+Publication requires every custom package that is not a `-dbg`, `-doc` or `-dev`
+subpackage to appear in that inventory with the same checksum as the published
+APK. The exception is the device-only set in `ISO_EXCLUDED_PACKAGES`
+(`scripts/builder.py`): those APKs are built, signed and published so that device
+disk images can install them from the release repository, but the live system
+never pulls them in, so requiring them in the ISO would block every release.
+
 Original APK license annotations are retained in SPDX `licenseComments`.
 `licenseDeclared` and `licenseConcluded` use `NOASSERTION`: Alpine annotations can
 contain non-SPDX strings or omit boolean operators, and this inventory does not

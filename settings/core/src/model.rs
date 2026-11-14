@@ -183,7 +183,7 @@ pub struct Brightness {
     pub ddc: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Appearance {
     pub wallpapers: Vec<Wallpaper>,
     pub color: String,
@@ -200,7 +200,7 @@ impl Default for Appearance {
         }
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Wallpaper {
     pub output: String,

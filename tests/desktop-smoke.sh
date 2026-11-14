@@ -78,8 +78,6 @@ dbus-update-activation-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_D
 wayland-info > "$results/wayland.txt"
 grep -q zwlr_foreign_toplevel_manager_v1 "$results/wayland.txt"
 python3 /project/tests/artwork-smoke.py > "$results/artwork.txt"
-swaybg -c '#102c46' -i /usr/share/backgrounds/uflinux/Dark_Ivy.jpg -m fill > "$results/background.log" 2>&1 &
-background=$!; pids="$pids $background"
 # Record Wayland setup and guest syscalls. The trace distinguishes a stalled
 # compositor handshake from a D-Bus connection failure and identifies the
 # qemu-user socket emulation defect recognised below.
@@ -162,7 +160,22 @@ wlrctl toplevel focus app_id:uflinux-smoke
 sleep 3
 alive "$panel" 'Resident desktop' "$results/desktop.log"
 kill -0 "$terminal"
-kill -0 "$background"
+# The shell draws the wallpaper itself, so the desktop being alive is only half
+# of it: the appearance the service published has to be on the output.
+background_ready=0
+for _attempt in $(seq 1 60); do
+	alive "$panel" 'Resident desktop' "$results/desktop.log"
+	if uflinux-desktop --status | python3 -c 'import json,sys; b=json.load(sys.stdin).get("background") or {}; entry=next((e for e in b.get("outputs",[]) if e["output"]=="HEADLESS-1"),{}); sys.exit(0 if entry.get("file")=="/usr/share/backgrounds/uflinux/Dark_Ivy.jpg" and entry.get("fit")=="fill" and not b.get("failed") else 1)'; then
+		background_ready=1
+		break
+	fi
+	sleep 1
+done
+if [ "$background_ready" != 1 ]; then
+	uflinux-desktop --status > "$results/background.json"
+	cat "$results/background.json" "$results/desktop.log" >&2
+	exit 1
+fi
 if [ "$notifications_ready" = 1 ]; then
 	kill -0 "$notifications"
 	notify-send --expire-time=3000 UFLinux 'Desktop validation passed'

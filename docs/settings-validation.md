@@ -133,8 +133,9 @@ in this document.
 - Real headless labwc tests cover fractional scaling, rotation, hotplug,
   saved-layout fallback and rollback after output loss. AT-SPI and virtual input
   exercise dragging and default-browser selection through the actual GTK UI.
-- Wallpaper restoration survives session-service restarts and cleans up only its
-  owned processes. Tests preserve an unrelated wallpaper process and MIME entry.
+- Wallpapers are drawn by the shell itself, so they survive a session-service
+  restart untouched; tests check the appearance the running desktop reports, the
+  state a restarted service republishes, and rejection of an unreadable file.
 - Installed-system tests cancel and grant authorization through the actual GTK
   polkit authentication agent. UI tests make GTK critical errors fatal, including
   repeated flyout activation and focus dismissal.

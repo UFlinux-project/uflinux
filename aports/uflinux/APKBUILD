@@ -157,7 +157,7 @@ desktop() {
 	pkgdesc="UFLinux minimal desktop dependencies"
 	depends="uflinux-release=$pkgver-r$pkgrel uflinux-defaults=$pkgver-r$pkgrel uflinux-bootsplash-openrc=$pkgver-r$pkgrel
 		xdg-user-dirs labwc uflinux-desktop uflinux-settings uflinux-screencapture gpu-screen-recorder
-		xdg-desktop-portal xdg-desktop-portal-wlr foot nemo mako swaybg
+		xdg-desktop-portal xdg-desktop-portal-wlr foot nemo mako
 		transmission-gtk celluloid gnome-disk-utility file-roller
 		eudev eudev-openrc elogind elogind-openrc dbus dbus-openrc dbus-x11
 		greetd greetd-openrc uflinux-regreet=0.2.0-r1 cage polkit-elogind

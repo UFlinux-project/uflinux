@@ -376,7 +376,7 @@ pub fn appearance(app: &Rc<App>, parent: &gtk::Box) {
             fit: ["fill", "fit", "stretch", "center", "tile"][fit.selected().min(4) as usize]
                 .into(),
         });
-        // Defaults precede overrides in swaybg's per-output command sequence.
+        // Defaults precede overrides, which the renderer resolves per output.
         appearance
             .wallpapers
             .sort_by_key(|w| if w.output == "*" { 0 } else { 1 });

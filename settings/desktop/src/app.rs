@@ -1,4 +1,4 @@
-use crate::{auth, menu::Menu, panel::Panel};
+use crate::{auth, background::Background, menu::Menu, panel::Panel};
 use glib::variant::ToVariant;
 use gtk::prelude::*;
 use std::{cell::RefCell, rc::Rc, time::Instant};
@@ -31,6 +31,7 @@ pub struct App {
     pub authorization_active: std::cell::Cell<bool>,
     menu: RefCell<Option<Rc<Menu>>>,
     panel: RefCell<Option<Rc<Panel>>>,
+    background: RefCell<Option<Rc<Background>>>,
     pub quick: Rc<uflinux_settings::app::App>,
     activation: RefCell<Instant>,
     output: RefCell<String>,
@@ -73,6 +74,7 @@ pub fn run() {
             authorization_active: std::cell::Cell::new(false),
             menu: RefCell::new(None),
             panel: RefCell::new(None),
+            background: RefCell::new(None),
             quick: uflinux_settings::app::App::for_desktop(application),
             activation: RefCell::new(Instant::now()),
             output: RefCell::new(String::new()),
@@ -94,12 +96,24 @@ pub fn run() {
         let status = gio::SimpleAction::new_stateful(
             "status",
             None,
-            &"{\"ready\":false,\"popup\":null,\"output\":null}".to_variant(),
+            &"{\"ready\":false,\"popup\":null,\"output\":null,\"background\":null}".to_variant(),
         );
         status.connect_change_state(|_, _| {});
         application.add_action(&status);
         app.menu.replace(Some(Menu::new(&app, String::new())));
         app.panel.replace(Some(Panel::new(&app)));
+        // The wallpaper is drawn here rather than by a separate client, so the
+        // appearance the service publishes has to reach these surfaces and the
+        // surfaces have to exist before the first frame is asked for.
+        let background = Background::new(application);
+        app.background.replace(Some(background));
+        let weak = Rc::downgrade(&app);
+        app.quick.background_request.replace(Some(Rc::new(move || {
+            if let Some(app) = weak.upgrade() {
+                app.apply_appearance();
+            }
+        })));
+        app.apply_appearance();
         let action = gio::SimpleAction::new("hide", None);
         let weak = Rc::downgrade(&app);
         action.connect_activate(move |_, _| {
@@ -320,6 +334,14 @@ impl App {
             scheduled.set(false);
         });
     }
+    /// Repaints the wallpaper with the appearance the service published and
+    /// reports what ended up on screen.
+    fn apply_appearance(&self) {
+        if let Some(background) = self.background.borrow().as_ref() {
+            background.set(self.quick.appearance());
+        }
+        self.report_status();
+    }
     pub fn report_status(&self) {
         if let (Some(menu), Some(action)) = (
             self.menu.borrow().as_ref(),
@@ -368,6 +390,11 @@ impl App {
                 "ready": menu.ready(),
                     "popup": popup,
                     "output": output,
+                    "background": self
+                        .background
+                        .borrow()
+                        .as_ref()
+                        .map(|background| background.status()),
                 })
                 .to_string()
                 .to_variant(),

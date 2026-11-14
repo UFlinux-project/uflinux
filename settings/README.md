@@ -47,7 +47,8 @@ Display changes require confirmation within 15 seconds. HDR is a global request
 to labwc, not a claim of per-monitor activation. Mirroring is unavailable on this
 compositor. Brightness requires a kernel backlight or a responding DDC/CI display.
 Additional routes use protocol 242 and only recorded routes are removed. Wallpapers
-are local files with a 16-megapixel/32-MiB limit; previews are downscaled.
+are local files with a 16-megapixel/32-MiB limit; previews are downscaled and the
+resident desktop draws the wallpaper itself, so no separate background client runs.
 
 `screencapture/` is the Print Screen tool shipped as the `uflinux-screencapture` package.
 It starts on demand and exits when the capture is done; nothing runs permanently. It reads

@@ -190,8 +190,9 @@ Audio controls use the PulseAudio client protocol against **pipewire-pulse**;
 PipeWire and WirePlumber remain the audio stack, without a PulseAudio server.
 Devices, profiles, ports, defaults, volume, balance, mute and application streams
 share state with the flyout. Default applications use GIO/XDG associations and
-preserve unrelated mappings. Wallpapers use only UFLinux-owned swaybg children,
-local files up to 32 MiB/16 megapixels, fit/color and per-output preferences.
+preserve unrelated mappings. The shell draws wallpapers itself on background
+surfaces, from local files up to 32 MiB/16 megapixels, with fit/color and
+per-output preferences.
 About provides copyable information and tolerates unavailable hardware data.
 User preferences live under `$XDG_CONFIG_HOME/uflinux` (normally `~/.config/uflinux`)
 and personal labwc/GTK/XDG files; APK upgrades preserve user files.

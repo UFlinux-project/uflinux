@@ -9,10 +9,13 @@ import sys
 import tarfile
 import tempfile
 
-from builder import ARCHES, Builder, LOCK, PROJECT, SIGNING_KEY, sha, unsigned_digest, PACKAGE_NAMES
+from builder import (ARCHES, Builder, ISO_EXCLUDED_PACKAGES, LOCK, PROJECT, SIGNING_KEY, sha,
+                     unsigned_digest, PACKAGE_NAMES)
 from sbom import apk_metadata
 
 ALLOWED = set().union(*PACKAGE_NAMES.values())
+if not ISO_EXCLUDED_PACKAGES <= ALLOWED:
+    raise ValueError("Excluded packages must be custom packages: " + ", ".join(sorted(ISO_EXCLUDED_PACKAGES - ALLOWED)))
 
 
 def safe_extract(archive, target):
@@ -25,6 +28,16 @@ def safe_extract(archive, target):
 
 def selection(current, history):
     return [current, *[release for release in history if release["version"] != current["version"]][:2]]
+
+
+def required_in_iso(pkgname):
+    """Whether the live ISO must carry a published custom package.
+
+    Debug, documentation and development subpackages are optional additions, and
+    the device-only set is installed by device images from the published
+    repository rather than by the live system, so neither is in the ISO inventory.
+    """
+    return not pkgname.endswith(("-dbg", "-doc", "-dev")) and pkgname not in ISO_EXCLUDED_PACKAGES
 
 
 def main():
@@ -77,7 +90,7 @@ def main():
                 for package in (out / "repository" / arch).glob("*.apk"):
                     info = apk_metadata(package)
                     names.add(info["pkgname"])
-                    if not info["pkgname"].endswith(("-dbg", "-doc", "-dev")) and included.get((info["pkgname"], info["pkgver"])) != sha(package):
+                    if required_in_iso(info["pkgname"]) and included.get((info["pkgname"], info["pkgver"])) != sha(package):
                         raise ValueError("The ISO does not contain the current custom package: " + package.name)
                 if names != ALLOWED:
                     raise ValueError("Incomplete or unexpected custom package set for " + arch)

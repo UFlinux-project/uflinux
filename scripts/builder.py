@@ -329,6 +329,10 @@ PACKAGE_NAMES = {
                 "uflinux-live", "uflinux-live-openrc", "uflinux-release", "uflinux-bootsplash-openrc",
                 "uflinux-initramfs", "uflinux-device"},
 }
+# Custom packages that are published to the signed repository but are not part of
+# the live ISO, so they cannot appear in the ISO's SPDX inventory. A device disk
+# image installs them from the published repository instead (device_packages).
+ISO_EXCLUDED_PACKAGES = {"uflinux-device"}
 
 
 def omit_modloop_firmware(update_kernel):

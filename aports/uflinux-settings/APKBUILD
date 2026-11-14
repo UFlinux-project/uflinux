@@ -72,7 +72,7 @@ package() {
 	install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }
 desktop() {
-	pkgdesc="UFLinux panel, Start menu and quick controls"
+	pkgdesc="UFLinux panel, Start menu, quick controls and wallpaper"
 	depends="$pkgname-daemon=$pkgver-r$pkgrel $pkgname-system=$pkgver-r$pkgrel"
 	amove usr/bin/uflinux-desktop usr/share/dbus-1/services/org.uflinux.Desktop.service
 }
@@ -88,7 +88,7 @@ installer_ui() {
 }
 daemon() {
 	pkgdesc="Headless UFLinux session settings service and command-line controls"
-	depends="dbus elogind swaybg mesa-vulkan-ati"
+	depends="dbus elogind mesa-vulkan-ati"
 	case "$CARCH" in
 		x86|x86_64) depends="$depends mesa-vulkan-intel mesa-vulkan-nouveau mesa-vulkan-virtio" ;;
 		aarch64) depends="$depends mesa-vulkan-asahi mesa-vulkan-broadcom mesa-vulkan-freedreno mesa-vulkan-imagination mesa-vulkan-intel mesa-vulkan-nouveau mesa-vulkan-panfrost mesa-vulkan-virtio" ;;

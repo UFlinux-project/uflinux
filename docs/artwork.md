@@ -57,7 +57,7 @@ its GPL license and source attribution in `settings/README.md`.
 
 The package/desktop verification suite checks Papirus and branded icon lookup,
 SVG rendering, every bundled image's dimensions, bounded previews, the Start
-configuration and actual wallpaper process startup. Historical ISO checksums and
+configuration and actual wallpaper drawing by the resident desktop. Historical ISO checksums and
 measurements in earlier validation documents describe their original artifacts;
 these defaults take effect in subsequent builds.
 

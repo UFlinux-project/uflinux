@@ -44,6 +44,9 @@ pub struct App {
     /// Set by the host process that owns the authorization agent. In desktop
     /// mode that process registers the agent only once something needs it.
     pub agent_request: RefCell<Option<Rc<dyn Fn()>>>,
+    /// Set by the desktop process, which draws the wallpaper. Appearance is
+    /// validated and stored by the service, but the pixels belong to the shell.
+    pub background_request: RefCell<Option<Rc<dyn Fn()>>>,
 }
 pub const PAGES: &[(&str, &str)] = &[
     ("network", "Network"),
@@ -105,6 +108,7 @@ pub fn run() {
             desktop_monitor: RefCell::new(None),
             desktop_ddc_discovered: Cell::new(false),
             agent_request: RefCell::new(None),
+            background_request: RefCell::new(None),
         });
         let action = gio::SimpleAction::new("close-quick", None);
         let weak = Rc::downgrade(&app);
@@ -205,6 +209,7 @@ impl App {
             desktop_monitor: RefCell::new(None),
             desktop_ddc_discovered: Cell::new(false),
             agent_request: RefCell::new(None),
+            background_request: RefCell::new(None),
         });
         app.connect();
         app
@@ -216,6 +221,11 @@ impl App {
         if let Some(request) = self.agent_request.borrow().as_ref() {
             request();
         }
+    }
+
+    /// The appearance the service last published, for the desktop's wallpaper.
+    pub fn appearance(&self) -> Appearance {
+        self.state.borrow().appearance.clone()
     }
 
     pub fn hide_quick(self: &Rc<Self>) {
@@ -319,7 +329,12 @@ impl App {
         let Ok(state) = serde_json::from_str::<Snapshot>(raw) else {
             return;
         };
-        self.state.replace(state.clone());
+        let previous = self.state.replace(state.clone());
+        if self.desktop_mode && previous.appearance != state.appearance {
+            if let Some(request) = self.background_request.borrow().as_ref() {
+                request();
+            }
+        }
         let first = !self.loaded.replace(true);
         if first {
             let page = self

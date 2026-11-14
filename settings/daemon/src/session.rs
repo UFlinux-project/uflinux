@@ -6,9 +6,8 @@ use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
     fs,
-    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::Command,
     rc::Rc,
     time::Duration,
 };
@@ -36,7 +35,6 @@ struct App {
     display: RefCell<Option<display::Client>>,
     pending: RefCell<Option<Pending>>,
     applying: Cell<bool>,
-    wallpaper: RefCell<Option<Child>>,
     publishing: Cell<bool>,
     restored: Cell<bool>,
     brightness_pending: Cell<bool>,
@@ -44,15 +42,6 @@ struct App {
     ddc_busy: Cell<bool>,
     ddc_dirty: Cell<bool>,
 }
-impl Drop for App {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.wallpaper.get_mut().take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
 pub fn run() -> Result<()> {
     if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
         return Err("A user login session is required".into());
@@ -64,7 +53,7 @@ pub fn run() -> Result<()> {
         let screen_capture:ScreenCapture=files::read_json(&files::config_dir().join("screen-capture.json"));
         let screen_capture=capture::validate(&screen_capture).map(|()|screen_capture).unwrap_or_default();
         let app=Rc::new(App{bus:connection.clone(),system,view:RefCell::new(Snapshot{appearance,screen_capture,datetime:clock::status(),power:power::status(),about:information(),..Snapshot::default()}),
-            network:RefCell::new(None),audio:RefCell::new(None),audio_retry:Cell::new(false),display:RefCell::new(None),pending:RefCell::new(None),applying:Cell::new(false),wallpaper:RefCell::new(None),publishing:Cell::new(false),restored:Cell::new(false),brightness_pending:Cell::new(false),ddc_pending:Cell::new(false),ddc_busy:Cell::new(false),ddc_dirty:Cell::new(false)});
+            network:RefCell::new(None),audio:RefCell::new(None),audio_retry:Cell::new(false),display:RefCell::new(None),pending:RefCell::new(None),applying:Cell::new(false),publishing:Cell::new(false),restored:Cell::new(false),brightness_pending:Cell::new(false),ddc_pending:Cell::new(false),ddc_busy:Cell::new(false),ddc_dirty:Cell::new(false)});
         app.view.borrow_mut().displays.renderer=std::env::var("UFLINUX_RENDERER").unwrap_or_else(|_|"User-selected / compositor default".into());
         app.view.borrow_mut().displays.hdr_requested=fs::read_to_string(hdr_path()).ok().and_then(|s|files::hdr_requested(&s)).unwrap_or(false);
         app.view.borrow_mut().displays.hdr_status="Labwc applies HDR automatically where supported. Per-monitor activation is not reported by this protocol; mirroring is unavailable.".into();
@@ -154,11 +143,7 @@ pub fn run() -> Result<()> {
         Ok::<_,String>((app,power_monitors,_device_monitor,mainloop))
     })?;
     mainloop.run();
-    // GLib sources may retain App until process exit. Explicitly reap owned children.
-    if let Some(mut child) = _app.wallpaper.borrow_mut().take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+    let _ = _app;
     Ok(())
 }
 impl App {
@@ -777,8 +762,11 @@ impl App {
     }
 
     async fn set_appearance(self: &Rc<Self>, appearance: Appearance, persist: bool) -> Result<()> {
+        // The desktop draws the wallpaper, so this only has to decide whether
+        // the request is safe to hand over. Nothing is spawned: a renderer that
+        // is a child of the service dies with it, and the shell outlives it.
         let copy = appearance.clone();
-        let mut command = gio::spawn_blocking(move || {
+        gio::spawn_blocking(move || {
             if copy.wallpapers.len() > 16
                 || copy.color.len() != 7
                 || !copy.color.starts_with('#')
@@ -786,11 +774,6 @@ impl App {
             {
                 return Err("Invalid background settings".to_string());
             }
-            let mut command = Command::new("swaybg");
-            command
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
             for wallpaper in &copy.wallpapers {
                 if !["fill", "fit", "stretch", "center", "tile"].contains(&wallpaper.fit.as_str())
                     || wallpaper.output.len() > 128
@@ -810,59 +793,17 @@ impl App {
                 if width <= 0 || height <= 0 || width as i64 * height as i64 > 16_777_216 {
                     return Err("Wallpaper exceeds the 16 megapixel memory limit".into());
                 }
-                command.args([
-                    "-o",
-                    &wallpaper.output,
-                    "-c",
-                    &copy.color,
-                    "-i",
-                    &wallpaper.file,
-                    "-m",
-                    &wallpaper.fit,
-                ]);
             }
-            if copy.wallpapers.is_empty() {
-                command.args(["-c", &copy.color]);
-            }
-            Ok(command)
+            Ok(())
         })
         .await
         .map_err(|_| "Wallpaper worker failed")??;
-        let owner = unsafe { libc::getpid() };
-        // Spawn from the main thread: PDEATHSIG follows the spawning thread's
-        // lifetime, so a temporary validation worker must never own this child.
-        unsafe {
-            command.pre_exec(move || {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::getppid() != owner {
-                    return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
-                }
-                Ok(())
-            });
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|_| "Cannot start wallpaper renderer")?;
-        glib::timeout_future(Duration::from_millis(150)).await;
-        if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-            return Err("Wallpaper renderer rejected this image".into());
-        }
         if persist {
-            if let Err(error) = files::save_json(
+            files::save_json(
                 &files::config_dir().join("appearance.json"),
                 &appearance,
                 0o600,
-            ) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        }
-        if let Some(mut old) = self.wallpaper.replace(Some(child)) {
-            let _ = old.kill();
-            let _ = old.wait();
+            )?;
         }
         self.view.borrow_mut().appearance = appearance;
         self.publish();

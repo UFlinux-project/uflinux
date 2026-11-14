@@ -126,6 +126,23 @@ class PublicationTests(unittest.TestCase):
                     builder.remove_tree(root)
             self.assertEqual(sentinel.read_text(), "keep")
 
+    def test_device_only_packages_are_published_but_not_required_in_the_iso(self):
+        self.assertTrue(publisher.ISO_EXCLUDED_PACKAGES < publisher.ALLOWED)
+        for name in ("uflinux", "uflinux-live", "uflinux-release", "uflinux-settings-system"):
+            self.assertTrue(publisher.required_in_iso(name), name)
+        for name in ("uflinux-dbg", "uflinux-doc", "uflinux-settings-dev"):
+            self.assertFalse(publisher.required_in_iso(name), name)
+        for name in publisher.ISO_EXCLUDED_PACKAGES:
+            self.assertFalse(publisher.required_in_iso(name), name)
+            # An exempted package must still ship somewhere: a device image
+            # installs it from the published repository.
+            self.assertTrue(any(name in builder.device_packages(device, arch)
+                                for device in builder.DEVICES.values() for arch in device["arches"]), name)
+            # ... and the live system must really not pull it in, or the exemption
+            # would hide a missing ISO package.
+            for recipe in ("profiles/genapkovl-uflinux.sh", "profiles/mkimg.uflinux.sh"):
+                self.assertNotIn(name, (Path(builder.PROJECT) / recipe).read_text().split(), recipe)
+
     def test_retention_keeps_current_and_two_previous_generations(self):
         releases = publisher.selection({"version": "0.4.0"}, [{"version": v} for v in ["0.3.0", "0.2.0", "0.1.0"]])
         self.assertEqual([r["version"] for r in releases], ["0.4.0", "0.3.0", "0.2.0"])

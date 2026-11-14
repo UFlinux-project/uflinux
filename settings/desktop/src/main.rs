@@ -1,5 +1,6 @@
 mod app;
 mod auth;
+mod background;
 #[path = "../../start-menu/src/catalog.rs"]
 mod catalog;
 mod clock_watch;
@@ -55,7 +56,7 @@ fn forward() -> bool {
                     .as_variant()
             })
             .and_then(|state| state.str().map(str::to_string))
-            .unwrap_or_else(|| "{\"ready\":false,\"popup\":null,\"output\":null}".to_string());
+            .unwrap_or_else(|| "{\"ready\":false,\"popup\":null,\"output\":null,\"background\":null}".to_string());
         println!("{status}");
         return true;
     }
