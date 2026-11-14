@@ -65,6 +65,19 @@ cat "$ROOT"/proc/mounts 2>/dev/null | while read -r _dev DIR _type _opts ; do :;
         # silently, so the profile has to fail the build instead.
         self.assertIn("$initramfs_boot_files", profile.split("for file in")[1])
 
+    def test_device_profile_ships_early_modules(self):
+        # The initramfs only loads what /etc/modules names, and no package owns
+        # that file, so a board whose display chain is made of loadable drivers
+        # depends on the profile writing it and handing it to mkinitfs.
+        profile = DEVICE_PROFILE.read_text()
+        self.assertIn("UFLINUX_INITRAMFS_MODULES", profile)
+        self.assertIn("initramfs_generated_files=\"etc/modules\"", profile)
+        self.assertIn("$initramfs_generated_files", profile.split("custom_files=")[1])
+        self.assertIn("$initramfs_generated_files", profile.split("for file in")[1])
+        # The generated file has to exist before mkinitfs runs, or it is skipped.
+        self.assertLess(profile.index("initramfs_generated_files=\"etc/modules\""),
+                        profile.index("/sbin/mkinitfs"))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -146,6 +146,19 @@ appends `usr/share/mkinitfs/initramfs-init` and the two `/usr/libexec/uflinux-*`
 helpers the wrapper calls to `custom_files`, and checks that all three are
 installed before running mkinitfs.
 
+Being copied into the initramfs is not the same as being loaded. The `kms`
+feature pulls in everything under `kernel/drivers/gpu`, but `initramfs-init`
+only probes what the kernel command line, its own built-in list, and
+`/etc/modules` name, and this kernel has no `simpledrm` to fall back on. On
+`qcs6490` the whole HDMI chain is loadable modules — the Dragon Q6A's bridge is
+described in the device tree as `radxa,ra620`, which the generic `simple-bridge`
+driver claims — so nothing brings up a display until something asks for them,
+and `mdev` only handles devices registered after the initramfs starts. A board
+lists such drivers in `initramfs_modules`; the profile writes them to
+`/etc/modules` (which no package owns), adds that file to `custom_files`, and
+checks it exists before running mkinitfs. The installed system loads the same
+set later through the ordinary module cold-plug.
+
 ## Package sources
 
 While an image is built, its rootfs reads packages from the signed repository that

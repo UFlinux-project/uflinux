@@ -12,6 +12,7 @@
     "nura": true,
     "dtb": "qcom/qcs6490-radxa-dragon-q6a.dtb",
     "initramfs_files": ["lib/firmware/qcom/qcm6490/qupv3fw.elf.zst"],
+    "initramfs_modules": ["simple-bridge", "display-connector"],
     "packages": ["linux-firmware-qcom", "mesa-vulkan-freedreno", "alsa-ucm-conf", "systemd-boot", "efibootmgr"],
     "nura_packages": ["linux-postmarketos-qcom-sc7280", "dtbloader"]
   },

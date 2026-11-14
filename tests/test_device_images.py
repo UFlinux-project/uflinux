@@ -129,6 +129,7 @@ class DeviceRootfsTests(unittest.TestCase):
         self.assertNotIn("UFLINUX_DTB", env)
         self.assertNotIn("UFLINUX_NURA_PACKAGES", env)
         self.assertNotIn("UFLINUX_INITRAMFS_FILES", env)
+        self.assertNotIn("UFLINUX_INITRAMFS_MODULES", env)
         qcom = device_environment("qcs6490", DEVICES["qcs6490"], "aarch64", "0.1.0",
                                   "01234567-89AB-4CDE-8F01-23456789ABCD", "/device-esp")
         self.assertEqual(qcom["UFLINUX_NURA_PACKAGES"],
@@ -143,6 +144,10 @@ class DeviceRootfsTests(unittest.TestCase):
         # no .ko for mkinitfs to find and must be named for custom_files.
         self.assertEqual(qcom["UFLINUX_INITRAMFS_FILES"],
                          " ".join(DEVICES["qcs6490"]["initramfs_files"]))
+        # The HDMI bridge and connector are loadable modules that nothing else
+        # loads before the root is mounted, so they have to be named too.
+        self.assertEqual(qcom["UFLINUX_INITRAMFS_MODULES"],
+                         " ".join(DEVICES["qcs6490"]["initramfs_modules"]))
         k1 = device_environment("spacemit-k1", DEVICES["spacemit-k1"], "riscv64", "0.1.0",
                                 "01234567-89AB-4CDE-8F01-23456789ABCD", "/device-esp")
         self.assertEqual(k1["UFLINUX_DTB"], DEVICES["spacemit-k1"]["dtb"])

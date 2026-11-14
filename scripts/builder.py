@@ -154,6 +154,10 @@ def device_environment(name, device, arch, version, root_partuuid, esp):
     # file is not installed, so a firmware repackaging cannot pass silently.
     if device.get("initramfs_files"):
         env["UFLINUX_INITRAMFS_FILES"] = " ".join(device["initramfs_files"])
+    # Display-chain drivers the board needs before the root is mounted, so the
+    # initramfs can bring up a console on machines with no built-in simpledrm.
+    if device.get("initramfs_modules"):
+        env["UFLINUX_INITRAMFS_MODULES"] = " ".join(device["initramfs_modules"])
     if device["boot"] == "extlinux":
         env["UFLINUX_DTB"] = device["dtb"]
     elif device.get("dtb"):
