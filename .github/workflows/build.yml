@@ -31,6 +31,7 @@ jobs:
       vm: ${{ steps.matrix.outputs.vm }}
       packages: ${{ steps.matrix.outputs.packages }}
       devices: ${{ steps.matrix.outputs.devices }}
+      devices_enabled: ${{ steps.matrix.outputs.devices_enabled }}
       version: ${{ steps.matrix.outputs.version }}
       epoch: ${{ steps.matrix.outputs.epoch }}
       cache: ${{ steps.matrix.outputs.cache }}
@@ -216,6 +217,9 @@ jobs:
 
   device-images:
     needs: [checks, compile]
+    # Outside releases and explicit manual requests the devices matrix is empty,
+    # and Actions refuses to evaluate a strategy with no vectors at all.
+    if: needs.checks.outputs.devices_enabled == 'true'
     strategy:
       fail-fast: false
       max-parallel: 4
