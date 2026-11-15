@@ -319,7 +319,17 @@ impl App {
                         }
                     }
                 });
-                match bus::session("GetState",None).await{Ok(raw)=>{app.update(&raw);app.execute(Action::Refresh,None);},Err(_)=>app.error("The settings service could not start. Check the session D-Bus and service package.")}
+                // A single transient bus failure here used to leave the window
+                // on the empty startup snapshot until some later Changed
+                // signal arrived, so retry briefly before showing the banner.
+                let mut loaded=None;
+                for attempt in 0..5u64{
+                    match bus::session("GetState",None).await{
+                        Ok(raw)=>{loaded=Some(raw);break;}
+                        Err(_)=>{let _=glib::timeout_future(std::time::Duration::from_millis(200*(attempt+1))).await;}
+                    }
+                }
+                match loaded{Some(raw)=>{app.update(&raw);app.execute(Action::Refresh,None);},None=>app.error("The settings service could not start. Check the session D-Bus and service package.")}
             }
             Err(_)=>app.error("No user D-Bus session is available"),
         }

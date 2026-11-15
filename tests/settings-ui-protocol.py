@@ -51,8 +51,19 @@ def click(a):
     action=a.queryAction()
     assert action.nActions, 'Control has no keyboard/accessibility action: '+a.name
     assert action.doAction(0)
+current=['network']
 def page(name):
-    command('uflinux-settings','--page',name);time.sleep(.2)
+    command('uflinux-settings','--page',name);current[0]=name;time.sleep(.2)
+def diagnostics():
+    try:
+        network=state().get('network')
+    except Exception as error:
+        network='status failed: '+repr(error)
+    try:
+        nodes=sorted({(a.getRoleName(),a.name) for a in tree()})
+    except Exception as error:
+        nodes='tree failed: '+repr(error)
+    return json.dumps({'network':network,'atspi':nodes})
 
 command('wlrctl','toplevel','focus','app_id:org.uflinux.Settings')
 command('wtype','-M','ctrl','-M','alt','-k','F9','-m','alt','-m','ctrl')
@@ -61,7 +72,23 @@ time.sleep(.3)
 # Every page tab must be a visible control, and switching tabs must not resize
 # the window (the stack keeps one homogeneous size request).
 def tab(label):
-    return wait(lambda:find(label,'toggle button'),'Missing '+label+' tab')
+    # A transient session-bus failure can leave the resident UI on its empty
+    # startup snapshot, and a quiet fixture bus then emits no Changed to
+    # recover it. Re-activate the page and ask the daemon to re-publish
+    # between rounds, and dump the daemon state plus the AT-SPI tree on
+    # failure so the next occurrence distinguishes a wifi-less snapshot from
+    # a broken accessibility tree.
+    for _ in range(10):
+        for _ in range(20):
+            while GLib.MainContext.default().pending(): GLib.MainContext.default().iteration(False)
+            try:
+                found=find(label,'toggle button')
+                if found:return found
+            except (RuntimeError,LookupError,AttributeError,GLib.GError):pass
+            time.sleep(.05)
+        page(current[0])
+        subprocess.run(['uflinux-settingsctl','request'],input='{"action":"refresh"}',text=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
+    raise AssertionError('Missing '+label+' tab: '+diagnostics())
 def window_size():
     frame=next(a for a in tree() if a.getRoleName()=='frame')
     return frame.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
