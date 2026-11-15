@@ -21,6 +21,11 @@ sudo env APK_REPOSITORY_URL=https://repo.uflinux.org/apk/v3.24/uflinux \
 `https://repo.uflinux.org/apk/v3.24/uflinux` for this repository (forks derive
 a `github.io` URL from `GITHUB_REPOSITORY`).
 
+Images additionally subscribe to UFLinux's apps repository
+`https://apps-repo.uflinux.org/`, which publishes `uflinux-files`, the desktop's
+file manager, on the four architectures it indexes. It has its own signing key and
+its own pins in `config/sources.lock.json` (see `docs/building.md`).
+
 Run privileged builds on a disposable Linux host. Other architectures require
 QEMU binfmt registration. Local builds use development signing keys unless
 `--release` and the release signing secrets are supplied. Add
@@ -36,7 +41,7 @@ supplementary artifact and cannot block a release. A configured test is not evid
 successful run: use the workflow results and attached build records to determine
 which architectures have actually passed.
 
-The desktop includes Foot, Nemo, Mako, Transmission, Celluloid, GNOME Disks, File Roller,
+The desktop includes Foot, UFLinux Files, Loupe, htop, Mako, Transmission, Celluloid, GNOME Disks, File Roller,
 and ConnMan with iwd, PipeWire with
 pipewire-pulse, WirePlumber, and UFLinux Settings in Rust and plain GTK4. ConnMan's
 SNTP client handles time synchronization. The taskbar opens a combined quick-settings

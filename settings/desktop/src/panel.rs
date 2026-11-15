@@ -22,7 +22,7 @@ struct TaskbarConfig {
 impl Default for TaskbarConfig {
     fn default() -> Self {
         Self {
-            pinned: vec!["foot.desktop".into(), "nemo.desktop".into()],
+            pinned: vec!["foot.desktop".into(), "org.uflinux.Files.desktop".into()],
         }
     }
 }

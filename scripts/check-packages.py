@@ -94,6 +94,29 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         print(result)
 
 
+# uflinux-desktop-meta depends on uflinux-files, which only the apps repository
+# carries, so its pinned index has to stay reachable and keep providing it.
+apps = lock["apps"]
+
+
+def check_apps(arch):
+    url = f"{apps['url']}/{arch}/APKINDEX.tar.gz"
+    with urllib.request.urlopen(url, timeout=60) as response:
+        data = response.read()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != apps["index_sha256"][arch]:
+        raise RuntimeError(f"{arch}: apps index differs from its pin ({digest})")
+    found = set(re.findall(r"^P:(.+)$", index_entries(url), re.M))
+    if "uflinux-files" not in found:
+        raise RuntimeError(f"{arch}: the apps index no longer provides uflinux-files")
+    return f"{arch}: pinned apps index provides {len(found)} packages"
+
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    for result in pool.map(check_apps, apps["arches"]):
+        print(result)
+
+
 devices = json.loads((root / "config/devices.json").read_text())
 device_lock = json.loads((root / "config/devices.lock.json").read_text())["nura"]
 

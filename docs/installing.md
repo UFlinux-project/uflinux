@@ -94,8 +94,10 @@ not copied by the installer.
 
 ## Updates and configuration
 
-The installed repository list contains UFLinux's signed custom repository and the
-matching Alpine stable `main` and `community` repositories.
+The installed repository list contains UFLinux's signed custom repository, the
+matching Alpine stable `main` and `community` repositories, and UFLinux's apps
+repository (`https://apps-repo.uflinux.org/`, which publishes `uflinux-files` and
+is signed by its own `uflinux3.ec384.pub` key that `uflinux-release` installs).
 
 ```sh
 doas apk update

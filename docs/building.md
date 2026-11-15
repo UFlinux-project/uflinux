@@ -20,6 +20,14 @@ again on every reuse. Alpine's official package repositories remain on the named
 stable branch so security revisions can be incorporated. Their resolved package
 versions and hashes are recorded; a pinned minirootfs does not freeze those repos.
 
+The `apps` section pins UFLinux's own apps repository, which publishes
+`uflinux-files`: its URL, signing key, key hash, indexed architectures and
+per-architecture index hashes. `scripts/check.py` verifies the pins and that
+`aports/uflinux/uflinux3.ec384.pub` matches the published key, and
+`scripts/check-packages.py` re-checks the live indexes. Architectures the apps
+repository does not index never list it, because apk fails on an unreachable
+repository line.
+
 ```sh
 export APK_REPOSITORY_URL=https://repo.uflinux.org/apk/v3.24/uflinux
 sudo --preserve-env=APK_REPOSITORY_URL bash scripts/build.sh --arch x86_64

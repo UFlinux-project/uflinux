@@ -91,7 +91,7 @@ def device_partition_script(layout, uuids):
 
 
 def device_repositories(source, arch):
-    """Package sources for a device rootfs: the UFLinux repo, then Alpine.
+    """Package sources for a device rootfs: the UFLinux repo, Alpine, then apps.
 
     *source* is the UFLinux repository line: the path of the copied signed
     repository while building, or the published URL in a shipped image. The
@@ -100,10 +100,17 @@ def device_repositories(source, arch):
     Alpine mkinitfs that uflinux-initramfs requires, so a visible Nura line
     makes any install that pulls in a kernel unresolvable. The profile reaches
     Nura through `apk fetch --repository` instead (device_nura_repository).
+    The apps repository is listed, because uflinux-desktop-meta depends on
+    uflinux-files, which only it carries. It indexes few architectures and apk 3
+    fails the whole transaction on a line whose index 404s, so the line is
+    omitted elsewhere.
     """
     alpine = LOCK["alpine"]
-    return "\n".join((source, f"{alpine['mirror']}/{alpine['branch']}/main",
-                      f"{alpine['mirror']}/{alpine['branch']}/community")) + "\n"
+    lines = [source, f"{alpine['mirror']}/{alpine['branch']}/main",
+             f"{alpine['mirror']}/{alpine['branch']}/community"]
+    if arch in LOCK["apps"]["arches"]:
+        lines.append(LOCK["apps"]["url"])
+    return "\n".join(lines) + "\n"
 
 
 def device_nura_repository():
@@ -318,6 +325,12 @@ SIGNING_PRIVATE = "/var/lib/uflinux/keys/" + SIGNING_KEY
 SIGNING_PUBLIC = SIGNING_PRIVATE + ".pub"
 TRUSTED_KEY = "etc/apk/keys/" + SIGNING_KEY + ".pub"
 BUILD_KEY = "build.ec.pub"
+# The apps repository is signed by a separate key of the same role, published
+# under this file name; apk trusts a key by filename, so it must be installed
+# under exactly this name.
+APPS_KEY = "uflinux3.ec384.pub"
+APPS_TRUSTED_KEY = "etc/apk/keys/" + APPS_KEY
+APPS_BUNDLED_KEY = PROJECT / ("aports/uflinux/" + APPS_KEY)
 PACKAGE_NAMES = {
     "connman": {"connman", "connman-dbg", "connman-dev", "connman-doc", "connman-openrc",
                 "connman-vpn", "connman-vpn-openrc"},
@@ -932,6 +945,13 @@ class Builder:
                    "--outdir", "/image-out", "--workdir", "/image-work", "--checksum",
                    "--repository", "/repo", "--repository", f"{LOCK['alpine']['mirror']}/{LOCK['alpine']['branch']}/main",
                    "--repository", f"{LOCK['alpine']['mirror']}/{LOCK['alpine']['branch']}/community"]
+        if self.args.arch in LOCK["apps"]["arches"]:
+            # uflinux-desktop-meta pulls uflinux-files, which only the apps
+            # repository carries. mkimage seeds the APKROOT keyring from the
+            # chroot, so trust the apps key there for the run; uflinux-release
+            # ships the same file in the installed system.
+            self.put(APPS_TRUSTED_KEY, APPS_BUNDLED_KEY.read_text())
+            command += ["--repository", LOCK["apps"]["url"], "--hostkeys"]
         self.chroot(*command, extra_env={"PATH": "/opt/uflinux/bin:" + self.env["PATH"],
                                          "complevel_zstd": "-" + str(LOCK["image"]["initramfs_level"]),
                                          "features_dir": "/project/aports/uflinux /etc/mkinitfs/features.d"})
@@ -1017,6 +1037,16 @@ class Builder:
         if not public.is_file():
             raise RuntimeError("Missing signed repository; run the sign stage first")
         self.put(TRUSTED_KEY, public.read_text())
+        if arch in LOCK["apps"]["arches"]:
+            # uflinux-desktop-meta pulls uflinux-files from the apps repository,
+            # so the device rootfs needs its index and signing key up front.
+            apps = LOCK["apps"]
+            key = self.cache / "downloads" / ("apps-" + APPS_KEY)
+            download_pinned(apps["repository_key"], apps["repository_key_sha256"], "sha256", key)
+            (keys / APPS_KEY).write_bytes(key.read_bytes())
+            (keys / APPS_KEY).chmod(0o644)
+            download_pinned(f"{apps['url']}/{arch}/APKINDEX.tar.gz", apps["index_sha256"][arch],
+                            "sha256", self.cache / "downloads" / f"apps-APKINDEX-{arch}.tar.gz")
         if nura:
             # The key file name is what apk records in the signature check.
             name = urllib.parse.urlparse(nura["repository_key"]).path.rsplit("/", 1)[-1]
@@ -1142,6 +1172,15 @@ class Builder:
         if repo.exists():
             shutil.rmtree(repo)
         shutil.copytree(self.out / "repository" / self.args.arch, repo)
+        if self.args.arch in LOCK["apps"]["arches"]:
+            # uflinux-desktop-meta pulls uflinux-files, which only the apps
+            # repository carries, and the build chroot lists Alpine alone.
+            self.put(APPS_TRUSTED_KEY, APPS_BUNDLED_KEY.read_text())
+            repositories = self.root / "etc/apk/repositories"
+            text = repositories.read_text()
+            if LOCK["apps"]["url"] not in text:
+                repositories.write_text(text + LOCK["apps"]["url"] + "\n")
+            self.chroot("apk", "update")
         self.chroot("apk", "add", "--repository", "/repo", "uflinux", "uflinux-live", "uflinux-installer", "uflinux-installer-ui")
         # Damaging a signed archive must fail verification before installation.
         sample = sorted(repo.glob("uflinux-defaults-*.apk"))[0]

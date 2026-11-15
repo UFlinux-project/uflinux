@@ -98,6 +98,8 @@ sidecar next to it.
 
 Download the assets named in SHA256SUMS before checking it. The repository snapshot
 contains `uflinux.ec.pub`; install it under the same name in `/etc/apk/keys` when
-manually configuring a client. Obtain and verify the initial key through the
+manually configuring a client. The apps repository is signed by a separate key,
+`uflinux3.ec384.pub`, which `uflinux-release` installs and which is also published
+next to the apps index. Obtain and verify the initial key through the
 authenticated release, rather than treating a checksum downloaded beside a file
 as independent authentication.

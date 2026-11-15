@@ -26,6 +26,14 @@ esac
 printf '%s\n' "${UFLINUX_REPOSITORY_URL:?}" \
 	'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' \
 	'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' > "$tmp/etc/apk/repositories"
+# The apps repository has indexes for these architectures only, and apk fails
+# outright on a repository line that 404s, so x86 and armv7 live systems must
+# not list it. uflinux-release installs the matching signing key on disk.
+case "$ARCH" in
+	x86_64|aarch64|ppc64le|riscv64)
+		printf '%s\n' 'https://apps-repo.uflinux.org/apk/v3.24/uflinux-apps' >> "$tmp/etc/apk/repositories"
+		;;
+esac
 # The signed ISO boot repository is discovered by Alpine's initramfs.
 # Installed repository URLs are supplied by uflinux-release.
 for entry in \

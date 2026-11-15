@@ -60,6 +60,10 @@ private key under `-t RSA256`.
 
 The signing key uses the stable filename `uflinux.ec.pub`; apk v2 signatures refer
 to that filename. Keep the same key across routine releases.
+The apps repository is signed by a separate key of the same role published as
+`uflinux3.ec384.pub`; apk resolves trusted keys by filename, so rotating it means
+replacing that file on every installed system (uflinux-release ships the bundled
+copy) and updating the pins in the `apps` section of `config/sources.lock.json`.
 For a planned rotation, distribute the replacement public key to installed systems
 through an independently authenticated channel before switching the signing
 secret. Replacing an already trusted key is an administrator operation; this

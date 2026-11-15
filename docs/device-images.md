@@ -163,11 +163,21 @@ set later through the ordinary module cold-plug.
 
 While an image is built, its rootfs reads packages from the signed repository that
 the `sign` stage just produced, copied into the rootfs as `/repo`, together with
-Alpine. The published Pages URL is not used at build time, because it only lists an
-architecture after a release has been published. That copy is a build artefact and
-is excluded from the image; the shipped `/etc/apk/repositories` lists the published
-UFLinux repository and Alpine, so `apk update` on the board works as soon as the
-release is public.
+Alpine and the apps repository. The published Pages URL is not used at build time,
+because it only lists an architecture after a release has been published. That copy
+is a build artefact and is excluded from the image; the shipped
+`/etc/apk/repositories` lists the published UFLinux repository, Alpine and the apps
+repository, so `apk update` on the board works as soon as the release is public.
+
+The apps repository is listed because `uflinux-desktop-meta` depends on
+`uflinux-files`, which only it carries. It indexes few architectures, and apk 3
+fails the whole transaction on a repository line whose index 404s, so the line is
+written only for the architectures pinned in the `apps` section of
+`config/sources.lock.json`. Its packages are signed by a separate key that apk
+resolves by filename, so the device stage downloads the published
+`uflinux3.ec384.pub`, verifies it against the lock, and installs it under that
+exact name in `/etc/apk/keys`; `uflinux-release` ships the same file in the
+installed system.
 
 The pinned Nura suite is never listed in `/etc/apk/repositories`, not even while
 building. apk solves against every repository in that file, and Nura's

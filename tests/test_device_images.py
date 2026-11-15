@@ -67,7 +67,7 @@ class DeviceRootfsTests(unittest.TestCase):
     def test_build_uses_the_copied_signed_repository(self):
         lines = device_repositories("/repo", "aarch64").split()
         self.assertEqual(lines[0], "/repo")
-        self.assertEqual(len(lines), 3, lines)
+        self.assertEqual(len(lines), 4, lines)
         self.assertTrue(all(line == "/repo" or line.startswith("https://") for line in lines),
                         lines)
 
@@ -75,18 +75,28 @@ class DeviceRootfsTests(unittest.TestCase):
         lines = device_repositories("https://example.invalid/uflinux/0.1.0", "aarch64").split()
         self.assertEqual(lines[0], "https://example.invalid/uflinux/0.1.0")
         self.assertTrue(all(line.startswith("https://") for line in lines), lines)
-        self.assertEqual(len(lines), 3, lines)
+        self.assertEqual(len(lines), 4, lines)
 
     def test_nura_suite_stays_out_of_the_repositories_file(self):
         # A visible Nura line makes apk's solver unresolvable for any install
         # that pulls in a kernel (postmarketos-mkinitfs vs mkinitfs), so the
-        # file only ever lists the UFLinux repo and Alpine. The profile reaches
-        # Nura through apk fetch --repository instead.
+        # file only ever lists the UFLinux repo, Alpine and the apps repository.
+        # The profile reaches Nura through apk fetch --repository instead.
         lines = device_repositories("/repo", "aarch64").split()
-        self.assertEqual(len(lines), 3, lines)
+        self.assertEqual(len(lines), 4, lines)
         self.assertNotIn("nura", " ".join(lines))
         self.assertEqual(device_nura_repository(),
                          "https://mirror.nura.eco/postmarketos/v26.06")
+
+    def test_apps_repository_is_listed_only_where_it_has_an_index(self):
+        # apk 3 fails the whole transaction on a repository line whose index
+        # 404s, so an architecture the apps repository does not index must not
+        # see the line at all.
+        apps = builder.LOCK["apps"]
+        self.assertIn(apps["url"], device_repositories("/repo", "aarch64").split())
+        lines = device_repositories("/repo", "armv7").split()
+        self.assertEqual(len(lines), 3, lines)
+        self.assertNotIn(apps["url"], lines)
 
     def test_shared_desktop_and_boot_tools_are_installed(self):
         packages = device_packages(DEVICES["vm"], "x86_64")

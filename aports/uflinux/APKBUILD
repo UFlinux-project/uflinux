@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=3
+pkgrel=4
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -22,7 +22,7 @@ source="uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.sv
 	labwc-autostart labwc-environment mako.conf
 	gtk-settings.ini 90-uflinux.gschema.override 45-uflinux-fonts.conf firefox-defaults.js
 	labwc-portals.conf xdg-desktop-portal-wlr-labwc regreet.toml regreet.css greetd-installed.toml greetd-live.toml greetd.pam
-	connman.conf connman.confd iwd.conf uflinux-network-init uflinux-connman.conf
+	connman.conf connman.confd iwd.conf uflinux-network-init uflinux-connman.conf uflinux3.ec384.pub
 	https://download.gnome.org/sources/gnome-backgrounds/3.38/gnome-backgrounds-3.38.0.tar.xz
 	labwc-themes-6a2e3634.tar.gz::https://codeload.github.com/labwc/labwc-themes/tar.gz/6a2e3634eef03e7f124359ad28ed5da2d931f96d"
 
@@ -72,6 +72,18 @@ package() {
 		'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' \
 		'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' \
 		> "$pkgdir/usr/share/uflinux/repositories"
+	# The apps repository publishes indexes for these architectures only; an
+	# unreachable repository line makes apk update (and every later apk add)
+	# fail, so x86 and armv7 systems must not list it at all. Its packages are
+	# signed with a separate key that apk resolves by filename, so ship it
+	# under the exact name the signatures reference.
+	case "$CARCH" in
+		x86_64|aarch64|ppc64le|riscv64)
+			printf '%s\n' 'https://apps-repo.uflinux.org/apk/v3.24/uflinux-apps' \
+				>> "$pkgdir/usr/share/uflinux/repositories"
+			install -Dm644 "$srcdir/uflinux3.ec384.pub" "$pkgdir/etc/apk/keys/uflinux3.ec384.pub"
+			;;
+	esac
 	install -Dm644 "$pkgdir/usr/share/uflinux/os-release" "$pkgdir/etc/os-release"
 	install -Dm755 "$srcdir/uflinux-session" "$pkgdir/usr/bin/uflinux-session"
 	install -Dm755 "$srcdir/uflinux-autostart" "$pkgdir/usr/libexec/uflinux-autostart"
@@ -129,7 +141,12 @@ release() {
 	pkgdesc="UFLinux identity and repository configuration"
 	depends="alpine-release"
 	replaces="alpine-release"
-	amove etc/os-release usr/share/uflinux/version usr/share/uflinux/os-release usr/share/uflinux/repositories
+	# amove fails on a missing path, so the apps key is claimed only on the
+	# architectures where package() installs it.
+	case "$CARCH" in
+		x86_64|aarch64|ppc64le|riscv64) apps_key="etc/apk/keys/uflinux3.ec384.pub" ;;
+	esac
+	amove etc/os-release usr/share/uflinux/version usr/share/uflinux/os-release usr/share/uflinux/repositories $apps_key
 }
 
 defaults() {
@@ -157,7 +174,7 @@ desktop() {
 	pkgdesc="UFLinux minimal desktop dependencies"
 	depends="uflinux-release=$pkgver-r$pkgrel uflinux-defaults=$pkgver-r$pkgrel uflinux-bootsplash-openrc=$pkgver-r$pkgrel
 		xdg-user-dirs labwc uflinux-desktop uflinux-settings uflinux-screencapture gpu-screen-recorder
-		xdg-desktop-portal xdg-desktop-portal-wlr foot nemo mako
+		xdg-desktop-portal xdg-desktop-portal-wlr foot loupe htop mako
 		transmission-gtk celluloid gnome-disk-utility file-roller
 		eudev eudev-openrc elogind elogind-openrc dbus dbus-openrc dbus-x11
 		greetd greetd-openrc uflinux-regreet=0.2.0-r1 cage polkit-elogind
@@ -180,6 +197,15 @@ desktop() {
 		x86_64) vaapi_drivers="libva-intel-driver intel-media-driver" ;;
 	esac
 	depends="$depends $vaapi_drivers"
+	# uflinux-files (the file manager) ships only in the apps repository, which
+	# has no indexes for x86 or armv7, so those architectures ship without a
+	# graphical file manager rather than carrying an unsatisfiable dependency.
+	# Like vaapi_drivers above, the name travels in a variable so that
+	# scripts/check-packages.py does not demand it on every architecture.
+	case "$CARCH" in
+		x86_64|aarch64|ppc64le|riscv64) file_manager="uflinux-files" ;;
+	esac
+	depends="$depends $file_manager"
 	install -d "$subpkgdir"
 }
 
@@ -253,8 +279,8 @@ e7547d393b9489bfaf96ea7f1f580099e8d01487e7a59cc897001032e0f0f424b68d77d21e92ac38
 e6df4f4a610b45f3426de64299f2fcc0e53691cf4f62a571cc9a3a0c168628042f31ea328e202bcec79d0aa62204e370265b38ea131772c8c548a5b1a19a9d11  uflinux.desktop
 f1c52e9fb8613e71ef77817ffcfad4638be5fba1c606218562955ad6a0d75a087bce62ed514d8687af9fa25940d64513ba0b535f1de370c51a1db9b2ed399256  uflinux-logo.svg
 17da1c30e1f7b8441f113b0d38bea115439e6238ffb063d71638b28d2e994b1bc06e04a421bc5bfedcf05c48825eeaae47a172a0f047f381af12551401123224  artwork-NOTICE
-424c57a142889e91c0c1e6ef9a38fb66066a221e973036c7c5aa0b500afce8199023d382626a7e2d8cb995886cfe91ac77d0b370be27e10f218ff3fc8d6096cb  labwc-rc.xml
-0e3bb10cffaf6d2279fc225e5908119dadfe4dda0125041844f265c26dc488486b8c30274e784a7a85ad77afb5bc96bdb2b038d371f59261e63fec1b5e9dc324  labwc-menu.xml
+9a87ed6157b663804cbe9a0b32aa3cc9f4382a35ad107c876409277697d1f755924d98a837acfb259fd50de52a149fb118a9def78fa55e6823a99da681d16e38  labwc-rc.xml
+c3894da7a02e8d9606e6f0946772e641eb6b0f8511da7ff368e0a0bfa8bec45be0e8b1acf9f3f6c7cb2ab8dc35b0b649db5971e1ac28ac8d05bcb721a64c53c0  labwc-menu.xml
 f25b2a1b852ea3519078d149f2ab86eedaddb811a2f4c6437a4e572072ddf7b758fa8b2570c9ba6f266ed2ac585a5e3f11e056a8e6e77df3de89c8814f9acb7e  labwc-autostart
 f635e02bd8f0b6b859571a578336b978585dc93baae7a6a9d4ee74aa038d29c813706cd72ae5c8a90391b0f05d37b33bcfb8c146c969ffbd6da5680dcd6dd9ed  labwc-environment
 250c6f15d6d3621d324a9f69c200c9d985cdd3b3d996d2b54dddb63de108595fa21d906c2b03aab1ae0a083fde8a0c2a36f01d9b5554f5db776db3178831d976  mako.conf
@@ -274,6 +300,7 @@ bbfbc3518964638a260fa7a6b62707ad2e0e35ea55764de9cbf293466e3d03b14e01b0c4af876a22
 985899525dba39fd733e3750aff1dbf5037d7e3558926d6030697fdb764356f247b2255b6f1548b3ff88a7974d18c56e93b91069e1d9d3e241d325432e1f590c  iwd.conf
 ac30e59bef50b6d70dfb268299ad4024284bae46c01ec35040014f53612eeb15bf17d4b50f4c497f5861d72d68769caccde407c32be3cd1bfb5d019e6c9556f1  uflinux-network-init
 34effd0b86702a3a63e6747554149c2ce4c265cf85c262627c50a6a6f9daa14794b76d119967f930ea04f445da1e573062f1f11eb2bc401412fcd697328903f3  uflinux-connman.conf
+b9b60fcb6cc9dea3bf6f20addcfa7215e036a4031730b16785d2a30b1dcea2db7605da9ff2e189ec7bae9912457badd788f74522b4ed517f7bf1e1dd49dcb980  uflinux3.ec384.pub
 01000409d6d54af81e520b8b292c24bb64e763a493c69cf71cabb9f885c7feee5a1805db40e2d0544834c40b7866f889c106e9816fd8e8b8f5273b0a099f1488  gnome-backgrounds-3.38.0.tar.xz
 ff78da5b5709a69cebbc11586d3a31d65229b6545d8d600c28fc93fc4b08332a8a9d9c21594e3680ee17f03a8e3fe5fc9b2cb8b3223e5d687aa680a2355b9747  labwc-themes-6a2e3634.tar.gz
 "
