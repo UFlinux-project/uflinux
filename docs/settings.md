@@ -21,8 +21,11 @@ uflinux-settingsctl power-profile balanced
 
 Other page names are `displays`, `audio`, `power`, `default-apps`, `datetime`, `appearance`,
 `screen-capture` and `about`. The Network panel provides connection selection, credentials and
-radio controls. Sound provides input, output and application audio controls;
-Power provides battery status, brightness and power modes. Controls for absent
+radio controls, split into Wi-Fi, Ethernet, Bluetooth and VPN tabs. Audio and the
+Sound panel split devices into Output and Input tabs;
+Power provides battery status, brightness and power modes. Tabs share one fixed
+frame, so switching them never resizes the window or the flyout, and a tab is
+built only once its hardware appears in a snapshot. Controls for absent
 hardware are hidden; use the arrow beside an input or output volume slider to
 choose its audio device. Advanced options are
 available from each panel's Settings link. `--quick-settings` is an alias for the
@@ -68,13 +71,15 @@ available for administration.
 
 ## Networking and clocks
 
-The small ConnMan 2.0-r3 package retains Alpine’s musl/D-Bus fixes and adds a
+The small ConnMan 2.0-r4 package retains Alpine’s musl/D-Bus fixes and adds a
 checksum-pinned iwd credential-delegation patch. ConnMan 2.0 otherwise rejects
 iwd-managed enterprise connections when no duplicate ConnMan EAP configuration
 exists. Only the iwd driver enables this internal flag; iwd still enforces its
 CA and server-name checks. No immutable provisioning workaround or duplicate
-enterprise password store is introduced. Legacy supplicant, VPN, modem and
-Bluetooth plugins are disabled in this core-networking build.
+enterprise password store is introduced. Legacy supplicant, modem and
+Bluetooth plugins stay disabled in this core-networking build; the separate
+`connman-vpn` package builds only the WireGuard backend and runs it as the
+`connman-vpnd` service.
 
 ConnMan controls Ethernet/Wi-Fi connections, DHCP, IPv4/IPv6, DNS, proxies and
 autoconnect. Its iwd plugin is selected explicitly; wpa_supplicant and
@@ -98,7 +103,15 @@ certificate/private key. A protected iwd profile performs authentication while
 ConnMan remains the connection controller. Profiles and imported certificates
 are machine-wide and root-readable; secrets are excluded from shared snapshots
 and preferences. Forgetting a connection removes its owned certificate files.
-VPNs, hotspots, tethering, virtual interfaces and Bluetooth are outside this UI.
+The Bluetooth tab talks to BlueZ directly over the session bus: adapter power,
+scanning, pairing, unpairing, trusting and connecting devices, with signal and
+battery where the device reports them. Pairing uses BlueZ's default agent-less
+flow, so devices requiring an exchange of I/O capabilities can still fail to
+pair. The VPN tab manages `connman-vpnd` WireGuard tunnels: importing a client
+configuration creates the tunnel through the typed `vpn-import` request, and
+each listed tunnel can be connected, disconnected or removed. Private keys stay
+in the daemon; shared snapshots and preferences never echo them. Hotspots,
+tethering and virtual interfaces remain outside this UI.
 
 ConnMan's built-in SNTP client is the only synchronizer; no `ntpd`, `chronyd` or
 `openntpd` runs. Before ConnMan starts, its persisted TimeUpdates policy is

@@ -34,10 +34,69 @@ pub fn page(app: &Rc<App>, parent: &gtk::Box) {
         |s| !s.network.offline,
         |enabled| Action::Networking { enabled },
     );
+    tabs(app, parent, Surface::Full, false);
+}
+
+/// Wi-Fi / Ethernet / Bluetooth / VPN tabs over one size-homogeneous stack,
+/// so switching tabs never resizes the page. A tab is built only once its
+/// subsystem first appears in a snapshot and is hidden again if it vanishes;
+/// absent subsystems cost no widgets and no bindings beyond this one.
+pub fn tabs(app: &Rc<App>, parent: &gtk::Box, surface: Surface, compact: bool) {
+    const TABS: [(&str, &str); 4] = [
+        ("wifi", "Wi-Fi"),
+        ("ethernet", "Ethernet"),
+        ("bluetooth", "Bluetooth"),
+        ("vpn", "VPN"),
+    ];
+    let stack = gtk::Stack::builder()
+        .hhomogeneous(true)
+        .vhomogeneous(true)
+        .build();
+    let switcher = gtk::StackSwitcher::new();
+    switcher.set_stack(Some(&stack));
+    let frame = column();
+    frame.append(&switcher);
+    frame.append(&stack);
+    parent.append(&frame);
+    let pages = Rc::new(RefCell::new(BTreeMap::<&'static str, gtk::StackPage>::new()));
+    let weak = Rc::downgrade(app);
+    let bound_stack = stack.clone();
+    app.bind_for(surface, &stack, move |s| {
+        let present = [
+            s.network.technologies.iter().any(|t| t.kind == "wifi")
+                || s.network.wifi_hardware_blocked
+                || s.network.wifi_software_blocked,
+            s.network.technologies.iter().any(|t| t.kind == "ethernet"),
+            s.bluetooth.available,
+            s.vpn.available,
+        ];
+        let Some(app) = weak.upgrade() else {
+            return;
+        };
+        for (index, (id, label)) in TABS.into_iter().enumerate() {
+            if !pages.borrow().contains_key(id) && present[index] {
+                let child = match id {
+                    "wifi" => wifi_tab(&app, surface, compact),
+                    "ethernet" => ethernet_tab(&app, surface, compact),
+                    "bluetooth" => bluetooth_tab(&app, surface),
+                    _ => vpn_tab(&app, surface),
+                };
+                let page = bound_stack.add_titled(&child, Some(id), label);
+                pages.borrow_mut().insert(id, page);
+            }
+            if let Some(page) = pages.borrow().get(id) {
+                page.set_visible(present[index]);
+            }
+        }
+    });
+}
+
+fn wifi_tab(app: &Rc<App>, surface: Surface, compact: bool) -> gtk::Box {
+    let tab = column();
     toggle(
         app,
-        Surface::Full,
-        parent,
+        surface,
+        &tab,
         "Wi-Fi",
         |s| {
             s.network
@@ -65,11 +124,432 @@ pub fn page(app: &Rc<App>, parent: &gtk::Box) {
         }
     });
     buttons.append(&enterprise);
-    parent.append(&buttons);
-    section(parent, "Connections");
-    list(app, parent, Surface::Full, false);
+    tab.append(&buttons);
+    list(app, &tab, surface, compact, "wifi");
+    tab
 }
-pub fn list(app: &Rc<App>, parent: &gtk::Box, surface: Surface, compact: bool) {
+
+fn ethernet_tab(app: &Rc<App>, surface: Surface, compact: bool) -> gtk::Box {
+    let tab = column();
+    tab.append(&description(
+        "ConnMan configures wired connections automatically.",
+    ));
+    list(app, &tab, surface, compact, "ethernet");
+    tab
+}
+
+fn bluetooth_tab(app: &Rc<App>, surface: Surface) -> gtk::Box {
+    let tab = column();
+    toggle(
+        app,
+        surface,
+        &tab,
+        "Bluetooth",
+        |s| s.bluetooth.powered,
+        |enabled| Action::BluetoothPower { enabled },
+    );
+    tab.append(&button(app, "Scan", || Action::BluetoothScan));
+    let devices = column();
+    tab.append(&devices);
+    let signature = Rc::new(RefCell::new(Vec::<String>::new()));
+    let target = devices.downgrade();
+    let weak = Rc::downgrade(app);
+    app.bind_for(surface, &devices, move |s| {
+        let Some(app) = weak.upgrade() else {
+            return;
+        };
+        let listed = s.bluetooth.devices.iter().take(32).collect::<Vec<_>>();
+        let now = listed
+            .iter()
+            .map(|d| {
+                format!(
+                    "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{:?}\u{1}{:?}",
+                    d.path, d.name, d.alias, d.paired, d.trusted, d.connected, d.rssi, d.battery
+                )
+            })
+            .collect::<Vec<_>>();
+        if *signature.borrow() == now {
+            return;
+        }
+        let Some(devices) = target.upgrade() else {
+            return;
+        };
+        *signature.borrow_mut() = now;
+        clear(&devices);
+        if listed.is_empty() {
+            devices.append(&description(
+                "No Bluetooth devices found. Scan to look for nearby devices.",
+            ));
+            return;
+        }
+        for device in listed {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            line.add_css_class("settings-row");
+            let text = column();
+            text.set_hexpand(true);
+            let name =
+                gtk::Label::new(Some(if device.alias.is_empty() && device.name.is_empty() {
+                    "Unnamed device"
+                } else if device.alias.is_empty() {
+                    &device.name
+                } else {
+                    &device.alias
+                }));
+            name.set_xalign(0.);
+            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            name.add_css_class("network-name");
+            text.append(&name);
+            let mut status = vec![
+                if device.connected {
+                    "Connected"
+                } else if device.paired {
+                    "Paired"
+                } else {
+                    "Not paired"
+                }
+                .to_string(),
+            ];
+            if device.trusted {
+                status.push("Trusted".into());
+            }
+            if let Some(battery) = device.battery {
+                status.push(format!("{battery}% battery"));
+            }
+            if let Some(rssi) = device.rssi {
+                status.push(format!("signal {rssi} dBm"));
+            }
+            text.append(&description(&status.join(" · ")));
+            line.append(&text);
+            let path = device.path.clone();
+            if device.paired {
+                let p = path.clone();
+                line.append(&button(&app, "Unpair", move || Action::BluetoothUnpair {
+                    device: p.clone(),
+                }));
+            } else {
+                let p = path.clone();
+                line.append(&button(&app, "Pair", move || Action::BluetoothPair {
+                    device: p.clone(),
+                }));
+            }
+            if device.paired {
+                let p = path.clone();
+                let connected = device.connected;
+                line.append(&button(
+                    &app,
+                    if connected { "Disconnect" } else { "Connect" },
+                    move || {
+                        if connected {
+                            Action::BluetoothDisconnect { device: p.clone() }
+                        } else {
+                            Action::BluetoothConnect { device: p.clone() }
+                        }
+                    },
+                ));
+            }
+            let trust = gtk::CheckButton::with_label("Trusted");
+            trust.set_active(device.trusted);
+            let p = path.clone();
+            let weak = Rc::downgrade(&app);
+            trust.connect_toggled(move |b| {
+                if let Some(app) = weak.upgrade() {
+                    app.execute(
+                        Action::BluetoothTrust {
+                            device: p.clone(),
+                            enabled: b.is_active(),
+                        },
+                        None,
+                    );
+                }
+            });
+            line.append(&trust);
+            devices.append(&line);
+        }
+    });
+    tab
+}
+
+fn vpn_tab(app: &Rc<App>, surface: Surface) -> gtk::Box {
+    let tab = column();
+    let import = gtk::Button::with_label("Import WireGuard configuration…");
+    let weak = Rc::downgrade(app);
+    import.connect_clicked(move |_| {
+        if let Some(app) = weak.upgrade() {
+            vpn_import(&app);
+        }
+    });
+    tab.append(&import);
+    let tunnels = column();
+    tab.append(&tunnels);
+    let signature = Rc::new(RefCell::new(Vec::<String>::new()));
+    let target = tunnels.downgrade();
+    let weak = Rc::downgrade(app);
+    app.bind_for(surface, &tunnels, move |s| {
+        let Some(app) = weak.upgrade() else {
+            return;
+        };
+        let listed = s.vpn.tunnels.iter().take(32).collect::<Vec<_>>();
+        let now = listed
+            .iter()
+            .map(|t| {
+                format!(
+                    "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+                    t.path, t.name, t.kind, t.state, t.interface
+                )
+            })
+            .collect::<Vec<_>>();
+        if *signature.borrow() == now {
+            return;
+        }
+        let Some(tunnels) = target.upgrade() else {
+            return;
+        };
+        *signature.borrow_mut() = now;
+        clear(&tunnels);
+        if listed.is_empty() {
+            tunnels.append(&description(
+                "No VPN connections yet. Import a WireGuard client configuration to add one.",
+            ));
+            return;
+        }
+        for tunnel in listed {
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            line.add_css_class("settings-row");
+            let text = column();
+            text.set_hexpand(true);
+            let name = gtk::Label::new(Some(if tunnel.name.is_empty() {
+                "VPN connection"
+            } else {
+                &tunnel.name
+            }));
+            name.set_xalign(0.);
+            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            name.add_css_class("network-name");
+            text.append(&name);
+            text.append(&description(&format!(
+                "{} · {} · {}{}",
+                tunnel.kind,
+                tunnel.host,
+                tunnel.state,
+                if tunnel.interface.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", tunnel.interface)
+                }
+            )));
+            line.append(&text);
+            let active = ["ready", "configuration"].contains(&tunnel.state.as_str());
+            let path = tunnel.path.clone();
+            let p = path.clone();
+            line.append(&button(
+                &app,
+                if active { "Disconnect" } else { "Connect" },
+                move || {
+                    if active {
+                        Action::VpnDisconnect {
+                            tunnel: path.clone(),
+                        }
+                    } else {
+                        Action::VpnConnect {
+                            tunnel: path.clone(),
+                        }
+                    }
+                },
+            ));
+            line.append(&button(&app, "Remove", move || Action::VpnRemove {
+                tunnel: p.clone(),
+            }));
+            tunnels.append(&line);
+        }
+    });
+    tab
+}
+
+/// Parses a wg-quick style client configuration into the ConnMan WireGuard
+/// session properties plus the endpoint host. Only the first [Peer] is used.
+fn parse_wireguard(text: &str) -> std::result::Result<(String, BTreeMap<String, String>), String> {
+    let mut section = String::new();
+    let mut interface = BTreeMap::<String, String>::new();
+    let mut peer = BTreeMap::<String, String>::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            section = line[1..line.len() - 1].to_ascii_lowercase();
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (key, value) = (key.trim().to_ascii_lowercase(), value.trim().to_string());
+        match section.as_str() {
+            "interface" => {
+                interface.entry(key).or_insert(value);
+            }
+            "peer" => {
+                peer.entry(key).or_insert(value);
+            }
+            _ => {}
+        }
+    }
+    let mut keys = BTreeMap::new();
+    for (from, to, required) in [
+        ("privatekey", "WireGuard.PrivateKey", true),
+        ("address", "WireGuard.Address", true),
+        ("listenport", "WireGuard.ListenPort", false),
+    ] {
+        match interface.get(from) {
+            Some(value) => {
+                keys.insert(to.to_string(), value.clone());
+            }
+            None if required => {
+                return Err("The configuration is missing a [Interface] value".into());
+            }
+            None => {}
+        }
+    }
+    for (from, to, required) in [
+        ("publickey", "WireGuard.PublicKey", true),
+        ("allowedips", "WireGuard.AllowedIPs", true),
+        ("presharedkey", "WireGuard.PresharedKey", false),
+        (
+            "persistentkeepalive",
+            "WireGuard.PersistentKeepalive",
+            false,
+        ),
+    ] {
+        match peer.get(from) {
+            Some(value) => {
+                keys.insert(to.to_string(), value.clone());
+            }
+            None if required => return Err("The configuration is missing a [Peer] value".into()),
+            None => {}
+        }
+    }
+    let endpoint = peer
+        .get("endpoint")
+        .ok_or("The configuration has no [Peer] Endpoint")?
+        .clone();
+    let (host, port) = match endpoint.strip_prefix('[') {
+        Some(rest) => match (rest.find(']'), rest.rsplit_once(':')) {
+            (Some(end), Some((_, port))) if port.len() < rest.len() - end => {
+                (rest[..end].to_string(), Some(port.to_string()))
+            }
+            _ => (rest.split(']').next().unwrap_or("").to_string(), None),
+        },
+        None => match endpoint.rsplit_once(':') {
+            Some((host, port)) if !host.is_empty() => (host.to_string(), Some(port.to_string())),
+            _ => (endpoint.clone(), None),
+        },
+    };
+    if host.is_empty() {
+        return Err("The [Peer] Endpoint has no host".into());
+    }
+    if let Some(port) = port {
+        keys.insert("WireGuard.EndpointPort".into(), port);
+    }
+    Ok((host, keys))
+}
+
+fn vpn_import(app: &Rc<App>) {
+    let weak = Rc::downgrade(app);
+    glib::MainContext::default().spawn_local(async move {
+        let Some(app) = weak.upgrade() else {
+            return;
+        };
+        let chooser = gtk::FileDialog::builder()
+            .title("Import WireGuard configuration")
+            .build();
+        let Ok(file) = chooser.open_future(app.parent().as_ref()).await else {
+            return;
+        };
+        let Some(path) = file.path() else {
+            return;
+        };
+        let display = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let result = gio::spawn_blocking(move || {
+            let file =
+                fs::File::open(path).map_err(|_| "Cannot read the configuration".to_string())?;
+            let mut text = String::new();
+            file.take(64 * 1024 + 1)
+                .read_to_string(&mut text)
+                .map_err(|_| "The configuration must be UTF-8 text".to_string())?;
+            if text.len() > 64 * 1024 {
+                return Err("The configuration file is too large".to_string());
+            }
+            Ok(text)
+        })
+        .await
+        .map_err(|_| "Cannot read the configuration".to_string());
+        let (host, keys) = match result.flatten().and_then(|text| parse_wireguard(&text)) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                app.error(&format!(
+                    "{error}; expected a WireGuard client configuration with [Interface] and [Peer]"
+                ));
+                return;
+            }
+        };
+        let name = display
+            .rsplit_once(".conf")
+            .map(|(stem, _)| stem.to_string())
+            .unwrap_or(display);
+        let (window, parent) = dialog(&app, "Confirm VPN connection");
+        parent.append(&description(
+            "Review the tunnel before saving. ConnMan stores it and connects on demand.",
+        ));
+        let profile = entry(&parent, "Name", &name);
+        let endpoint = entry(&parent, "Endpoint host", &host);
+        let mut fields = Vec::new();
+        for (key, label, secret) in [
+            ("WireGuard.PrivateKey", "Private key", true),
+            ("WireGuard.PublicKey", "Server public key", false),
+            ("WireGuard.Address", "Tunnel address", false),
+            ("WireGuard.AllowedIPs", "Allowed IPs", false),
+            ("WireGuard.PresharedKey", "Preshared key (optional)", true),
+            ("WireGuard.ListenPort", "Local port (optional)", false),
+            ("WireGuard.EndpointPort", "Endpoint port (optional)", false),
+            (
+                "WireGuard.PersistentKeepalive",
+                "Keepalive seconds (optional)",
+                false,
+            ),
+        ] {
+            let value = keys.get(key).map(String::as_str).unwrap_or("");
+            let input = if secret {
+                let input = entry(&parent, label, value);
+                input.set_visibility(false);
+                input.set_input_purpose(gtk::InputPurpose::Password);
+                input
+            } else {
+                entry(&parent, label, value)
+            };
+            fields.push((key, input));
+        }
+        parent.append(&button(&app, "Save VPN connection", move || {
+            let mut keys = BTreeMap::new();
+            for (key, input) in &fields {
+                let value = input.text().trim().to_string();
+                if !value.is_empty() {
+                    keys.insert((*key).to_string(), value);
+                }
+            }
+            Action::VpnImport {
+                name: profile.text().to_string(),
+                host: endpoint.text().to_string(),
+                keys,
+            }
+        }));
+        window.present();
+    });
+}
+
+pub fn list(app: &Rc<App>, parent: &gtk::Box, surface: Surface, compact: bool, kind: &str) {
     let model = gtk::StringList::new(&[]);
     let selection = gtk::NoSelection::new(Some(model.clone()));
     let factory = gtk::SignalListItemFactory::new();
@@ -154,19 +634,21 @@ pub fn list(app: &Rc<App>, parent: &gtk::Box, surface: Surface, compact: bool) {
     list.set_single_click_activate(false);
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
-        .min_content_height(if compact { 64 } else { 180 })
-        .max_content_height(if compact { 128 } else { 460 })
+        .min_content_height(if compact { 96 } else { 180 })
+        .max_content_height(if compact { 220 } else { 460 })
         .propagate_natural_height(true)
         .child(&list)
         .build();
     parent.append(&scroll);
     let signature = Rc::new(RefCell::new(Vec::<String>::new()));
     let weak_model = model.downgrade();
+    let kind = kind.to_string();
     app.bind_for(surface, &list, move |s| {
         let services = s
             .network
             .services
             .iter()
+            .filter(|service| service.kind == kind)
             .take(if compact { 32 } else { 128 })
             .collect::<Vec<_>>();
         let values = services
@@ -780,4 +1262,62 @@ fn enterprise_network(app: &Rc<App>) {
     }));
     parent.append(&description("After saving, scan and connect using the connection list. ConnMan will manage the connection; iwd reads the protected profile."));
     window.present();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_wireguard;
+
+    const SAMPLE: &str = "[Interface]
+PrivateKey = aA5Z8c0g0I2Yq8rGkIsS0o3lWp6Zw1TfCvBnXm0KdUo=
+Address = 10.0.0.2/32
+ListenPort = 51820
+DNS = 10.0.0.1
+
+[Peer]
+PublicKey = q3A9B0TgVZ3Yp1rGkIsS0o3lWp6Zw1TfCvBnXm0KdUm=
+PresharedKey = Iy9xTv5B3n0mZ0eQ6rW8sA2cVd7Lp4KfYh1JtGxMbUo=
+Endpoint = vpn.example.com:51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+";
+
+    #[test]
+    fn parses_wg_quick_conf() {
+        let (host, keys) = parse_wireguard(SAMPLE).expect("sample parses");
+        assert_eq!(host, "vpn.example.com");
+        assert_eq!(
+            keys["WireGuard.PrivateKey"],
+            "aA5Z8c0g0I2Yq8rGkIsS0o3lWp6Zw1TfCvBnXm0KdUo="
+        );
+        assert_eq!(keys["WireGuard.Address"], "10.0.0.2/32");
+        assert_eq!(keys["WireGuard.ListenPort"], "51820");
+        assert_eq!(
+            keys["WireGuard.PublicKey"],
+            "q3A9B0TgVZ3Yp1rGkIsS0o3lWp6Zw1TfCvBnXm0KdUm="
+        );
+        assert_eq!(
+            keys["WireGuard.PresharedKey"],
+            "Iy9xTv5B3n0mZ0eQ6rW8sA2cVd7Lp4KfYh1JtGxMbUo="
+        );
+        assert_eq!(keys["WireGuard.AllowedIPs"], "0.0.0.0/0, ::/0");
+        assert_eq!(keys["WireGuard.PersistentKeepalive"], "25");
+        assert_eq!(keys["WireGuard.EndpointPort"], "51820");
+        assert!(!keys.contains_key("WireGuard.DNS"));
+    }
+
+    #[test]
+    fn parses_ipv6_bracketed_endpoint() {
+        let conf = "[Interface]\nPrivateKey = k\nAddress = fd00::2/128\n\n[Peer]\nPublicKey = p\nEndpoint = [2001:db8::1]:443\nAllowedIPs = ::/0\n";
+        let (host, keys) = parse_wireguard(conf).expect("bracketed endpoint parses");
+        assert_eq!(host, "2001:db8::1");
+        assert_eq!(keys["WireGuard.EndpointPort"], "443");
+    }
+
+    #[test]
+    fn rejects_incomplete_conf() {
+        assert!(parse_wireguard("[Interface]\nPrivateKey = k\n").is_err());
+        assert!(parse_wireguard("[Interface]\nPrivateKey = k\nAddress = a\n\n[Peer]\nPublicKey = p\nAllowedIPs = x\n").is_err());
+        assert!(parse_wireguard("garbage").is_err());
+    }
 }

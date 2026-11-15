@@ -1012,6 +1012,7 @@ dependencies = [
  "gtk4-layer-shell",
  "libc",
  "pkg-config",
+ "serde",
  "serde_json",
  "settings-core",
  "uflinux-settings",

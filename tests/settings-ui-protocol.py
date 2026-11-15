@@ -58,6 +58,21 @@ command('wlrctl','toplevel','focus','app_id:org.uflinux.Settings')
 command('wtype','-M','ctrl','-M','alt','-k','F9','-m','alt','-m','ctrl')
 command('wlrctl','toplevel','maximize','app_id:org.uflinux.Settings')
 time.sleep(.3)
+# Every page tab must be a visible control, and switching tabs must not resize
+# the window (the stack keeps one homogeneous size request).
+def tab(label):
+    return wait(lambda:find(label,'toggle button'),'Missing '+label+' tab')
+def window_size():
+    frame=next(a for a in tree() if a.getRoleName()=='frame')
+    return frame.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
+page('network')
+sizes=[]
+for label in ('Wi-Fi','Ethernet','Bluetooth','VPN'):
+    tab(label);sizes.append(window_size())
+assert len(set((s.width,s.height) for s in sizes))==1,'Network tabs changed the window size'
+page('audio')
+for label in ('Output','Input'):
+    tab(label)
 page('displays')
 canvas=wait(lambda:find('Display layout'),'The layout preview must have an accessible name')
 outputs=state()['displays']['outputs']

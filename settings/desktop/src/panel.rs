@@ -1,5 +1,5 @@
 //! Experimental panel surface; the installed session remains on Ironbar.
-use crate::{app::App, catalog, tray::Tray};
+use crate::{app::App, catalog, notifications, tray::Tray};
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::{
@@ -8,9 +8,27 @@ use std::{
     rc::{Rc, Weak},
 };
 use uflinux_desktop::{
-    taskbar::{Activation, Application, Taskbar, WindowId},
+    taskbar::{Activation, Application, Group, Taskbar, WindowId},
     toplevel::{Client, Command},
 };
+
+/// Persisted taskbar favorites, so pins and drag-and-drop order survive a
+/// logout. A missing or damaged file falls back to the default apps.
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+struct TaskbarConfig {
+    pinned: Vec<String>,
+}
+impl Default for TaskbarConfig {
+    fn default() -> Self {
+        Self {
+            pinned: vec!["foot.desktop".into(), "nemo.desktop".into()],
+        }
+    }
+}
+fn taskbar_config_path() -> std::path::PathBuf {
+    settings_core::files::config_dir().join("taskbar.json")
+}
 
 /// Panel logo size in device-independent pixels.
 const LOGO_PIXELS: i32 = 28;
@@ -24,6 +42,8 @@ const TRAY_MAX_COLUMNS: i32 = 8;
 /// Beyond this many icons deep the flyout scrolls rather than growing upwards
 /// past the panel and off the screen.
 const TRAY_FLYOUT_MAX_HEIGHT: i32 = 240;
+/// How long the pointer rests on a task before its window list previews itself.
+const TASK_PREVIEW_DELAY_MS: u64 = 350;
 
 struct TaskButton {
     button: gtk::Button,
@@ -59,6 +79,7 @@ struct Surface {
     buttons: HashMap<String, TaskButton>,
     clock: gtk::Popover,
     clock_label: gtk::Label,
+    clock_time: gtk::Label,
 }
 pub struct Panel {
     app: Weak<App>,
@@ -69,21 +90,24 @@ pub struct Panel {
     window_ids: RefCell<HashSet<WindowId>>,
     clock_timer: RefCell<Option<glib::SourceId>>,
     clock_watch: RefCell<Option<crate::clock_watch::ClockWatch>>,
+    /// Favorite currently under a drag, so a drop is only accepted from
+    /// another taskbar button and not from an arbitrary text drag.
+    task_drag: RefCell<Option<String>>,
 }
 impl Panel {
     pub fn new(app: &Rc<App>) -> Rc<Self> {
         let panel = Rc::new(Self {
             app: Rc::downgrade(app),
             surfaces: RefCell::new(Vec::new()),
-            taskbar: RefCell::new(Taskbar::new(vec![
-                "foot.desktop".into(),
-                "nemo.desktop".into(),
-            ])),
+            taskbar: RefCell::new(Taskbar::new(
+                settings_core::files::read_json::<TaskbarConfig>(&taskbar_config_path()).pinned,
+            )),
             tracker: RefCell::new(None),
             tray: RefCell::new(None),
             window_ids: RefCell::new(HashSet::new()),
             clock_timer: RefCell::new(None),
             clock_watch: RefCell::new(None),
+            task_drag: RefCell::new(None),
         });
         if let Some(display) = gtk::gdk::Display::default() {
             let monitors = display.monitors();
@@ -176,9 +200,14 @@ impl Panel {
     }
     fn update_clock(&self) {
         if let Ok(now) = glib::DateTime::now_local() {
-            if let Ok(text) = now.format("%H:%M\n%d/%m/%Y") {
-                for surface in self.surfaces.borrow().iter() {
-                    surface.clock_label.set_text(&text);
+            let panel = now.format("%H:%M\n%d/%m/%Y").ok();
+            let header = now.format("%H:%M").ok();
+            for surface in self.surfaces.borrow().iter() {
+                if let Some(text) = &panel {
+                    surface.clock_label.set_text(text);
+                }
+                if let Some(text) = &header {
+                    surface.clock_time.set_text(text);
                 }
             }
         }
@@ -484,6 +513,7 @@ impl Panel {
                     click.set_button(3);
                     let context_id = group.id.clone();
                     let context_menu = menu.clone();
+                    let context_output = output.clone();
                     let weak = Rc::downgrade(self);
                     click.connect_pressed(move |_, _, _, _| {
                         let Some(panel) = weak.upgrade() else { return };
@@ -496,53 +526,138 @@ impl Panel {
                         else {
                             return;
                         };
-                        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                        for window in group.windows {
-                            let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-                            let title = if window.title.is_empty() {
-                                &group.name
-                            } else {
-                                &window.title
-                            };
-                            let activate = gtk::Button::with_label(title);
-                            activate.set_hexpand(true);
-                            let weak = Rc::downgrade(&panel);
-                            let popup = context_menu.clone();
-                            activate.connect_clicked(move |_| {
-                                if let Some(panel) = weak.upgrade() {
-                                    if let Some(tracker) = panel.tracker.borrow_mut().as_mut() {
-                                        let _ = tracker.send(Command::Activate(window.id));
-                                    }
-                                }
-                                popup.popdown();
-                            });
-                            row.append(&activate);
-                            let close = gtk::Button::from_icon_name("window-close-symbolic");
-                            close.set_tooltip_text(Some("Close window"));
-                            let weak = Rc::downgrade(&panel);
-                            let popup = context_menu.clone();
-                            close.connect_clicked(move |_| {
-                                if let Some(panel) = weak.upgrade() {
-                                    if let Some(tracker) = panel.tracker.borrow_mut().as_mut() {
-                                        let _ = tracker.send(Command::Close(window.id));
-                                    }
-                                }
-                                popup.popdown();
-                            });
-                            row.append(&close);
-                            column.append(&row);
-                        }
-                        if column.first_child().is_none() {
+                        let Some(column) = panel.task_menu(&context_menu, &group) else {
                             return;
-                        }
+                        };
                         if let Some(app) = panel.app.upgrade() {
                             app.hide();
-                            app.task_opened(&output);
+                            app.task_opened(&context_output);
                         }
                         context_menu.set_child(Some(&column));
                         context_menu.popup();
                     });
                     button.add_controller(click);
+                    // Resting the pointer on a running app previews its windows
+                    // in the same popover the right-click menu uses, so a hover
+                    // costs one timer and one small box rather than a screenshot.
+                    let hover = gtk::EventControllerMotion::new();
+                    let pending = Rc::new(std::cell::Cell::new(None::<glib::SourceId>));
+                    hover.connect_enter({
+                        let pending = pending.clone();
+                        let preview_menu = menu.clone();
+                        let preview_id = group.id.clone();
+                        let weak = Rc::downgrade(self);
+                        let preview_output = output.clone();
+                        move |_, _, _| {
+                            if preview_menu.is_visible() || weak.upgrade().is_none() {
+                                return;
+                            }
+                            if let Some(id) = pending.take() {
+                                id.remove();
+                            }
+                            let weak = weak.clone();
+                            let menu = preview_menu.clone();
+                            let id = preview_id.clone();
+                            let output = preview_output.clone();
+                            let source = glib::timeout_add_local_once(
+                                std::time::Duration::from_millis(TASK_PREVIEW_DELAY_MS),
+                                move || {
+                                    let Some(panel) = weak.upgrade() else { return };
+                                    let Some(group) = panel
+                                        .taskbar
+                                        .borrow()
+                                        .groups()
+                                        .into_iter()
+                                        .find(|g| g.id == id)
+                                    else {
+                                        return;
+                                    };
+                                    if group.windows.is_empty() {
+                                        return;
+                                    }
+                                    let Some(column) = panel.task_menu(&menu, &group) else {
+                                        return;
+                                    };
+                                    if let Some(app) = panel.app.upgrade() {
+                                        app.hide();
+                                        app.task_opened(&output);
+                                    }
+                                    menu.set_child(Some(&column));
+                                    menu.popup();
+                                },
+                            );
+                            pending.set(Some(source));
+                        }
+                    });
+                    hover.connect_leave({
+                        let pending = pending;
+                        move |_| {
+                            if let Some(id) = pending.take() {
+                                id.remove();
+                            }
+                        }
+                    });
+                    button.add_controller(hover);
+                    // Favorites can be rearranged by dragging one onto another.
+                    if group.pinned {
+                        let drag = gtk::DragSource::new();
+                        drag.set_actions(gtk::gdk::DragAction::MOVE);
+                        let dragged = group.id.clone();
+                        let weak = Rc::downgrade(self);
+                        drag.connect_prepare(move |_, _, _| {
+                            let panel = weak.upgrade()?;
+                            *panel.task_drag.borrow_mut() = Some(dragged.clone());
+                            Some(gtk::gdk::ContentProvider::for_value(&glib::Value::from(
+                                dragged.as_str(),
+                            )))
+                        });
+                        let weak = Rc::downgrade(self);
+                        drag.connect_drag_end(move |_, _, _| {
+                            if let Some(panel) = weak.upgrade() {
+                                *panel.task_drag.borrow_mut() = None;
+                            }
+                        });
+                        button.add_controller(drag);
+                        let drop_target =
+                            gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::MOVE);
+                        let target_id = group.id.clone();
+                        let accept_id = target_id.clone();
+                        let weak = Rc::downgrade(self);
+                        drop_target.connect_accept(move |_, _| {
+                            weak.upgrade().is_some_and(|panel| {
+                                panel.task_drag.borrow().as_deref() != Some(accept_id.as_str())
+                            })
+                        });
+                        let weak = Rc::downgrade(self);
+                        drop_target.connect_drop(move |_, value, _, _| {
+                            let Some(panel) = weak.upgrade() else {
+                                return false;
+                            };
+                            let Ok(dragged) = value.get::<String>() else {
+                                return false;
+                            };
+                            let moved = {
+                                let mut taskbar = panel.taskbar.borrow_mut();
+                                let (Some(from), Some(target)) = (
+                                    taskbar.pinned_index(&dragged),
+                                    taskbar.pinned_index(&target_id),
+                                ) else {
+                                    return false;
+                                };
+                                if from == target {
+                                    return true;
+                                }
+                                taskbar.move_pinned(&dragged, target);
+                                true
+                            };
+                            if moved {
+                                panel.save_pinned();
+                                panel.render();
+                            }
+                            true
+                        });
+                        button.add_controller(drop_target);
+                    }
                     let image = gtk::Image::new();
                     image.set_pixel_size(24);
                     button.set_child(Some(&image));
@@ -610,6 +725,138 @@ impl Panel {
             }
         }
     }
+    /// Persist the favorites order so the taskbar survives a restart.
+    fn save_pinned(&self) {
+        let pinned = self.taskbar.borrow().pinned().to_vec();
+        let _ = settings_core::files::save_json(
+            &taskbar_config_path(),
+            &TaskbarConfig { pinned },
+            0o644,
+        );
+    }
+
+    /// Shared contents for a task button's right-click menu and hover preview:
+    /// one row per window plus the pin/launch/close-all actions. Returns `None`
+    /// when there is nothing to show so the popover stays closed. The whole
+    /// menu is rebuilt on demand and thrown away with the popover, keeping the
+    /// panel's steady-state cost independent of how many menus a session opens.
+    fn task_menu(self: &Rc<Self>, menu: &gtk::Popover, group: &Group) -> Option<gtk::Box> {
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.style_context().add_class("uflinux-task-menu");
+        let heading = gtk::Label::new(Some(&group.name));
+        heading.set_halign(gtk::Align::Start);
+        heading.style_context().add_class("uflinux-task-heading");
+        column.append(&heading);
+        let application = group.pinned || group.id.contains('.');
+        let mut windows = Vec::with_capacity(group.windows.len());
+        for window in &group.windows {
+            windows.push((window.id, window.title.clone()));
+        }
+        for (window_id, title) in &windows {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            let activate =
+                gtk::Button::with_label(if title.is_empty() { &group.name } else { title });
+            activate.set_hexpand(true);
+            activate.set_halign(gtk::Align::Fill);
+            activate.style_context().add_class("flat");
+            activate.style_context().add_class("uflinux-task-row");
+            let weak = Rc::downgrade(self);
+            let popup = menu.clone();
+            let window_id = *window_id;
+            activate.connect_clicked(move |_| {
+                popup.popdown();
+                if let Some(panel) = weak.upgrade() {
+                    if let Some(tracker) = panel.tracker.borrow_mut().as_mut() {
+                        let _ = tracker.send(Command::Activate(window_id));
+                    }
+                }
+            });
+            row.append(&activate);
+            let close = gtk::Button::from_icon_name("window-close-symbolic");
+            close.set_tooltip_text(Some("Close window"));
+            close.style_context().add_class("flat");
+            let weak = Rc::downgrade(self);
+            let popup = menu.clone();
+            close.connect_clicked(move |_| {
+                popup.popdown();
+                if let Some(panel) = weak.upgrade() {
+                    if let Some(tracker) = panel.tracker.borrow_mut().as_mut() {
+                        let _ = tracker.send(Command::Close(window_id));
+                    }
+                }
+            });
+            row.append(&close);
+            column.append(&row);
+        }
+        if application {
+            let launch = gtk::Button::with_label("Launch a new window");
+            launch.set_halign(gtk::Align::Fill);
+            launch.style_context().add_class("flat");
+            launch.style_context().add_class("uflinux-task-row");
+            let weak = Rc::downgrade(self);
+            let popup = menu.clone();
+            let id = group.id.clone();
+            launch.connect_clicked(move |_| {
+                if let Some(app) = weak.upgrade().and_then(|panel| panel.app.upgrade()) {
+                    app.hide();
+                }
+                if let Some(info) = gio::DesktopAppInfo::new(&id) {
+                    let _ = info.launch(&[], None::<&gio::AppLaunchContext>);
+                }
+                popup.popdown();
+            });
+            column.append(&launch);
+
+            let pin = gtk::Button::with_label(if group.pinned {
+                "Unpin from taskbar"
+            } else {
+                "Pin to taskbar"
+            });
+            pin.set_halign(gtk::Align::Fill);
+            pin.style_context().add_class("flat");
+            pin.style_context().add_class("uflinux-task-row");
+            let weak = Rc::downgrade(self);
+            let popup = menu.clone();
+            let id = group.id.clone();
+            pin.connect_clicked(move |_| {
+                popup.popdown();
+                let Some(panel) = weak.upgrade() else { return };
+                if panel.taskbar.borrow().is_pinned(&id) {
+                    panel.taskbar.borrow_mut().unpin(&id);
+                } else {
+                    panel.taskbar.borrow_mut().pin(&id);
+                }
+                panel.save_pinned();
+                panel.render();
+            });
+            column.append(&pin);
+        }
+        if windows.len() > 1 {
+            let close_all = gtk::Button::with_label("Close all windows");
+            close_all.set_halign(gtk::Align::Fill);
+            close_all.style_context().add_class("flat");
+            close_all.style_context().add_class("uflinux-task-row");
+            let weak = Rc::downgrade(self);
+            let popup = menu.clone();
+            let ids = windows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+            close_all.connect_clicked(move |_| {
+                popup.popdown();
+                if let Some(panel) = weak.upgrade() {
+                    if let Some(tracker) = panel.tracker.borrow_mut().as_mut() {
+                        for window_id in &ids {
+                            let _ = tracker.send(Command::Close(*window_id));
+                        }
+                    }
+                }
+            });
+            column.append(&close_all);
+        }
+        if windows.is_empty() && !application {
+            return None;
+        }
+        Some(column)
+    }
+
     fn sync(self: &Rc<Self>, monitors: &gio::ListModel) {
         let current: Vec<_> = (0..monitors.n_items())
             .filter_map(|i| monitors.item(i)?.downcast::<gtk::gdk::Monitor>().ok())
@@ -655,6 +902,14 @@ impl Panel {
             window.set_keyboard_mode(KeyboardMode::None);
         }
         window.add_css_class("uflinux-panel");
+        window.connect_realize(|window| {
+            if window
+                .renderer()
+                .is_some_and(|renderer| renderer.is::<gtk::gsk::CairoRenderer>())
+            {
+                window.add_css_class("software-renderer");
+            }
+        });
         window.set_height_request(crate::popup::PANEL_HEIGHT);
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         let start = gtk::Button::new();
@@ -796,9 +1051,13 @@ impl Panel {
         }
         let clock_label = gtk::Label::new(None);
         clock_label.add_css_class("desktop-clock");
+        let clock_time = gtk::Label::new(None);
         if let Ok(now) = glib::DateTime::now_local() {
             if let Ok(text) = now.format("%H:%M\n%d/%m/%Y") {
                 clock_label.set_text(&text);
+            }
+            if let Ok(text) = now.format("%H:%M") {
+                clock_time.set_text(&text);
             }
         }
         let weak_panel = Rc::downgrade(self);
@@ -818,9 +1077,221 @@ impl Panel {
         let button = gtk::MenuButton::new();
         button.set_child(Some(&clock_label));
         button.set_tooltip_text(Some("Date and time"));
-        let clock = gtk::Popover::new();
-        let calendar = gtk::Calendar::new();
-        clock.set_child(Some(&calendar));
+        // GNOME-style clock popover: date header, month-navigable calendar and
+        // a notification centre fed by Mako only while the popover is open.
+        let clock = gtk::Popover::builder()
+            .has_arrow(false)
+            .position(gtk::PositionType::Top)
+            .build();
+        clock.add_css_class("uflinux-clock-popover");
+        let clock_card = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        clock_card.add_css_class("uflinux-popup-card");
+        clock_card.add_css_class("uflinux-clock-card");
+        clock_card.set_size_request(360, -1);
+        let today = glib::DateTime::now_local().ok();
+        let format_date = |date: &glib::DateTime| {
+            date.format("%A, %d %B %Y")
+                .ok()
+                .map(|text| text.to_string())
+                .unwrap_or_else(|| "Calendar".to_string())
+        };
+        let clock_header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let heading = gtk::Label::new(Some(
+            &today
+                .as_ref()
+                .map_or_else(|| "Calendar".to_string(), &format_date),
+        ));
+        heading.add_css_class("uflinux-clock-heading");
+        heading.set_hexpand(true);
+        heading.set_xalign(0.0);
+        clock_header.append(&heading);
+        clock_time.add_css_class("uflinux-clock-time");
+        clock_header.append(&clock_time);
+        clock_card.append(&clock_header);
+        let nav_row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let previous = gtk::Button::from_icon_name("pan-start-symbolic");
+        previous.set_tooltip_text(Some("Previous month"));
+        previous.add_css_class("flat");
+        // The Calendar heading is hidden in favour of the popover header;
+        // month navigation is driven manually because the Calendar month
+        // setters need the gtk v4_14 feature, which this image lacks.
+        let calendar = gtk::Calendar::builder()
+            .show_heading(false)
+            .show_day_names(true)
+            .build();
+        if let Some(today) = today.as_ref() {
+            calendar.set_date(Some(today));
+        }
+        calendar.set_hexpand(true);
+        let next = gtk::Button::from_icon_name("pan-end-symbolic");
+        next.set_tooltip_text(Some("Next month"));
+        next.add_css_class("flat");
+        let today_button = gtk::Button::with_label("Today");
+        today_button.add_css_class("flat");
+        nav_row.append(&previous);
+        nav_row.append(&calendar);
+        nav_row.append(&next);
+        nav_row.append(&today_button);
+        clock_card.append(&nav_row);
+        // Displayed month as (year, month from zero); the Calendar date
+        // getter returns the selected day, so the buttons track it here.
+        let month_state = std::rc::Rc::new(std::cell::Cell::new((
+            today.as_ref().map_or(2025, |date| date.year()),
+            today.as_ref().map_or(0, |date| date.month() as i32 - 1),
+        )));
+        let show_date = {
+            let calendar = calendar.clone();
+            let heading = heading.clone();
+            let month_state = month_state.clone();
+            move |year: i32, month: i32, day: i32| {
+                let Ok(date) =
+                    glib::DateTime::new(&glib::TimeZone::local(), year, month + 1, day, 0, 0, 0.0)
+                else {
+                    return;
+                };
+                month_state.set((year, month));
+                calendar.set_date(Some(&date));
+                heading.set_label(&format_date(&date));
+            }
+        };
+        {
+            let show_date = show_date.clone();
+            let month_state = month_state.clone();
+            previous.connect_clicked(move |_| {
+                let (year, month) = month_state.get();
+                let (year, month) = if month == 0 {
+                    (year - 1, 11)
+                } else {
+                    (year, month - 1)
+                };
+                show_date(year, month, 1);
+            });
+        }
+        {
+            let show_date = show_date.clone();
+            let month_state = month_state.clone();
+            next.connect_clicked(move |_| {
+                let (year, month) = month_state.get();
+                let (year, month) = if month == 11 {
+                    (year + 1, 0)
+                } else {
+                    (year, month + 1)
+                };
+                show_date(year, month, 1);
+            });
+        }
+        today_button.connect_clicked(move |_| {
+            let Some(now) = glib::DateTime::now_local().ok() else {
+                return;
+            };
+            show_date(now.year(), now.month() as i32 - 1, now.day_of_month());
+        });
+        calendar.connect_day_selected({
+            let calendar = calendar.clone();
+            let heading = heading.clone();
+            let month_state = month_state.clone();
+            move |_| {
+                // Clicking an adjacent-month day moves the selection there.
+                let date = calendar.date();
+                month_state.set((date.year(), date.month() as i32 - 1));
+                heading.set_label(&format_date(&date));
+            }
+        });
+        clock_card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        let section = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let section_title = gtk::Label::new(Some("Notifications"));
+        section_title.add_css_class("uflinux-settings-heading");
+        section_title.set_hexpand(true);
+        section_title.set_xalign(0.0);
+        section.append(&section_title);
+        let notification_list = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let placeholder = gtk::Label::new(Some("No notifications"));
+        placeholder.add_css_class("dim-label");
+        notification_list.append(&placeholder);
+        // The dismiss callbacks need the centre, which needs the callback.
+        let center_ref: std::rc::Rc<std::cell::RefCell<Option<notifications::Center>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let center = notifications::Center::new({
+            let notification_list = notification_list.clone();
+            let placeholder = placeholder.clone();
+            let center_ref = center_ref.clone();
+            Box::new(
+                move |event: std::result::Result<Vec<notifications::Notification>, String>| {
+                    while let Some(child) = notification_list.first_child() {
+                        notification_list.remove(&child);
+                    }
+                    let unavailable = event.is_err();
+                    let items = event.unwrap_or_default();
+                    placeholder.set_text(if unavailable {
+                        "Notifications unavailable"
+                    } else {
+                        "No notifications"
+                    });
+                    placeholder.set_visible(items.is_empty());
+                    notification_list.append(&placeholder);
+                    let center = center_ref.borrow().clone();
+                    for item in items {
+                        let notification = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                        notification.add_css_class("uflinux-notification");
+                        let icon = gtk::Image::from_icon_name(if item.icon.is_empty() {
+                            "dialog-information-symbolic"
+                        } else {
+                            &item.icon
+                        });
+                        icon.set_pixel_size(24);
+                        notification.append(&icon);
+                        let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                        text.set_hexpand(true);
+                        let name = gtk::Label::new(Some(if item.title.is_empty() {
+                            &item.app
+                        } else {
+                            &item.title
+                        }));
+                        name.set_xalign(0.0);
+                        name.set_wrap(true);
+                        name.set_lines(2);
+                        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                        text.append(&name);
+                        if !item.body.is_empty() {
+                            let body = gtk::Label::new(Some(&item.body));
+                            body.add_css_class("dim-label");
+                            body.set_xalign(0.0);
+                            body.set_wrap(true);
+                            body.set_lines(2);
+                            body.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                            text.append(&body);
+                        }
+                        notification.append(&text);
+                        let dismiss = gtk::Button::from_icon_name("window-close-symbolic");
+                        dismiss.add_css_class("flat");
+                        dismiss.set_tooltip_text(Some("Dismiss"));
+                        if let Some(center) = center.clone() {
+                            let center = center.clone();
+                            let id = item.id;
+                            dismiss.connect_clicked(move |_| center.dismiss(id));
+                        }
+                        notification_list.append(&notification);
+                    }
+                },
+            )
+        });
+        center_ref.replace(Some(center.clone()));
+        let clear = gtk::Button::with_label("Clear all");
+        clear.add_css_class("flat");
+        let center_clear = center.clone();
+        clear.connect_clicked(move |_| center_clear.clear());
+        section.append(&clear);
+        clock_card.append(&section);
+        let notification_scroll = gtk::ScrolledWindow::builder()
+            .child(&notification_list)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .propagate_natural_width(true)
+            .propagate_natural_height(true)
+            .max_content_height(240)
+            .build();
+        clock_card.append(&notification_scroll);
+        clock.set_child(Some(&clock_card));
         button.set_popover(Some(&clock));
         let weak = self.app.clone();
         let clock_weak = clock.downgrade();
@@ -828,15 +1299,18 @@ impl Panel {
             .connector()
             .map(|s| s.to_string())
             .unwrap_or_default();
+        let center_show = center.clone();
         clock.connect_show(move |_| {
             if let Some(app) = weak.upgrade() {
                 if let Some(clock) = clock_weak.upgrade() {
                     app.show_clock(&clock, &output);
                 }
             }
+            center_show.start();
         });
         let weak = self.app.clone();
         clock.connect_hide(move |_| {
+            center.stop();
             if let Some(app) = weak.upgrade() {
                 app.clock_closed();
             }
@@ -857,6 +1331,7 @@ impl Panel {
             buttons: HashMap::new(),
             clock,
             clock_label,
+            clock_time,
         })
     }
 }

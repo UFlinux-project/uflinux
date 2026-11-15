@@ -40,7 +40,10 @@ The desktop includes Foot, Nemo, Mako, Transmission, Celluloid, GNOME Disks, Fil
 and ConnMan with iwd, PipeWire with
 pipewire-pulse, WirePlumber, and UFLinux Settings in Rust and plain GTK4. ConnMan's
 SNTP client handles time synchronization. The taskbar opens a combined quick-settings
-flyout. Print Screen opens a GNOME-style screenshot and recording tool that saves WebP
+flyout with Wi-Fi, Ethernet, Bluetooth and WireGuard VPN tabs, and separate Output and
+Input audio tabs. Mako shows GNOME-like notification cards above the clock at the bottom
+right, and the clock opens a calendar with a notification centre. Taskbar buttons can be
+pinned, reordered by dragging and previewed on hover. Print Screen opens a GNOME-style screenshot and recording tool that saves WebP
 images to your Pictures folder, copies them to the clipboard and records video through a
 patched GPU screen recorder; only the Settings tab for it is always available, the capture
 tool itself runs on demand. GTK3 and GTK4 apps use Alpine’s adw-gtk3 dark theme. Firefox and uBlock Origin are included on x86, x86_64, aarch64, armv7, ppc64le,

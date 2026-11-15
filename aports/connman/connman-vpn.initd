@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh disable=SC2034
+name="ConnMan VPN"
+description="ConnMan VPN daemon with the WireGuard plugin"
+
+command=/usr/sbin/connman-vpnd
+command_args="$command_args -n"
+command_background="yes"
+pidfile="/run/$RC_SVCNAME.pid"
+
+depend() {
+	need dbus
+	# connmand resolves the VPN service's routes and DNS through vpnd; the
+	# manager only advertises the VPN tab once this bus name has an owner.
+	before connman
+}

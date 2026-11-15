@@ -35,6 +35,11 @@ pub struct Background {
     application: gtk::Application,
     surfaces: RefCell<Vec<Rc<Surface>>>,
     appearance: RefCell<Appearance>,
+    /// Run after a surface is created or destroyed, so the shell re-reports
+    /// what is on screen. A monitor being re-created replaces its surface
+    /// without a new appearance ever arriving, and whatever reads the reported
+    /// state would otherwise keep the one taken while the surface was gone.
+    on_change: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl Background {
@@ -43,6 +48,7 @@ impl Background {
             application: application.clone(),
             surfaces: RefCell::new(Vec::new()),
             appearance: RefCell::new(Appearance::default()),
+            on_change: RefCell::new(None),
         });
         if let Some(display) = gtk::gdk::Display::default() {
             let monitors = display.monitors();
@@ -65,6 +71,11 @@ impl Background {
         for surface in self.surfaces.borrow().iter() {
             surface.retarget(&appearance);
         }
+    }
+
+    /// Installs the callback run once the surfaces no longer match the monitors.
+    pub fn set_on_change(&self, on_change: Rc<dyn Fn()>) {
+        *self.on_change.borrow_mut() = Some(on_change);
     }
 
     /// What is on screen, so a test can wait for a wallpaper instead of sleeping
@@ -94,10 +105,12 @@ impl Background {
         let current: Vec<_> = (0..monitors.n_items())
             .filter_map(|index| monitors.item(index)?.downcast::<gtk::gdk::Monitor>().ok())
             .collect();
+        let mut changed = false;
         self.surfaces.borrow_mut().retain(|surface| {
             let keep = current.contains(&surface.monitor);
             if !keep {
                 surface.window.destroy();
+                changed = true;
             }
             keep
         });
@@ -113,6 +126,15 @@ impl Background {
             if let Some(surface) = self.create(&monitor) {
                 surface.retarget(&self.appearance.borrow());
                 self.surfaces.borrow_mut().push(surface);
+                changed = true;
+            }
+        }
+        // A surface that replaced the one lost with its monitor is only visible
+        // to the rest of the shell once the reported state is taken again.
+        if changed {
+            let on_change = self.on_change.borrow().clone();
+            if let Some(on_change) = on_change {
+                on_change();
             }
         }
     }
@@ -168,8 +190,7 @@ impl Surface {
     /// dropping the decoded image so the next draw decodes the new one.
     fn retarget(&self, appearance: &Appearance) {
         let entry = resolve(appearance, &self.output);
-        let unchanged =
-            entry == *self.entry.borrow() && *self.color.borrow() == appearance.color;
+        let unchanged = entry == *self.entry.borrow() && *self.color.borrow() == appearance.color;
         *self.entry.borrow_mut() = entry;
         *self.color.borrow_mut() = appearance.color.clone();
         self.failed.borrow_mut().take();
@@ -327,7 +348,9 @@ fn parse_color(color: &str) -> (f64, f64, f64) {
         _ => return FALLBACK,
     };
     let channel = |range: std::ops::Range<usize>| {
-        u8::from_str_radix(&digits[range], 16).map(|value| f64::from(value) / 255.).ok()
+        u8::from_str_radix(&digits[range], 16)
+            .map(|value| f64::from(value) / 255.)
+            .ok()
     };
     match (channel(0..2), channel(2..4), channel(4..6)) {
         (Some(red), Some(green), Some(blue)) => (red, green, blue),

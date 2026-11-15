@@ -319,7 +319,8 @@ SIGNING_PUBLIC = SIGNING_PRIVATE + ".pub"
 TRUSTED_KEY = "etc/apk/keys/" + SIGNING_KEY + ".pub"
 BUILD_KEY = "build.ec.pub"
 PACKAGE_NAMES = {
-    "connman": {"connman", "connman-dbg", "connman-dev", "connman-doc", "connman-openrc"},
+    "connman": {"connman", "connman-dbg", "connman-dev", "connman-doc", "connman-openrc",
+                "connman-vpn", "connman-vpn-openrc"},
     "uflinux-regreet": {"uflinux-regreet"},
     "gpu-screen-recorder": {"gpu-screen-recorder", "gpu-screen-recorder-dbg",
                             "gpu-screen-recorder-dev", "gpu-screen-recorder-doc"},
@@ -1189,7 +1190,8 @@ class Builder:
             raise RuntimeError("Desktop must be a position-independent executable for the target architecture")
         settings_binaries = {}
         for relative in ("usr/bin/uflinux-installer", "usr/bin/uflinux-settings", "usr/bin/uflinux-settingsctl",
-                         "usr/libexec/uflinux-settingsd", "usr/libexec/uflinux-settings-system", "usr/sbin/connmand"):
+                         "usr/libexec/uflinux-settingsd", "usr/libexec/uflinux-settings-system", "usr/sbin/connmand",
+                         "usr/sbin/connman-vpnd"):
             path = self.root / relative
             data = path.read_bytes()[:64]
             order = "<" if data[5] == 1 else ">"
@@ -1222,6 +1224,7 @@ class Builder:
             # instead of letting the bus daemon start it.
             for name, command in (("system-bus", ["dbus-daemon", "--system", "--nofork", "--nopidfile"]),
                                   ("connman-fixture", ["python3", "/project/tests/mock-connman.py"]),
+                                  ("bluez-fixture", ["python3", "/project/tests/mock-bluez.py"]),
                                   ("login1-fixture", ["python3", "/project/tests/mock-login1.py"]),
                                   ("settings-system", ["/usr/libexec/uflinux-settings-system", "--resident"])):
                 log = (report / (name + ".log")).open("w")

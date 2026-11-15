@@ -6,6 +6,7 @@ mod catalog;
 mod clock_watch;
 #[path = "../../start-menu/src/menu.rs"]
 mod menu;
+mod notifications;
 mod panel;
 #[path = "../../shared/popup.rs"]
 mod popup;
@@ -56,7 +57,9 @@ fn forward() -> bool {
                     .as_variant()
             })
             .and_then(|state| state.str().map(str::to_string))
-            .unwrap_or_else(|| "{\"ready\":false,\"popup\":null,\"output\":null,\"background\":null}".to_string());
+            .unwrap_or_else(|| {
+                "{\"ready\":false,\"popup\":null,\"output\":null,\"background\":null}".to_string()
+            });
         println!("{status}");
         return true;
     }

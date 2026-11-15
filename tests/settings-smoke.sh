@@ -39,6 +39,7 @@ assert s['audio']['default_output'] and s['displays']['outputs']
 PY
 if [ "${UFLINUX_TEST_CONNMAN_FIXTURE:-0}" = 1 ]; then
 	python3 "$(dirname "$0")/settings-network-protocol.py"
+	python3 "$(dirname "$0")/settings-vpn-bluetooth-protocol.py"
 	# Authentication opens the quick panel through the normal activation path.
 	uflinux-desktop --panel network --output HEADLESS-1
 	uflinux-desktop --hide

@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-settings
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="UFLinux Settings, quick controls and resident Start menu"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
@@ -60,6 +60,7 @@ package() {
 	install -Dm644 data/org.uflinux.settings.policy "$pkgdir/usr/share/polkit-1/actions/org.uflinux.settings.policy"
 	install -Dm644 data/50-uflinux-settings.rules "$pkgdir/usr/share/polkit-1/rules.d/50-uflinux-settings.rules"
 	install -Dm644 data/uflinux-ddc.conf "$pkgdir/usr/lib/modules-load.d/uflinux-ddc.conf"
+	install -Dm644 data/uflinux-wireguard.conf "$pkgdir/usr/lib/modules-load.d/uflinux-wireguard.conf"
 	install -Dm755 data/uflinux-routes.initd "$pkgdir/etc/init.d/uflinux-routes"
 	install -Dm755 data/uflinux-acpid.initd "$pkgdir/etc/init.d/uflinux-acpid"
 	install -Dm755 data/uflinux-power-button "$pkgdir/etc/uflinux/acpi/power"

@@ -3,26 +3,37 @@ use std::cell::{Cell, RefCell};
 
 /// Compact controls for the status menu. Full Settings retains its detailed selectors.
 pub fn quick(app: &Rc<App>, parent: &gtk::Box) {
-    let unavailable = description("");
-    parent.append(&unavailable);
-    let target = unavailable.downgrade();
-    app.bind_for(Surface::Quick, &unavailable, move |state| {
+    unavailable(app, parent, Surface::Quick);
+    let stack = gtk::Stack::builder()
+        .hhomogeneous(true)
+        .vhomogeneous(true)
+        .build();
+    let switcher = gtk::StackSwitcher::new();
+    switcher.set_stack(Some(&stack));
+    let frame = column();
+    frame.append(&switcher);
+    frame.append(&stack);
+    parent.append(&frame);
+    let output = column();
+    quick_device(app, &output, false);
+    applications(app, &output, Surface::Quick, false);
+    stack.add_titled(&output, Some("output"), "Output");
+    let input = column();
+    quick_device(app, &input, true);
+    applications(app, &input, Surface::Quick, true);
+    stack.add_titled(&input, Some("input"), "Input");
+}
+
+fn unavailable(app: &Rc<App>, parent: &gtk::Box, surface: Surface) {
+    let label = description("");
+    parent.append(&label);
+    let target = label.downgrade();
+    app.bind_for(surface, &label, move |state| {
         if let Some(label) = target.upgrade() {
             label.set_visible(!state.audio.available);
             label.set_text("Audio is unavailable or still starting.");
         }
     });
-    quick_device(app, parent, false);
-    quick_device(app, parent, true);
-    let streams = column();
-    parent.append(&streams);
-    let target = streams.downgrade();
-    app.bind_for(Surface::Quick, &streams, move |state| {
-        if let Some(streams) = target.upgrade() {
-            streams.set_visible(!state.audio.streams.is_empty());
-        }
-    });
-    applications(app, &streams, Surface::Quick);
 }
 
 fn quick_device(app: &Rc<App>, parent: &gtk::Box, input: bool) {
@@ -220,9 +231,109 @@ pub fn page(app: &Rc<App>, parent: &gtk::Box) {
     parent.append(&description(
         "PipeWire audio with WirePlumber session management.",
     ));
-    basic(app, parent, Surface::Full);
-    devices(app, parent, Surface::Full, false);
-    devices(app, parent, Surface::Full, true);
+    unavailable(app, parent, Surface::Full);
+    // One size-homogeneous stack for both directions: switching tabs never
+    // resizes the page, and only one device list is realized at a time.
+    let stack = gtk::Stack::builder()
+        .hhomogeneous(true)
+        .vhomogeneous(true)
+        .build();
+    let switcher = gtk::StackSwitcher::new();
+    switcher.set_stack(Some(&stack));
+    let frame = column();
+    frame.append(&switcher);
+    frame.append(&stack);
+    parent.append(&frame);
+    let output = column();
+    section(&output, "Default output");
+    selector(app, &output, Surface::Full, false);
+    slider(
+        app,
+        Surface::Full,
+        &output,
+        "Output volume",
+        |s| {
+            s.audio
+                .outputs
+                .iter()
+                .find(|d| d.name == s.audio.default_output)
+                .map(|d| d.volume)
+                .unwrap_or(0.)
+        },
+        |percent| Action::SetVolume {
+            input: false,
+            device: String::new(),
+            percent,
+        },
+    );
+    toggle(
+        app,
+        Surface::Full,
+        &output,
+        "Mute output",
+        |s| {
+            s.audio
+                .outputs
+                .iter()
+                .find(|d| d.name == s.audio.default_output)
+                .is_some_and(|d| d.muted)
+        },
+        |muted| Action::SetMute {
+            input: false,
+            device: String::new(),
+            muted,
+        },
+    );
+    devices(app, &output, Surface::Full, false);
+    profiles(app, &output);
+    applications(app, &output, Surface::Full, false);
+    stack.add_titled(&output, Some("output"), "Output");
+    let input = column();
+    section(&input, "Default input");
+    selector(app, &input, Surface::Full, true);
+    slider(
+        app,
+        Surface::Full,
+        &input,
+        "Input volume",
+        |s| {
+            s.audio
+                .inputs
+                .iter()
+                .find(|d| d.name == s.audio.default_input)
+                .map(|d| d.volume)
+                .unwrap_or(0.)
+        },
+        |percent| Action::SetVolume {
+            input: true,
+            device: String::new(),
+            percent,
+        },
+    );
+    toggle(
+        app,
+        Surface::Full,
+        &input,
+        "Mute microphone",
+        |s| {
+            s.audio
+                .inputs
+                .iter()
+                .find(|d| d.name == s.audio.default_input)
+                .is_some_and(|d| d.muted)
+        },
+        |muted| Action::SetMute {
+            input: true,
+            device: String::new(),
+            muted,
+        },
+    );
+    devices(app, &input, Surface::Full, true);
+    applications(app, &input, Surface::Full, true);
+    stack.add_titled(&input, Some("input"), "Input");
+}
+
+fn profiles(app: &Rc<App>, parent: &gtk::Box) {
     section(parent, "Device profiles");
     let group = column();
     parent.append(&group);
@@ -287,10 +398,10 @@ pub fn page(app: &Rc<App>, parent: &gtk::Box) {
             group.append(&row(&card.description, &dropdown));
         }
     });
-    applications(app, parent, Surface::Full);
 }
 
-pub fn applications(app: &Rc<App>, parent: &gtk::Box, surface: Surface) {
+/// Per-application volume sliders, restricted to the tab's direction.
+fn applications(app: &Rc<App>, parent: &gtk::Box, surface: Surface, direction: bool) {
     section(parent, "Applications");
     let group = column();
     parent.append(&group);
@@ -303,6 +414,7 @@ pub fn applications(app: &Rc<App>, parent: &gtk::Box, surface: Surface) {
             .audio
             .streams
             .iter()
+            .filter(|v| v.input == direction)
             .map(|v| (v.index, v.input, v.name.clone()))
             .collect::<Vec<_>>();
         if *last.borrow() == signature {
@@ -316,6 +428,7 @@ pub fn applications(app: &Rc<App>, parent: &gtk::Box, surface: Surface) {
             .audio
             .streams
             .iter()
+            .filter(|stream| stream.input == direction)
             .map(|stream| (stream.index, stream.input, stream.name.clone()))
             .collect();
         let mut rows = rows.borrow_mut();
@@ -328,7 +441,7 @@ pub fn applications(app: &Rc<App>, parent: &gtk::Box, surface: Surface) {
             }
         });
         let mut previous: Option<gtk::Box> = None;
-        for stream in &s.audio.streams {
+        for stream in s.audio.streams.iter().filter(|v| v.input == direction) {
             let id = stream.index;
             let input = stream.input;
             let name = stream.name.clone();
@@ -416,97 +529,6 @@ pub fn applications(app: &Rc<App>, parent: &gtk::Box, surface: Surface) {
     });
 }
 
-pub fn basic(app: &Rc<App>, parent: &gtk::Box, surface: Surface) {
-    section(parent, "Sound");
-    let unavailable = description("");
-    parent.append(&unavailable);
-    let target = unavailable.downgrade();
-    app.bind_for(surface, &unavailable, move |s| {
-        if let Some(label) = target.upgrade() {
-            label.set_text(if s.audio.available {
-                ""
-            } else {
-                "Audio is unavailable or still starting."
-            });
-        }
-    });
-    selector(app, parent, surface, false);
-    selector(app, parent, surface, true);
-    slider(
-        app,
-        surface,
-        parent,
-        "Output volume",
-        |s| {
-            s.audio
-                .outputs
-                .iter()
-                .find(|d| d.name == s.audio.default_output)
-                .map(|d| d.volume)
-                .unwrap_or(0.)
-        },
-        |percent| Action::SetVolume {
-            input: false,
-            device: String::new(),
-            percent,
-        },
-    );
-    toggle(
-        app,
-        surface,
-        parent,
-        "Mute output",
-        |s| {
-            s.audio
-                .outputs
-                .iter()
-                .find(|d| d.name == s.audio.default_output)
-                .is_some_and(|d| d.muted)
-        },
-        |muted| Action::SetMute {
-            input: false,
-            device: String::new(),
-            muted,
-        },
-    );
-    slider(
-        app,
-        surface,
-        parent,
-        "Input volume",
-        |s| {
-            s.audio
-                .inputs
-                .iter()
-                .find(|d| d.name == s.audio.default_input)
-                .map(|d| d.volume)
-                .unwrap_or(0.)
-        },
-        |percent| Action::SetVolume {
-            input: true,
-            device: String::new(),
-            percent,
-        },
-    );
-    toggle(
-        app,
-        surface,
-        parent,
-        "Mute microphone",
-        |s| {
-            s.audio
-                .inputs
-                .iter()
-                .find(|d| d.name == s.audio.default_input)
-                .is_some_and(|d| d.muted)
-        },
-        |muted| Action::SetMute {
-            input: true,
-            device: String::new(),
-            muted,
-        },
-    );
-}
 fn selector(app: &Rc<App>, parent: &gtk::Box, surface: Surface, input: bool) {
     let model = gtk::StringList::new(&[]);
     let dropdown = gtk::DropDown::new(Some(model.clone()), gtk::Expression::NONE);

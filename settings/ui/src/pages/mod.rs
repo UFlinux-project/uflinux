@@ -111,33 +111,7 @@ pub fn quick(app: &Rc<App>, parent: &gtk::Box, panel: &str) {
                 |s| !s.network.offline,
                 |enabled| Action::Networking { enabled },
             );
-            let wifi = column();
-            parent.append(&wifi);
-            let target = wifi.downgrade();
-            app.bind_for(Surface::Quick, &wifi, move |state| {
-                if let Some(wifi) = target.upgrade() {
-                    wifi.set_visible(
-                        state.network.technologies.iter().any(|t| t.kind == "wifi")
-                            || state.network.wifi_hardware_blocked
-                            || state.network.wifi_software_blocked,
-                    );
-                }
-            });
-            toggle(
-                app,
-                Surface::Quick,
-                &wifi,
-                "Wi-Fi",
-                |s| {
-                    s.network
-                        .technologies
-                        .iter()
-                        .any(|t| t.kind == "wifi" && t.powered)
-                },
-                |enabled| Action::Wifi { enabled },
-            );
-            wifi.append(&button(app, "Scan", || Action::Scan));
-            network::list(app, parent, Surface::Quick, true);
+            network::tabs(app, parent, Surface::Quick, true);
             let auth = column();
             parent.append(&auth);
             app.quick_auth.replace(Some(auth));

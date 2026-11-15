@@ -20,6 +20,52 @@ pub fn service(path: &str) -> Result<()> {
     }
     Ok(())
 }
+/// BlueZ object paths are attacker-influenced only through the bus; restrict
+/// them to the adapter/device subtree so an action cannot address, say, an
+/// org.freedesktop.DBus method on another object.
+pub fn bluetooth_device(path: &str) -> Result<()> {
+    let rest = path
+        .strip_prefix("/org/bluez/hci")
+        .ok_or("Invalid Bluetooth device")?;
+    let adapter = match rest.split_once('/') {
+        Some((adapter, _)) => adapter,
+        None => rest,
+    };
+    if adapter.is_empty() || !adapter.bytes().all(|c| c.is_ascii_digit()) {
+        return Err("Invalid Bluetooth device".into());
+    }
+    if let Some((_, device)) = rest.split_once('/') {
+        let mac = device
+            .strip_prefix("dev_")
+            .ok_or("Invalid Bluetooth device")?;
+        if mac.len() != 17
+            || !mac.bytes().enumerate().all(|(i, c)| {
+                if i % 3 == 2 {
+                    c == b'_'
+                } else {
+                    c.is_ascii_hexdigit()
+                }
+            })
+        {
+            return Err("Invalid Bluetooth device".into());
+        }
+    }
+    Ok(())
+}
+/// ConnMan VPN connection paths: /net/connman/vpn/connection/<identifier>
+/// where the identifier is ConnMan-sanitized (alnum and underscore only).
+pub fn vpn_connection(path: &str) -> Result<()> {
+    let id = path
+        .strip_prefix("/net/connman/vpn/connection/")
+        .ok_or("Invalid VPN connection")?;
+    if id.is_empty()
+        || id.len() > 256
+        || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    {
+        return Err("Invalid VPN connection".into());
+    }
+    Ok(())
+}
 pub fn hostname(s: &str) -> bool {
     s.len() <= 253
         && !s.is_empty()

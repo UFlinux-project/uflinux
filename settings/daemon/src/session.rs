@@ -1,4 +1,4 @@
-use crate::{audio, capture, devices, display, network};
+use crate::{audio, bluetooth, capture, devices, display, network, vpn};
 use gio::prelude::*;
 use glib::variant::ToVariant;
 use settings_core::{bus, *};
@@ -30,6 +30,8 @@ struct App {
     system: gio::DBusConnection,
     view: RefCell<Snapshot>,
     network: RefCell<Option<Rc<network::Client>>>,
+    bluetooth: RefCell<Option<Rc<bluetooth::Client>>>,
+    vpn: RefCell<Option<Rc<vpn::Client>>>,
     audio: RefCell<Option<Rc<audio::Client>>>,
     audio_retry: Cell<bool>,
     display: RefCell<Option<display::Client>>,
@@ -53,7 +55,7 @@ pub fn run() -> Result<()> {
         let screen_capture:ScreenCapture=files::read_json(&files::config_dir().join("screen-capture.json"));
         let screen_capture=capture::validate(&screen_capture).map(|()|screen_capture).unwrap_or_default();
         let app=Rc::new(App{bus:connection.clone(),system,view:RefCell::new(Snapshot{appearance,screen_capture,datetime:clock::status(),power:power::status(),about:information(),..Snapshot::default()}),
-            network:RefCell::new(None),audio:RefCell::new(None),audio_retry:Cell::new(false),display:RefCell::new(None),pending:RefCell::new(None),applying:Cell::new(false),publishing:Cell::new(false),restored:Cell::new(false),brightness_pending:Cell::new(false),ddc_pending:Cell::new(false),ddc_busy:Cell::new(false),ddc_dirty:Cell::new(false)});
+            network:RefCell::new(None),bluetooth:RefCell::new(None),vpn:RefCell::new(None),audio:RefCell::new(None),audio_retry:Cell::new(false),display:RefCell::new(None),pending:RefCell::new(None),applying:Cell::new(false),publishing:Cell::new(false),restored:Cell::new(false),brightness_pending:Cell::new(false),ddc_pending:Cell::new(false),ddc_busy:Cell::new(false),ddc_dirty:Cell::new(false)});
         app.view.borrow_mut().displays.renderer=std::env::var("UFLINUX_RENDERER").unwrap_or_else(|_|"User-selected / compositor default".into());
         app.view.borrow_mut().displays.hdr_requested=fs::read_to_string(hdr_path()).ok().and_then(|s|files::hdr_requested(&s)).unwrap_or(false);
         app.view.borrow_mut().displays.hdr_status="Labwc applies HDR automatically where supported. Per-monitor activation is not reported by this protocol; mirroring is unavailable.".into();
@@ -89,6 +91,10 @@ pub fn run() -> Result<()> {
         let weak=Rc::downgrade(&app);
         let network=network::Client::new(Rc::new(move|network|if let Some(app)=weak.upgrade(){app.view.borrow_mut().network=network;app.publish();})).await?;
         app.network.replace(Some(network));app.start_audio();
+        let weak=Rc::downgrade(&app);
+        if let Ok(client)=bluetooth::Client::new(Rc::new(move|bluetooth|if let Some(app)=weak.upgrade(){app.view.borrow_mut().bluetooth=bluetooth;app.publish();})).await {app.bluetooth.replace(Some(client));}
+        let weak=Rc::downgrade(&app);
+        if let Ok(client)=vpn::Client::new(Rc::new(move|vpn|if let Some(app)=weak.upgrade(){app.view.borrow_mut().vpn=vpn;app.publish();})).await {app.vpn.replace(Some(client));}
         let (send,receive)=async_channel::bounded(16);
         match display::Client::start(send){Ok(client)=>{app.display.replace(Some(client));},Err(error)=>app.view.borrow_mut().error=Some(error)}
         let weak=Rc::downgrade(&app);
@@ -305,6 +311,12 @@ impl App {
                 if let Some(network) = self.network.borrow().clone() {
                     let _ = network.reload().await;
                 }
+                if let Some(bluetooth) = self.bluetooth.borrow().clone() {
+                    let _ = bluetooth.reload().await;
+                }
+                if let Some(vpn) = self.vpn.borrow().clone() {
+                    let _ = vpn.reload().await;
+                }
                 self.view.borrow_mut().datetime = clock::status();
                 self.refresh_power();
                 self.queue_brightness(true);
@@ -383,6 +395,27 @@ impl App {
                 }
                 let found=found.ok_or("Hidden network not found. Verify its name, signal and radio state, then scan again.")?;
                 network.execute(&Action::Connect { service: found }).await?;
+            }
+            Action::BluetoothPower { .. }
+            | Action::BluetoothScan
+            | Action::BluetoothPair { .. }
+            | Action::BluetoothUnpair { .. }
+            | Action::BluetoothTrust { .. }
+            | Action::BluetoothConnect { .. }
+            | Action::BluetoothDisconnect { .. } => {
+                let bluetooth = self
+                    .bluetooth
+                    .borrow()
+                    .clone()
+                    .ok_or("Bluetooth is unavailable")?;
+                bluetooth.execute(&action).await?;
+            }
+            Action::VpnConnect { .. }
+            | Action::VpnDisconnect { .. }
+            | Action::VpnImport { .. }
+            | Action::VpnRemove { .. } => {
+                let vpn = self.vpn.borrow().clone().ok_or("VPN is unavailable")?;
+                vpn.execute(&action).await?;
             }
             Action::SetVolume { .. }
             | Action::SetMute { .. }

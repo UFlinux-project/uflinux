@@ -106,6 +106,16 @@ pub fn run() {
         // appearance the service publishes has to reach these surfaces and the
         // surfaces have to exist before the first frame is asked for.
         let background = Background::new(application);
+        // Monitor churn rebuilds the surfaces without a new appearance ever
+        // arriving, so every change to them is a reason to report the state
+        // again; otherwise what `--status` describes stays the one taken while
+        // the output was gone.
+        let weak = Rc::downgrade(&app);
+        background.set_on_change(Rc::new(move || {
+            if let Some(app) = weak.upgrade() {
+                app.report_status();
+            }
+        }));
         app.background.replace(Some(background));
         let weak = Rc::downgrade(&app);
         app.quick.background_request.replace(Some(Rc::new(move || {

@@ -36,9 +36,15 @@ required.update({"autoconf", "automake", "dbus-dev", "glib-dev", "libmnl-dev", "
 # repositories; they are compiled by the build jobs before the image is assembled.
 local = set()
 for recipe in (root / "aports").glob("*/APKBUILD"):
-    name = re.search(r'^pkgname="?([^"\s]+)"?$', recipe.read_text(), re.M)
+    text = recipe.read_text()
+    name = re.search(r'^pkgname="?([^"\s]+)"?$', text, re.M)
     if name:
         local.add(name.group(1))
+    # Subpackages (e.g. connman-vpn) are published by the same job as their
+    # pkgname, so a dependency on one is satisfied locally too.
+    for block in re.findall(r'^subpackages="([^"]*)"', text, re.M):
+        for item in shlex.split(block):
+            local.add(item.split(":")[0].replace("$pkgname", name.group(1) if name else "$pkgname"))
 required -= local
 
 

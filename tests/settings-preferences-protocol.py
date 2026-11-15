@@ -22,12 +22,14 @@ def showing(expected):
     entry=on_output() or {}
     return entry.get('file')==expected['wallpapers'][0]['file'] and entry.get('fit')==expected['wallpapers'][0]['fit']
 def wait(predicate):
+    last=None
     for _ in range(80):
         try:
             if predicate():return
+            last=drawn()
         except (GLib.Error,subprocess.SubprocessError,OSError):pass
         time.sleep(.1)
-    raise AssertionError('Preferences or drawn wallpaper did not converge')
+    raise AssertionError('Preferences or drawn wallpaper did not converge: '+json.dumps(last))
 previous=call('GetState')['appearance']
 wallpaper={'wallpapers':[{'output':'*','file':'/usr/share/backgrounds/uflinux/Dark_Ivy.jpg','fit':'fit'}],'color':'#153658'}
 call('Execute',{'action':'set-appearance','appearance':wallpaper})

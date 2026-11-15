@@ -4,6 +4,10 @@ use std::collections::BTreeMap;
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub network: Network,
+    #[serde(default)]
+    pub bluetooth: Bluetooth,
+    #[serde(default)]
+    pub vpn: Vpn,
     pub audio: Audio,
     pub displays: Displays,
     pub appearance: Appearance,
@@ -57,6 +61,44 @@ pub struct Service {
     pub proxy: Proxy,
     pub config: ConnectionConfig,
 }
+/// BlueZ view. `available` is false when org.bluez has no owner, so the UI
+/// hides the tab entirely instead of showing an empty page.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Bluetooth {
+    pub available: bool,
+    pub powered: bool,
+    pub discovering: bool,
+    pub devices: Vec<BluetoothDevice>,
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct BluetoothDevice {
+    pub path: String,
+    pub name: String,
+    pub alias: String,
+    pub paired: bool,
+    pub trusted: bool,
+    pub connected: bool,
+    pub rssi: Option<i16>,
+    pub battery: Option<u8>,
+}
+
+/// ConnMan VPN (net.connman.vpn) view. `available` is false while connman-vpnd
+/// is not running, so the UI hides the VPN tab.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Vpn {
+    pub available: bool,
+    pub tunnels: Vec<VpnTunnel>,
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct VpnTunnel {
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    pub host: String,
+    pub state: String,
+    pub interface: String,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AuthRequest {
     pub id: u64,
@@ -602,6 +644,42 @@ pub enum Action {
     },
     AuthCancel {
         id: u64,
+    },
+    BluetoothPower {
+        enabled: bool,
+    },
+    BluetoothScan,
+    BluetoothPair {
+        device: String,
+    },
+    BluetoothUnpair {
+        device: String,
+    },
+    BluetoothTrust {
+        device: String,
+        enabled: bool,
+    },
+    BluetoothConnect {
+        device: String,
+    },
+    BluetoothDisconnect {
+        device: String,
+    },
+    VpnConnect {
+        tunnel: String,
+    },
+    VpnDisconnect {
+        tunnel: String,
+    },
+    /// Creates a ConnMan WireGuard provider: keys are the WireGuard.* session
+    /// properties (already parsed from a .conf by the UI); vpnd persists them.
+    VpnImport {
+        name: String,
+        host: String,
+        keys: BTreeMap<String, String>,
+    },
+    VpnRemove {
+        tunnel: String,
     },
     SetVolume {
         input: bool,

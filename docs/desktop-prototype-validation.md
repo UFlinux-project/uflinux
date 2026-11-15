@@ -31,9 +31,25 @@ For a short painted-frame and accessibility diagnostic, also set
 startup and accessibility observation overhead, so its times are upper bounds
 and do not replace the panel-input latency gate.
 
+The quick-settings tabs and the notification surfaces are covered by
+`tests/settings-ui-protocol.py`, which asserts the Wi-Fi, Ethernet, Bluetooth
+and VPN tab labels, the Output and Input audio tabs, and identical window
+extents across tab switches. `tests/settings-vpn-bluetooth-protocol.py` drives
+the daemon against the BlueZ and ConnMan VPN fixtures in `tests/`, covering
+adapter power, scanning, pairing, trust, connect and disconnect plus a
+WireGuard import, connect and remove; it also checks that an imported private
+key is never echoed back in a snapshot. It runs from `tests/settings-smoke.sh`
+when `UFLINUX_TEST_CONNMAN_FIXTURE=1` is set, which is how the builder runs it.
+Set `UFLINUX_TEST_TASKBAR=1` to add a taskbar-favourites phase: it seeds
+`taskbar.json`, restarts the daemon and requires the file to survive unchanged,
+then corrupts the file and requires the daemon to start anyway with no popup.
+The packaged session also ships a Mako style with bottom-right cards and a
+gschema `button-layout` override so GNOME client-side-decoration apps show the
+full control set; both are configuration, not prototype behaviour, and are not
+exercised by the headless harness.
+
 `tests/desktop-memory-bench.py` collects a single native private-session memory
-and idle-CPU sample. Run it separately for each implementation, with release
-binaries and no other benchmark sessions running. For example:
+and idle-CPU sample. Run it separately for each implementation, with releasebinaries and no other benchmark sessions running. For example:
 
 ```sh
 python3 tests/desktop-memory-bench.py --mode baseline \

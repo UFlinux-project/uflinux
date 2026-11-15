@@ -3,6 +3,11 @@ use crate::{Snapshot, power};
 
 pub fn status(s: &Snapshot) -> [(String, String); 3] {
     let network = &s.network;
+    let vpn_up = s
+        .vpn
+        .tunnels
+        .iter()
+        .any(|t| ["ready", "online"].contains(&t.state.as_str()));
     let active = network
         .services
         .iter()
@@ -40,7 +45,7 @@ pub fn status(s: &Snapshot) -> [(String, String); 3] {
         (
             icon,
             format!(
-                "{}{}",
+                "{}{}{}",
                 if service.name.is_empty() {
                     &service.kind
                 } else {
@@ -50,7 +55,8 @@ pub fn status(s: &Snapshot) -> [(String, String); 3] {
                     " · limited connectivity"
                 } else {
                     ""
-                }
+                },
+                if vpn_up { " · VPN" } else { "" }
             ),
         )
     } else if let Some(service) = connecting {
@@ -147,7 +153,7 @@ pub fn status(s: &Snapshot) -> [(String, String); 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AudioDevice, Battery, Service};
+    use crate::{AudioDevice, Battery, Service, VpnTunnel};
     #[test]
     fn panel_tracks_connections_audio_and_battery() {
         let mut s = Snapshot::default();
@@ -169,6 +175,12 @@ mod tests {
         });
         assert_eq!(status(&s)[0].0, "network-wired-symbolic");
         assert!(status(&s)[0].1.contains("limited"));
+        s.vpn.tunnels.push(VpnTunnel {
+            state: "ready".into(),
+            ..Default::default()
+        });
+        assert!(status(&s)[0].1.contains("VPN"));
+        s.vpn.tunnels.clear();
         s.audio.default_output = "speakers".into();
         s.audio.outputs.push(AudioDevice {
             name: "speakers".into(),

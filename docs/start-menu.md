@@ -53,10 +53,26 @@ the validation record do not establish this version's memory or latency.
 The taskbar has separate Network, Sound and Power buttons with Papirus symbolic
 icons. They track connection, output volume and battery state. Sound includes
 input/output and application controls; Power includes battery information,
-brightness and power profiles. The corresponding Settings page provides advanced
+brightness and power profiles. Network and Sound are tabbed — Wi-Fi, Ethernet,
+Bluetooth and VPN, or Output and Input — inside one fixed frame, so switching
+tabs does not resize the flyout. The corresponding Settings page provides advanced
 controls. Open a panel directly with `uflinux-desktop --panel network|sound|power
 --output NAME`. The settings service reads system batteries and updates the panel
 after device changes. Desktop systems use a bolt icon.
+
+Beside the Start button, application buttons come from the pinned favourites in
+`$XDG_CONFIG_HOME/uflinux/taskbar.json` plus the running-window groups. Right
+click opens a menu listing the group's windows with a close button each, and,
+for applications, entries to launch another window, pin or unpin the button and
+close all windows. Resting the pointer on a button for a moment opens the same
+menu as a window preview, which costs one timer and one small box instead of a
+screenshot. Pinned buttons can be rearranged by dragging one onto another; the
+new order is written back to the same file, and an unreadable file falls back
+to the defaults rather than blocking the panel. The clock opens a popover with a
+month-navigable calendar and a notification centre that reads Mako's list while
+the popover is open and dismisses notifications individually or together. Mako
+itself is styled as dark rounded cards grouped by summary, anchored bottom-right
+above the panel.
 
 StatusNotifier icons sit behind a single chevron at the right end of the taskbar,
 like the hidden-icons flyout on Windows, so background apps never push the clock

@@ -30,10 +30,27 @@ XML = """<node>
  <method name="GetProperties"><arg type="a{sv}" direction="out"/></method>
  <method name="SetProperty"><arg type="s" direction="in"/><arg type="v" direction="in"/></method>
  <signal name="PropertyChanged"><arg type="s"/><arg type="v"/></signal>
+</interface>
+<interface name="net.connman.vpn.Manager">
+ <method name="GetConnections"><arg type="a(oa{sv})" direction="out"/></method>
+ <method name="Create"><arg type="a{sv}" direction="in"/><arg type="o" direction="out"/></method>
+ <method name="Remove"><arg type="o" direction="in"/></method>
+ <signal name="ConnectionAdded"><arg type="o"/><arg type="a{sv}"/></signal>
+ <signal name="ConnectionRemoved"><arg type="o"/></signal>
+</interface>
+<interface name="net.connman.vpn.Connection">
+ <method name="GetProperties"><arg type="a{sv}" direction="out"/></method>
+ <method name="SetProperty"><arg type="s" direction="in"/><arg type="v" direction="in"/></method>
+ <method name="Connect"/><method name="Disconnect"/>
+ <signal name="PropertyChanged"><arg type="s"/><arg type="v"/></signal>
 </interface></node>"""
 bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
 bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName",
               GLib.Variant("(su)", (NAME, 4)), None, 0, 5000, None)
+# connman-vpnd owns a separate bus name; the fixture serves both so a single
+# process provides the whole ConnMan view.
+bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName",
+              GLib.Variant("(su)", ("net.connman.vpn", 4)), None, 0, 5000, None)
 agent = None
 powered = True
 offline = False
@@ -45,6 +62,69 @@ configuration = {}
 time_updates = "auto"
 timezone_updates = "manual"
 timeservers = ["clock-fixture.invalid"]
+# connman-vpnd state: one WireGuard provider created through Manager.Create.
+vpn_connections = {}
+vpn_next = [0]
+
+
+def vpn_properties(path):
+    return vpn_connections[path]
+
+
+def vpn_method(connection, sender, path, interface, name, args, invocation):
+    if name == "GetConnections":
+        invocation.return_value(GLib.Variant("(a(oa{sv}))", (list(vpn_connections.items()),)))
+        return
+    if name == "Create":
+        fields = args.unpack()[0]
+        if fields.get("Type") != "wireguard":
+            invocation.return_dbus_error("net.connman.vpn.Error.InvalidArguments",
+                                         "Fixture only serves WireGuard providers")
+            return
+        for required in ("Name", "Host", "WireGuard.PrivateKey", "WireGuard.PublicKey",
+                         "WireGuard.AllowedIPs", "WireGuard.Address"):
+            if not fields.get(required):
+                invocation.return_dbus_error("net.connman.vpn.Error.InvalidArguments",
+                                             f"Missing {required}")
+                return
+        vpn_next[0] += 1
+        path = f"/net/connman/vpn/connection/fixture{vpn_next[0]}"
+        props = {key: GLib.Variant("s", str(value)) for key, value in fields.items()}
+        props["State"] = GLib.Variant("s", "idle")
+        props["Index"] = GLib.Variant("s", "")
+        vpn_connections[path] = props
+        bus.register_object(path, VPN_NODE.lookup_interface("net.connman.vpn.Connection"),
+                            vpn_method, None, None)
+        invocation.return_value(GLib.Variant("(o)", (path,)))
+        bus.emit_signal(None, "/", "net.connman.vpn.Manager", "ConnectionAdded",
+                        GLib.Variant("(oa{sv})", (path, props)))
+        return
+    if name == "Remove":
+        target = args.unpack()[0]
+        if target not in vpn_connections:
+            invocation.return_dbus_error("net.connman.vpn.Error.NoSuchConnection", "Unknown fixture tunnel")
+            return
+        del vpn_connections[target]
+        invocation.return_value(None)
+        bus.emit_signal(None, "/", "net.connman.vpn.Manager", "ConnectionRemoved",
+                        GLib.Variant("(o)", (target,)))
+        return
+    if name in {"Connect", "Disconnect"}:
+        if path not in vpn_connections:
+            invocation.return_dbus_error("net.connman.vpn.Error.NoSuchConnection", "Unknown fixture tunnel")
+            return
+        vpn_connections[path]["State"] = GLib.Variant("s", "ready" if name == "Connect" else "idle")
+        invocation.return_value(None)
+        bus.emit_signal(None, path, "net.connman.vpn.Connection", "PropertyChanged",
+                        GLib.Variant("(sv)", ("State", GLib.Variant("s", vpn_connections[path]["State"].unpack()))))
+        return
+    if name == "GetProperties":
+        if path not in vpn_connections:
+            invocation.return_dbus_error("net.connman.vpn.Error.NoSuchConnection", "Unknown fixture tunnel")
+            return
+        invocation.return_value(GLib.Variant("(a{sv})", (vpn_properties(path),)))
+        return
+    invocation.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", "Unknown fixture operation")
 
 
 def clock_properties():
@@ -159,9 +239,12 @@ def method(connection, sender, path, interface, name, args, invocation):
 
 
 node = Gio.DBusNodeInfo.new_for_xml(XML)
+VPN_NODE = node
 for path, interface in [("/", "net.connman.Manager"), ("/", "net.connman.Clock"),
+                        ("/", "net.connman.vpn.Manager"),
                         (TECH, "net.connman.Technology"), (SERVICE, "net.connman.Service")]:
-    bus.register_object(path, node.lookup_interface(interface), method, None, None)
+    handler = vpn_method if interface.startswith("net.connman.vpn.") else method
+    bus.register_object(path, node.lookup_interface(interface), handler, None, None)
 loop = GLib.MainLoop()
 GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: (loop.quit(), False)[1])
 loop.run()

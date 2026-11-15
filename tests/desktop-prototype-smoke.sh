@@ -101,6 +101,35 @@ if [ "${UFLINUX_TEST_FRAME_PROBE:-0}" = 1 ]; then
         --output "${UFLINUX_FRAME_OUTPUT:-$XDG_RUNTIME_DIR/frames.json}" --rounds "${UFLINUX_FRAME_ROUNDS:-2}" \
         --input "${UFLINUX_FRAME_INPUT:-cli}"
 fi
+if [ "${UFLINUX_TEST_TASKBAR:-0}" = 1 ]; then
+    # Favorites persist in taskbar.json: a seeded file survives a restart
+    # untouched, and a damaged file falls back to the defaults without
+    # taking the panel down.
+    "$UFLINUX_DESKTOP_BIN" --quit
+    wait "$desktop"
+    export XDG_CONFIG_HOME="$XDG_RUNTIME_DIR/config"
+    mkdir -p "$XDG_CONFIG_HOME/uflinux"
+    restart_desktop() {
+        "$UFLINUX_DESKTOP_BIN" --daemon >> "$XDG_RUNTIME_DIR/desktop.log" 2>&1 &
+        desktop=$!
+        for _ in $(seq 1 100); do
+            kill -0 "$desktop" || { cat "$XDG_RUNTIME_DIR/desktop.log"; exit 1; }
+            gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+                --method org.freedesktop.DBus.NameHasOwner org.uflinux.Desktop | grep -q true && return
+            sleep .1
+        done
+        echo 'Desktop did not return after a taskbar restart' >&2
+        exit 1
+    }
+    printf '%s\n' '{"pinned":["firefox.desktop","foot.desktop"]}' > "$XDG_CONFIG_HOME/uflinux/taskbar.json"
+    restart_desktop
+    grep -q '"firefox.desktop","foot.desktop"' "$XDG_CONFIG_HOME/uflinux/taskbar.json"
+    printf '%s\n' 'not json' > "$XDG_CONFIG_HOME/uflinux/taskbar.json"
+    "$UFLINUX_DESKTOP_BIN" --quit
+    wait "$desktop"
+    restart_desktop
+    "$UFLINUX_DESKTOP_BIN" --status | python3 -c 'import json,sys; assert json.load(sys.stdin)["popup"] is None'
+fi
 for _ in $(seq 1 10); do
     for panel in network sound power; do
         "$UFLINUX_DESKTOP_BIN" --panel "$panel" --output HEADLESS-1

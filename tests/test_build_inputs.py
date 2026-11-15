@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -170,6 +171,27 @@ class PublicationTests(unittest.TestCase):
                 tar.addfile(entry, io.BytesIO())
             with self.assertRaises(tarfile.FilterError):
                 publisher.safe_extract(archive, Path(tmp) / "extract")
+
+
+class DesktopDependencyTests(unittest.TestCase):
+    def setUp(self):
+        text = (Path(builder.PROJECT) / "aports/uflinux/APKBUILD").read_text()
+        block = text.split("desktop() {", 1)[1].split("\n}", 1)[0]
+        tokens = " ".join(re.findall(r'depends="([^"]*)"', block)).split()
+        self.depends = [token.split("=", 1)[0] for token in tokens]
+        self.pinned = tokens
+
+    def test_desktop_ships_connectivity_stacks(self):
+        # The settings daemon talks to ConnMan VPN, BlueZ and iwd, so the
+        # desktop package must carry their daemons and OpenRC scripts.
+        for package in ("connman-vpn", "connman-vpn-openrc", "bluez", "bluez-openrc",
+                        "iwd", "iwd-openrc", "wireguard-tools"):
+            self.assertIn(package, self.depends, f"desktop depends is missing {package}")
+
+    def test_desktop_pins_connman_with_vpnd(self):
+        # connman-vpn only exists in the r4 rebuild that enables --enable-wireguard.
+        self.assertIn("connman=2.0-r4", self.pinned)
+        self.assertIn("connman-vpn=2.0-r4", self.pinned)
 
 
 if __name__ == "__main__":

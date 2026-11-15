@@ -54,12 +54,52 @@ fn key(value: &str) -> String {
 impl Taskbar {
     pub fn new(pinned: Vec<String>) -> Self {
         let mut result = Self::default();
-        for id in pinned {
-            if !result.pinned.iter().any(|item| key(item) == key(&id)) {
-                result.pinned.push(id);
-            }
-        }
+        result.set_pinned(pinned);
         result
+    }
+
+    /// Replace the favorites, keeping the given order and dropping duplicates.
+    pub fn set_pinned(&mut self, pinned: Vec<String>) {
+        self.pinned.clear();
+        for id in pinned {
+            self.pin(&id);
+        }
+    }
+
+    pub fn pinned(&self) -> &[String] {
+        &self.pinned
+    }
+
+    pub fn is_pinned(&self, id: &str) -> bool {
+        let wanted = key(id);
+        self.pinned.iter().any(|item| key(item) == wanted)
+    }
+
+    /// Position of a favorite in the pinned region, used to place a drop.
+    pub fn pinned_index(&self, id: &str) -> Option<usize> {
+        let wanted = key(id);
+        self.pinned.iter().position(|item| key(item) == wanted)
+    }
+
+    pub fn pin(&mut self, id: &str) {
+        if !self.is_pinned(id) {
+            self.pinned.push(id.to_owned());
+        }
+    }
+
+    pub fn unpin(&mut self, id: &str) {
+        let wanted = key(id);
+        self.pinned.retain(|item| key(item) != wanted);
+    }
+
+    /// Move a favorite so it lands at `target` within the pinned region.
+    pub fn move_pinned(&mut self, id: &str, target: usize) {
+        let Some(from) = self.pinned_index(id) else {
+            return;
+        };
+        let item = self.pinned.remove(from);
+        let to = target.min(self.pinned.len());
+        self.pinned.insert(to, item);
     }
 
     /// Replace the catalog after a desktop-file change, regrouping existing windows.
@@ -221,6 +261,25 @@ mod tests {
         assert_eq!(taskbar.groups().len(), 2);
         taskbar.remove_window(4);
         assert_eq!(taskbar.groups().len(), 1);
+    }
+
+    #[test]
+    fn favorites_can_be_pinned_unpinned_and_reordered() {
+        let mut taskbar = Taskbar::new(vec!["foot.desktop".into(), "nemo".into()]);
+        assert_eq!(taskbar.pinned().join(","), "foot.desktop,nemo");
+        taskbar.pin("foot");
+        assert_eq!(taskbar.pinned().join(","), "foot.desktop,nemo");
+        assert!(taskbar.is_pinned("Nemo.desktop"));
+        taskbar.move_pinned("nemo.desktop", 0);
+        assert_eq!(taskbar.pinned().join(","), "nemo,foot.desktop");
+        taskbar.move_pinned("foot.desktop", 9);
+        assert_eq!(taskbar.pinned().join(","), "nemo,foot.desktop");
+        taskbar.unpin("nemo.desktop");
+        assert_eq!(taskbar.pinned().join(","), "foot.desktop");
+        taskbar.set_pinned(vec!["nemo".into(), "nemo.desktop".into(), "foot".into()]);
+        assert_eq!(taskbar.pinned().join(","), "nemo,foot");
+        taskbar.move_pinned("gimp", 0);
+        assert_eq!(taskbar.pinned().join(","), "nemo,foot");
     }
 
     #[test]

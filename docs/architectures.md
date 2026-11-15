@@ -53,7 +53,8 @@ user/password setup, preservation of an unrelated partition, and installed boot.
 
 The graphical stack uses packaged Mesa and Alpine kernels/firmware. Physical GPU,
 Wi-Fi, suspend, multiple displays, Bluetooth, and proprietary drivers require
-separate hardware testing. Bluetooth is not part of the default minimal bundle.
+separate hardware testing. Bluetooth (BlueZ) and ConnMan's WireGuard VPN
+service ship in the desktop meta but have only fixture-level verification.
 
 Local checks:
 

@@ -1,0 +1,4 @@
+# Configuration file for /etc/init.d/connman-vpn
+
+# Additional arguments to pass to connman-vpnd.
+#command_args=

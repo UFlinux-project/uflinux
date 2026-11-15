@@ -4,3 +4,9 @@ icon-theme='Papirus'
 font-name='Ubuntu Nerd Font 10'
 color-scheme='prefer-dark'
 monospace-font-name='UbuntuMono Nerd Font Mono 10'
+
+[org.gnome.desktop.wm.preferences]
+# GNOME apps draw their own title bars and read this key, so without it some
+# of them omit the minimize or maximize button. The icon keeps the app menu
+# where the few apps that still use one expect it.
+button-layout='icon:minimize,maximize,close'
