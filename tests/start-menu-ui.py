@@ -265,13 +265,18 @@ try:
             wait(lambda: shown('Wi-Fi') == wifi, 'Wi-Fi visibility did not match the hardware')
             assert shown('Scan') == wifi, 'Wi-Fi scan was shown without Wi-Fi hardware'
         elif panel == 'sound':
+            # The quick sound panel is a GtkStack that opens on Output, and GTK
+            # prunes a hidden page's accessibles entirely, so the input controls
+            # are only reachable after selecting the Input tab. The panel lives
+            # in the resident desktop, so switch back afterwards: later tests
+            # reopen it and expect the default page.
+            def page_tab(label):
+                tab = wait(lambda: next((a for a in tree(frame) if name_of(a) == label and role_of(a) in ('page tab', 'toggle button')), None), label + ' tab missing from the sound panel')
+                click(tab)
             wait(lambda: shown('Choose output device') == bool(snapshot['audio']['outputs']), 'Output visibility did not match the hardware')
-            # The quick sound panel is a GtkStack that opens on Output. GTK
-            # prunes the hidden page's accessibles entirely, so the input
-            # controls only become reachable after selecting the Input tab.
-            input_tab = wait(lambda: next((a for a in tree(frame) if name_of(a) == 'Input' and role_of(a) in ('page tab', 'toggle button')), None), 'Input tab missing from the sound panel')
-            click(input_tab)
+            page_tab('Input')
             wait(lambda: shown('Choose input device') == bool(snapshot['audio']['inputs']), 'Input visibility did not match the hardware')
+            page_tab('Output')
         else:
             wait(lambda: shown('Brightness') == bool(snapshot['displays']['brightness']), 'Brightness visibility did not match the hardware')
             wait(lambda: shown('Power mode') == snapshot['power']['available'], 'Power profile visibility did not match availability')
