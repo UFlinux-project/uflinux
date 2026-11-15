@@ -54,6 +54,18 @@ def click(node):
     node.queryAction().doAction(0)
 
 
+def hover(node):
+    rect = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    x, y = rect.x + rect.width // 2, rect.y + rect.height // 2
+    subprocess.run([os.environ['UFLINUX_POINTER_DRIVER'], str(x), str(y),
+                    str(x), str(y), '1280', '720'], check=True)
+
+
+def leave():
+    subprocess.run([os.environ['UFLINUX_POINTER_DRIVER'], '600', '100',
+                    '600', '100', '1280', '720'], check=True)
+
+
 def status():
     binary = os.environ['UFLINUX_DESKTOP_BIN']
     out = subprocess.run([binary, '--status'], capture_output=True, text=True, timeout=10)
@@ -135,8 +147,17 @@ def main():
     if foot is None:
         print('FAIL: foot favorite not found; tree:')
         dump_tree()
+        failures.append('foot favorite not found')
     else:
         step('favorite found')
+        # Let each one-shot hover timeout expire before leaving. Repeating the
+        # cycle catches attempts to remove a source that has already fired.
+        for _ in range(2):
+            hover(foot)
+            time.sleep(.6)
+            leave()
+            time.sleep(.4)
+            step('idle favorite hover')
         click(foot)  # launch
         time.sleep(1.5)
         step('favorite launched')
@@ -144,6 +165,12 @@ def main():
         if foot is None:
             failures.append('favorite button vanished after launch')
             return finish(failures)
+        for _ in range(2):
+            hover(foot)
+            time.sleep(.6)
+            leave()
+            time.sleep(.5)
+            step('running favorite hover')
         click(foot)  # activate
         time.sleep(.7)
         step('favorite activated')

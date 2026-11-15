@@ -62,11 +62,15 @@ impl Center {
         let shared = self.shared.clone();
         glib::spawn_future_local(async move {
             let Ok(bus) = gio::bus_get_future(gio::BusType::Session).await else {
-                (shared.changed)(Err(String::new()));
+                if shared.generation.get() == generation {
+                    (shared.changed)(Err(String::new()));
+                }
                 return;
             };
             let Ok(reply) = call(&bus, "ListNotifications", None).await else {
-                (shared.changed)(Err(String::new()));
+                if shared.generation.get() == generation {
+                    (shared.changed)(Err(String::new()));
+                }
                 return;
             };
             // The popover closed while the list was in flight; nothing has
@@ -163,9 +167,12 @@ fn refresh(connection: Weak<RefCell<Option<gio::DBusConnection>>>, shared: Rc<Sh
         return;
     };
     glib::spawn_future_local(async move {
+        let generation = shared.generation.get();
         let result = call(&bus, "ListNotifications", None).await;
         shared.listing.set(false);
-        (shared.changed)(result.map(|reply| parse(&reply)));
+        if shared.generation.get() == generation {
+            (shared.changed)(result.map(|reply| parse(&reply)));
+        }
     });
 }
 
@@ -177,7 +184,11 @@ fn string_of(dict: &glib::VariantDict, key: &str) -> String {
 
 fn parse(reply: &Variant) -> Vec<Notification> {
     let mut entries = Vec::new();
-    for item in reply.iter() {
+    // GDBus wraps method return values in a tuple: (aa{sv}).
+    if reply.type_().as_str() != "(aa{sv})" {
+        return entries;
+    }
+    for item in reply.child_value(0).iter() {
         let dict = glib::VariantDict::new(Some(&item));
         let Ok(Some(id)) = dict.lookup::<u32>("id") else {
             continue;
@@ -191,4 +202,27 @@ fn parse(reply: &Variant) -> Vec<Notification> {
         });
     }
     entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glib::variant::ToVariant;
+
+    #[test]
+    fn parses_mako_method_return_tuple() {
+        let dict = glib::VariantDict::new(None);
+        dict.insert("id", 42u32);
+        dict.insert("summary", "Hello");
+        let array = glib::Variant::array_from_iter_with_type(
+            glib::VariantTy::new("a{sv}").unwrap(),
+            [dict.end()],
+        );
+        let reply = glib::Variant::tuple_from_iter([array]);
+        let items = parse(&reply);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, 42);
+        assert_eq!(items[0].title, "Hello");
+        assert!(parse(&().to_variant()).is_empty());
+    }
 }

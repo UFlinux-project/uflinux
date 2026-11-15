@@ -37,9 +37,13 @@ fn arm_preview_grace(grace: &Rc<std::cell::Cell<Option<glib::SourceId>>>, card: 
         id.remove();
     }
     let card = card.clone();
+    let elapsed = grace.clone();
     let id = glib::timeout_add_local_once(
         std::time::Duration::from_millis(TASK_PREVIEW_GRACE_MS),
-        move || card.popdown(),
+        move || {
+            elapsed.take();
+            card.popdown();
+        },
     );
     grace.set(Some(id));
 }
@@ -616,9 +620,11 @@ impl Panel {
                             let grace = grace.clone();
                             let id = preview_id.clone();
                             let output = preview_output.clone();
+                            let elapsed = pending.clone();
                             let source = glib::timeout_add_local_once(
                                 std::time::Duration::from_millis(TASK_PREVIEW_DELAY_MS),
                                 move || {
+                                    elapsed.take();
                                     let Some(panel) = weak.upgrade() else { return };
                                     // The task may have ended while the timer ran,
                                     // which unparents the popover; popping up an

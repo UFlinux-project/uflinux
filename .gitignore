@@ -1,4 +1,5 @@
 /.cache/
+/.cargo/
 /.state/
 /out/
 /out-settings/
