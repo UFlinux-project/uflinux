@@ -44,7 +44,7 @@ fn forward() -> bool {
                     Some(&("status",).to_variant()),
                     None,
                     gio::DBusCallFlags::NO_AUTO_START,
-                    1000,
+                    5000,
                     gio::Cancellable::NONE,
                 )
             })
@@ -112,7 +112,7 @@ fn forward() -> bool {
             Some(&parameters),
             None,
             gio::DBusCallFlags::NO_AUTO_START,
-            5000,
+            30000,
             gio::Cancellable::NONE,
         )
     });

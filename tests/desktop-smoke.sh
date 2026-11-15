@@ -62,6 +62,19 @@ alive() {
 		exit 1
 	fi
 }
+# Opening a popup for the first time builds its whole window tree, which under
+# an emulated architecture can keep the shell's main loop from answering for
+# several seconds. Ask for the popup, then wait for the shell to report it
+# rather than trusting a single status read that may have raced that build.
+popup_shown() {
+	for _attempt in $(seq 1 30); do
+		if uflinux-desktop --status | python3 -c 'import json,sys; assert json.load(sys.stdin)["popup"] == sys.argv[1]' "$1"; then
+			return 0
+		fi
+		sleep 1
+	done
+	return 1
+}
 labwc --config-dir "$XDG_RUNTIME_DIR/config" > "$results/labwc.log" 2>&1 &
 compositor=$!; pids="$pids $compositor"
 for _attempt in $(seq 1 60); do
@@ -183,12 +196,12 @@ fi
 for menu_name in network sound power; do
     alive "$panel" 'Resident desktop' "$results/desktop.log"
     uflinux-desktop --panel "$menu_name" --output HEADLESS-1
-    uflinux-desktop --status | python3 -c 'import json,sys; assert json.load(sys.stdin)["popup"] == sys.argv[1]' "$menu_name"
+    popup_shown "$menu_name"
     uflinux-desktop --hide
 done
 alive "$panel" 'Resident desktop' "$results/desktop.log"
 uflinux-desktop --start-menu --output HEADLESS-1
-uflinux-desktop --status | python3 -c 'import json,sys; assert json.load(sys.stdin)["popup"] == "start"'
+popup_shown start
 uflinux-desktop --hide
 UFLINUX_DESKTOP_PID=$panel UFLINUX_DESKTOP_LOG=$results/desktop.log \
     UFLINUX_SETTINGS_DAEMON_PID=$settings_daemon sh /project/tests/settings-smoke.sh

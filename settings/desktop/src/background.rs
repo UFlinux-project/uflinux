@@ -17,7 +17,10 @@ const FALLBACK: (f64, f64, f64) = (0x10 as f64 / 255., 0x2c as f64 / 255., 0x46 
 
 /// One output's wallpaper.
 struct Surface {
-    output: String,
+    /// The output's name, which decides the entry this surface shows. A
+    /// monitor re-created by a hotplug announces itself before its name
+    /// arrives, so this starts empty and is filled in when it does.
+    output: RefCell<String>,
     monitor: gtk::gdk::Monitor,
     window: gtk::ApplicationWindow,
     canvas: gtk::DrawingArea,
@@ -78,6 +81,17 @@ impl Background {
         *self.on_change.borrow_mut() = Some(on_change);
     }
 
+    /// Points one surface back at the current appearance and lets the shell
+    /// re-report what is on screen, for when its output's name arrives only
+    /// after the surface was made.
+    fn refresh(self: &Rc<Self>, surface: &Rc<Surface>) {
+        surface.retarget(&self.appearance.borrow());
+        let on_change = self.on_change.borrow().clone();
+        if let Some(on_change) = on_change {
+            on_change();
+        }
+    }
+
     /// What is on screen, so a test can wait for a wallpaper instead of sleeping
     /// and so a broken image is visible without staring at the monitor.
     pub fn status(&self) -> serde_json::Value {
@@ -88,7 +102,7 @@ impl Background {
                 .map(|surface| {
                     let entry = surface.entry.borrow().clone();
                     serde_json::json!({
-                        "output": surface.output,
+                        "output": surface.output.borrow().clone(),
                         "file": entry.as_ref().map(|entry| entry.0.clone()),
                         "fit": entry.as_ref().map(|entry| entry.1.clone()),
                     })
@@ -125,6 +139,28 @@ impl Background {
             }
             if let Some(surface) = self.create(&monitor) {
                 surface.retarget(&self.appearance.borrow());
+                // A monitor that has just re-appeared often has no name yet,
+                // because the compositor announces it before sending the
+                // output's details. Watch for the name so the surface can
+                // match a per-output entry and report what it really shows.
+                let weak = Rc::downgrade(self);
+                let weak_surface = Rc::downgrade(&surface);
+                monitor.connect_notify_local(Some("connector"), move |monitor, _| {
+                    let (Some(background), Some(surface)) =
+                        (weak.upgrade(), weak_surface.upgrade())
+                    else {
+                        return;
+                    };
+                    let Some(name) = monitor.connector() else {
+                        return;
+                    };
+                    let name = name.to_string();
+                    if name.is_empty() || *surface.output.borrow() == name {
+                        return;
+                    }
+                    *surface.output.borrow_mut() = name;
+                    background.refresh(&surface);
+                });
                 self.surfaces.borrow_mut().push(surface);
                 changed = true;
             }
@@ -162,10 +198,12 @@ impl Background {
         let canvas = gtk::DrawingArea::new();
         window.set_child(Some(&canvas));
         let surface = Rc::new(Surface {
-            output: monitor
-                .connector()
-                .map(|name| name.to_string())
-                .unwrap_or_default(),
+            output: RefCell::new(
+                monitor
+                    .connector()
+                    .map(|name| name.to_string())
+                    .unwrap_or_default(),
+            ),
             monitor: monitor.clone(),
             window,
             canvas,
@@ -189,7 +227,8 @@ impl Surface {
     /// Points this output at whatever the appearance now says it should show,
     /// dropping the decoded image so the next draw decodes the new one.
     fn retarget(&self, appearance: &Appearance) {
-        let entry = resolve(appearance, &self.output);
+        let output = self.output.borrow();
+        let entry = resolve(appearance, &output);
         let unchanged = entry == *self.entry.borrow() && *self.color.borrow() == appearance.color;
         *self.entry.borrow_mut() = entry;
         *self.color.borrow_mut() = appearance.color.clone();
