@@ -36,8 +36,12 @@ if mode.startswith('start-'):
     time.sleep(2)
     assert not record.exists(), 'Authorization completed without showing the GTK agent prompt'
     print('The real polkit request is pending',flush=True)
+elif mode=='probe-cancel':
+    print('cancel-finished' if record.exists() else 'cancel-pending',flush=True)
 else:
-    for _ in range(100):
+    # The prompt maps asynchronously after polkit activates the agent, so a
+    # late Alt+F4 can legitimately take up to a minute to reach the dialog.
+    for _ in range(600):
         if record.exists():break
         time.sleep(.1)
     else:raise AssertionError('Authorization did not finish')

@@ -300,10 +300,21 @@ def main():
             time.sleep(2)
             transfer(child, ROOT / "tests/settings-auth-vm.py", "/run/uflinux-settings-auth.py")
             guest(child,"python3 /run/uflinux-settings-auth.py start-cancel")
-            with qmp(state) as request:
-                request("send-key", {"keys":[{"type":"qcode","data":"alt"},{"type":"qcode","data":"f4"}]})
+            # The modal prompt maps asynchronously after polkit activates the
+            # lazily registered agent, and labwc only routes Alt+F4 to the
+            # focused window. Re-send the key until the agent records the
+            # cancellation instead of racing the prompt's first frame.
+            for _ in range(30):
+                with qmp(state) as request:
+                    request("send-key", {"keys":[{"type":"qcode","data":"alt"},{"type":"qcode","data":"f4"}]})
+                time.sleep(1)
+                if "cancel-finished" in guest(child, "python3 /run/uflinux-settings-auth.py probe-cancel"):
+                    break
             guest(child,"python3 /run/uflinux-settings-auth.py check-cancel")
             guest(child,"python3 /run/uflinux-settings-auth.py start-grant")
+            # The warm agent reuses its registration, but keys typed before the
+            # password entry grabs focus are lost, so let the prompt settle.
+            time.sleep(3)
             with qmp(state) as request:
                 for character in "uflinux-test-password\n":
                     key={"\n":"ret","-":"minus"}.get(character,character)
