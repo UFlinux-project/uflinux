@@ -30,6 +30,20 @@ fn taskbar_config_path() -> std::path::PathBuf {
     settings_core::files::config_dir().join("taskbar.json")
 }
 
+/// Starts (or restarts) the short countdown that closes a preview card after
+/// the pointer leaves either the task button or the card itself.
+fn arm_preview_grace(grace: &Rc<std::cell::Cell<Option<glib::SourceId>>>, card: &gtk::Popover) {
+    if let Some(id) = grace.take() {
+        id.remove();
+    }
+    let card = card.clone();
+    let id = glib::timeout_add_local_once(
+        std::time::Duration::from_millis(TASK_PREVIEW_GRACE_MS),
+        move || card.popdown(),
+    );
+    grace.set(Some(id));
+}
+
 /// Panel logo size in device-independent pixels.
 const LOGO_PIXELS: i32 = 28;
 /// Layout cell one tray icon occupies in the overflow flyout, so the grid can be
@@ -44,16 +58,25 @@ const TRAY_MAX_COLUMNS: i32 = 8;
 const TRAY_FLYOUT_MAX_HEIGHT: i32 = 240;
 /// How long the pointer rests on a task before its window list previews itself.
 const TASK_PREVIEW_DELAY_MS: u64 = 350;
+/// How long the preview stays up after the pointer leaves the task, so the
+/// pointer can travel from the button into the card and close a window there.
+const TASK_PREVIEW_GRACE_MS: u64 = 250;
 
 struct TaskButton {
     button: gtk::Button,
     image: gtk::Image,
     icon: String,
     menu: gtk::Popover,
+    preview: gtk::Popover,
 }
 impl Drop for TaskButton {
     fn drop(&mut self) {
+        // GTK aborts when a visible popover is destroyed, and a task button is
+        // dropped as soon as its app stops advertising a window.
+        self.menu.popdown();
+        self.preview.popdown();
         self.menu.unparent();
+        self.preview.unparent();
     }
 }
 struct TrayButton {
@@ -272,10 +295,17 @@ impl Panel {
             .surfaces
             .borrow()
             .iter()
-            .flat_map(|surface| surface.buttons.values().map(|item| item.menu.clone()))
+            .flat_map(|surface| {
+                surface
+                    .buttons
+                    .values()
+                    .flat_map(|item| [item.menu.clone(), item.preview.clone()])
+            })
             .collect();
         for menu in menus {
-            if except != Some(&menu) {
+            // Only a shown popover has a hide handler to run, so skipping the
+            // rest keeps a close from reporting a status change that never was.
+            if except != Some(&menu) && menu.is_visible() {
                 menu.popdown();
             }
         }
@@ -486,6 +516,10 @@ impl Panel {
                 if wanted.contains(id.as_str()) {
                     true
                 } else {
+                    // Take a menu or preview down before the button that owns
+                    // it disappears; GTK aborts on a visible popover.
+                    item.menu.popdown();
+                    item.preview.popdown();
                     surface.tasks.remove(&item.button);
                     false
                 }
@@ -509,14 +543,30 @@ impl Panel {
                             }
                         }
                     });
+                    // The hover preview is its own popover so the right-click
+                    // menu and the card can never fight over one child.
+                    let preview = gtk::Popover::new();
+                    preview.set_parent(&button);
+                    let weak = Rc::downgrade(self);
+                    preview.connect_hide(move |popover| {
+                        popover.set_child(None::<&gtk::Widget>);
+                        if let Some(panel) = weak.upgrade() {
+                            if let Some(app) = panel.app.upgrade() {
+                                app.task_closed();
+                            }
+                        }
+                    });
                     let click = gtk::GestureClick::new();
                     click.set_button(3);
                     let context_id = group.id.clone();
                     let context_menu = menu.clone();
+                    let context_preview = preview.clone();
                     let context_output = output.clone();
                     let weak = Rc::downgrade(self);
                     click.connect_pressed(move |_, _, _, _| {
                         let Some(panel) = weak.upgrade() else { return };
+                        context_menu.popdown();
+                        context_preview.popdown();
                         let Some(group) = panel
                             .taskbar
                             .borrow()
@@ -530,7 +580,7 @@ impl Panel {
                             return;
                         };
                         if let Some(app) = panel.app.upgrade() {
-                            app.hide();
+                            app.hide_except_task(&context_menu);
                             app.task_opened(&context_output);
                         }
                         context_menu.set_child(Some(&column));
@@ -538,31 +588,44 @@ impl Panel {
                     });
                     button.add_controller(click);
                     // Resting the pointer on a running app previews its windows
-                    // in the same popover the right-click menu uses, so a hover
-                    // costs one timer and one small box rather than a screenshot.
+                    // in a card of its own, so a hover costs one timer and one
+                    // small box rather than a screenshot.
                     let hover = gtk::EventControllerMotion::new();
                     let pending = Rc::new(std::cell::Cell::new(None::<glib::SourceId>));
+                    let grace = Rc::new(std::cell::Cell::new(None::<glib::SourceId>));
                     hover.connect_enter({
                         let pending = pending.clone();
-                        let preview_menu = menu.clone();
+                        let grace = grace.clone();
+                        let menu = menu.clone();
+                        let card = preview.clone();
                         let preview_id = group.id.clone();
                         let weak = Rc::downgrade(self);
                         let preview_output = output.clone();
                         move |_, _, _| {
-                            if preview_menu.is_visible() || weak.upgrade().is_none() {
+                            if menu.is_visible() || card.is_visible() || weak.upgrade().is_none() {
                                 return;
                             }
                             if let Some(id) = pending.take() {
                                 id.remove();
                             }
+                            if let Some(id) = grace.take() {
+                                id.remove();
+                            }
                             let weak = weak.clone();
-                            let menu = preview_menu.clone();
+                            let card = card.clone();
+                            let grace = grace.clone();
                             let id = preview_id.clone();
                             let output = preview_output.clone();
                             let source = glib::timeout_add_local_once(
                                 std::time::Duration::from_millis(TASK_PREVIEW_DELAY_MS),
                                 move || {
                                     let Some(panel) = weak.upgrade() else { return };
+                                    // The task may have ended while the timer ran,
+                                    // which unparents the popover; popping up an
+                                    // orphaned popover is a fatal GTK critical.
+                                    if card.parent().is_none() {
+                                        return;
+                                    }
                                     let Some(group) = panel
                                         .taskbar
                                         .borrow()
@@ -575,15 +638,16 @@ impl Panel {
                                     if group.windows.is_empty() {
                                         return;
                                     }
-                                    let Some(column) = panel.task_menu(&menu, &group) else {
+                                    let Some(column) = panel.task_preview(&card, &group, &grace)
+                                    else {
                                         return;
                                     };
                                     if let Some(app) = panel.app.upgrade() {
-                                        app.hide();
+                                        app.hide_except_task(&card);
                                         app.task_opened(&output);
                                     }
-                                    menu.set_child(Some(&column));
-                                    menu.popup();
+                                    card.set_child(Some(&column));
+                                    card.popup();
                                 },
                             );
                             pending.set(Some(source));
@@ -591,9 +655,14 @@ impl Panel {
                     });
                     hover.connect_leave({
                         let pending = pending;
+                        let grace = grace.clone();
+                        let card = preview.clone();
                         move |_| {
                             if let Some(id) = pending.take() {
                                 id.remove();
+                            }
+                            if card.is_visible() {
+                                arm_preview_grace(&grace, &card);
                             }
                         }
                     });
@@ -697,6 +766,7 @@ impl Panel {
                         image,
                         icon: String::new(),
                         menu,
+                        preview,
                     }
                 });
                 if item.icon != group.icon {
@@ -854,6 +924,94 @@ impl Panel {
         if windows.is_empty() && !application {
             return None;
         }
+        Some(column)
+    }
+
+    /// Contents for the hover preview: a small card with the app's name and one
+    /// row per window. Deliberately not the right-click menu, so resting the
+    /// pointer on a task never looks like a context menu appeared. Like the
+    /// menu, the card is rebuilt on demand and thrown away when it closes.
+    fn task_preview(
+        self: &Rc<Self>,
+        card: &gtk::Popover,
+        group: &Group,
+        grace: &Rc<std::cell::Cell<Option<glib::SourceId>>>,
+    ) -> Option<gtk::Box> {
+        if group.windows.is_empty() {
+            return None;
+        }
+        let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        column.style_context().add_class("uflinux-popup-card");
+        column.style_context().add_class("uflinux-task-preview");
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let icon = gtk::Image::new();
+        icon.set_pixel_size(16);
+        if let Ok(gicon) = gio::Icon::for_string(&group.icon) {
+            icon.set_from_gicon(&gicon);
+        } else {
+            icon.set_icon_name(Some("application-x-executable"));
+        }
+        header.append(&icon);
+        let title = gtk::Label::new(Some(&group.name));
+        title.set_halign(gtk::Align::Start);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        title.set_max_width_chars(28);
+        title.style_context().add_class("uflinux-task-heading");
+        header.append(&title);
+        column.append(&header);
+        for window in &group.windows {
+            let window_id = window.id;
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            let activate = gtk::Button::with_label(if window.title.is_empty() {
+                &group.name
+            } else {
+                &window.title
+            });
+            activate.set_hexpand(true);
+            activate.set_halign(gtk::Align::Fill);
+            activate.set_tooltip_text(Some(&window.title));
+            activate.style_context().add_class("flat");
+            activate.style_context().add_class("uflinux-task-row");
+            let weak = Rc::downgrade(self);
+            let popup = card.clone();
+            activate.connect_clicked(move |_| {
+                popup.popdown();
+                if let Some(panel) = weak.upgrade() {
+                    if let Some(tracker) = panel.tracker.borrow_mut().as_mut() {
+                        let _ = tracker.send(Command::Activate(window_id));
+                    }
+                }
+            });
+            row.append(&activate);
+            let close = gtk::Button::from_icon_name("window-close-symbolic");
+            close.set_tooltip_text(Some("Close window"));
+            close.style_context().add_class("flat");
+            let weak = Rc::downgrade(self);
+            let popup = card.clone();
+            close.connect_clicked(move |_| {
+                popup.popdown();
+                if let Some(panel) = weak.upgrade() {
+                    if let Some(tracker) = panel.tracker.borrow_mut().as_mut() {
+                        let _ = tracker.send(Command::Close(window_id));
+                    }
+                }
+            });
+            row.append(&close);
+            column.append(&row);
+        }
+        // The pointer has to be able to cross from the task button into the
+        // card, so the card gets its own copy of the leave countdown.
+        let motion = gtk::EventControllerMotion::new();
+        let grace_enter = grace.clone();
+        motion.connect_enter(move |_, _, _| {
+            if let Some(id) = grace_enter.take() {
+                id.remove();
+            }
+        });
+        let card_leave = card.clone();
+        let grace_leave = grace.clone();
+        motion.connect_leave(move |_| arm_preview_grace(&grace_leave, &card_leave));
+        column.add_controller(motion);
         Some(column)
     }
 

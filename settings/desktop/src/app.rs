@@ -224,16 +224,20 @@ impl App {
         }
     }
     pub fn toggle(&self, output: &str) {
-        if let Some(panel) = self.panel.borrow().as_ref() {
-            panel.hide_task_menus(None);
-            panel.hide_clocks(None);
-            panel.hide_trays(None);
-        }
-        self.quick.hide_quick();
-        let slot = self.menu.borrow();
-        let Some(menu) = slot.as_ref() else { return };
-        if menu.window.is_visible() && menu.matches_output(output) {
-            menu.hide();
+        // Only the other surfaces are closed, and only once this dispatch is
+        // over; see `defer_close`. The start menu is either already hidden (the
+        // toggle closed it) or is being presented now, so it is kept either way.
+        let visible = self
+            .menu
+            .borrow()
+            .as_ref()
+            .map(|menu| menu.window.is_visible() && menu.matches_output(output))
+            .unwrap_or(false);
+        if visible {
+            if let Some(menu) = self.menu.borrow().as_ref() {
+                menu.hide();
+            }
+            self.defer_close(None, None, None, false, false);
             return;
         }
         *self.activation.borrow_mut() = Instant::now();
@@ -243,8 +247,12 @@ impl App {
             "close-quick",
         );
         self.output.replace(output.to_string());
+        let Some(menu) = self.menu.borrow().as_ref().cloned() else {
+            return;
+        };
         menu.set_output(output);
         menu.present();
+        self.defer_close(None, None, None, false, true);
     }
     fn prepare_quick(self: &Rc<Self>, panel: &str) {
         if self.quick_prepared.borrow().contains(panel) {
@@ -266,40 +274,19 @@ impl App {
             return;
         }
         self.prepare_quick(panel);
-        if let Some(panel) = self.panel.borrow().as_ref() {
-            panel.hide_task_menus(None);
-            panel.hide_clocks(None);
-            panel.hide_trays(None);
-        }
-        if let Some(menu) = self.menu.borrow().as_ref() {
-            menu.hide();
-        }
+        // The flyout itself is the popup being opened, so it is kept; the rest
+        // of the surfaces close on the next idle.
+        self.defer_close(None, None, None, true, false);
         self.quick.open_quick(output.to_string(), panel);
         self.report_status();
     }
     pub fn show_clock(&self, clock: &gtk::Popover, output: &str) {
-        if let Some(panel) = self.panel.borrow().as_ref() {
-            panel.hide_task_menus(None);
-            panel.hide_clocks(Some(clock));
-            panel.hide_trays(None);
-        }
-        self.quick.hide_quick();
-        if let Some(menu) = self.menu.borrow().as_ref() {
-            menu.hide();
-        }
+        self.defer_close(None, Some(clock), None, false, false);
         self.clock_output.replace(Some(output.to_string()));
         self.report_status();
     }
     pub fn show_tray(&self, tray: &gtk::Popover, output: &str) {
-        if let Some(panel) = self.panel.borrow().as_ref() {
-            panel.hide_task_menus(None);
-            panel.hide_clocks(None);
-            panel.hide_trays(Some(tray));
-        }
-        self.quick.hide_quick();
-        if let Some(menu) = self.menu.borrow().as_ref() {
-            menu.hide();
-        }
+        self.defer_close(None, None, Some(tray), false, false);
         self.tray_output.replace(Some(output.to_string()));
         self.report_status();
     }
@@ -320,16 +307,59 @@ impl App {
         self.report_status();
     }
     pub fn hide(&self) {
-        if let Some(panel) = self.panel.borrow().as_ref() {
-            panel.hide_task_menus(None);
-            panel.hide_clocks(None);
-            panel.hide_trays(None);
-        }
-        self.quick.hide_quick();
-        if let Some(menu) = self.menu.borrow().as_ref() {
-            menu.hide();
-        }
+        self.defer_close(None, None, None, false, false);
         self.schedule_trim();
+    }
+    /// Hides every surface except the task popover about to be shown. A panel
+    /// that opens a menu or preview calls this instead of `hide`, because the
+    /// deferred teardown would otherwise close the popup just opened.
+    pub fn hide_except_task(&self, keep: &gtk::Popover) {
+        self.defer_close(Some(keep), None, None, false, false);
+        self.schedule_trim();
+    }
+    /// Closes the popups that are not the one currently being opened, but only
+    /// once the current signal dispatch has finished. Popping a popover down
+    /// from inside another popover's show handler re-enters the GTK popup
+    /// machinery, which is both fragile and the suspected cause of the panel
+    /// crashes; an idle runs after the handlers have unwound.
+    fn defer_close(
+        &self,
+        except_menus: Option<&gtk::Popover>,
+        except_clocks: Option<&gtk::Popover>,
+        except_trays: Option<&gtk::Popover>,
+        keep_quick: bool,
+        keep_menu: bool,
+    ) {
+        let panel = self.panel.borrow().as_ref().map(Rc::downgrade);
+        let except_menus = except_menus.cloned();
+        let except_clocks = except_clocks.cloned();
+        let except_trays = except_trays.cloned();
+        if let Some(panel) = panel {
+            glib::idle_add_local_once(move || {
+                if let Some(panel) = panel.upgrade() {
+                    panel.hide_task_menus(except_menus.as_ref());
+                    panel.hide_clocks(except_clocks.as_ref());
+                    panel.hide_trays(except_trays.as_ref());
+                }
+            });
+        }
+        if !keep_quick {
+            let quick = Rc::downgrade(&self.quick);
+            glib::idle_add_local_once(move || {
+                if let Some(quick) = quick.upgrade() {
+                    quick.hide_quick();
+                }
+            });
+        }
+        if !keep_menu {
+            if let Some(menu) = self.menu.borrow().as_ref().map(Rc::downgrade) {
+                glib::idle_add_local_once(move || {
+                    if let Some(menu) = menu.upgrade() {
+                        menu.hide();
+                    }
+                });
+            }
+        }
     }
     /// Once nothing is on screen, give the memory freed by the popup trees back
     /// to the kernel. This runs once the current dispatch finishes, so GTK can

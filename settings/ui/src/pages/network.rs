@@ -17,8 +17,6 @@ pub fn page(app: &Rc<App>, parent: &gtk::Box) {
                 "ConnMan is unavailable. Check its OpenRC service."
             } else if s.network.wifi_hardware_blocked {
                 "Wi-Fi is disabled by a hardware switch. Enable it on the device before connecting."
-            } else if s.network.offline {
-                "Networking is disabled."
             } else if s.network.wifi_software_blocked {
                 "Wi-Fi is blocked in software. Turn Wi-Fi on to reconnect."
             } else {
@@ -26,14 +24,8 @@ pub fn page(app: &Rc<App>, parent: &gtk::Box) {
             });
         }
     });
-    toggle(
-        app,
-        Surface::Full,
-        parent,
-        "Networking",
-        |s| !s.network.offline,
-        |enabled| Action::Networking { enabled },
-    );
+    // No master Networking switch: each tab carries its own Wi-Fi/Ethernet
+    // controls, and ConnMan's offline mode is only ever set from the CLI.
     tabs(app, parent, Surface::Full, false);
 }
 
@@ -199,16 +191,14 @@ fn bluetooth_tab(app: &Rc<App>, surface: Surface) -> gtk::Box {
             name.set_ellipsize(gtk::pango::EllipsizeMode::End);
             name.add_css_class("network-name");
             text.append(&name);
-            let mut status = vec![
-                if device.connected {
-                    "Connected"
-                } else if device.paired {
-                    "Paired"
-                } else {
-                    "Not paired"
-                }
-                .to_string(),
-            ];
+            let mut status = vec![if device.connected {
+                "Connected"
+            } else if device.paired {
+                "Paired"
+            } else {
+                "Not paired"
+            }
+            .to_string()];
             if device.trusted {
                 status.push("Trusted".into());
             }
@@ -1317,7 +1307,10 @@ PersistentKeepalive = 25
     #[test]
     fn rejects_incomplete_conf() {
         assert!(parse_wireguard("[Interface]\nPrivateKey = k\n").is_err());
-        assert!(parse_wireguard("[Interface]\nPrivateKey = k\nAddress = a\n\n[Peer]\nPublicKey = p\nAllowedIPs = x\n").is_err());
+        assert!(parse_wireguard(
+            "[Interface]\nPrivateKey = k\nAddress = a\n\n[Peer]\nPublicKey = p\nAllowedIPs = x\n"
+        )
+        .is_err());
         assert!(parse_wireguard("garbage").is_err());
     }
 }

@@ -101,6 +101,12 @@ if [ "${UFLINUX_TEST_FRAME_PROBE:-0}" = 1 ]; then
         --output "${UFLINUX_FRAME_OUTPUT:-$XDG_RUNTIME_DIR/frames.json}" --rounds "${UFLINUX_FRAME_ROUNDS:-2}" \
         --input "${UFLINUX_FRAME_INPUT:-cli}"
 fi
+if [ "${UFLINUX_TEST_PANEL_INTERACTION:-0}" = 1 ]; then
+    # Real clicks on the clock popover and the quick-launch buttons, driven
+    # over AT-SPI: re-entrant GTK popup teardown used to take the panel down,
+    # and each step below fails at the exact click that did it.
+    UFLINUX_DESKTOP_PID=$desktop python3 "$(dirname "$0")/desktop-panel-interaction.py"
+fi
 if [ "${UFLINUX_TEST_TASKBAR:-0}" = 1 ]; then
     # Favorites persist in taskbar.json: a seeded file survives a restart
     # untouched, and a damaged file falls back to the defaults without

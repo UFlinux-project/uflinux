@@ -87,30 +87,9 @@ pub fn quick(app: &Rc<App>, parent: &gtk::Box, panel: &str) {
             power::profile(app, &profiles, Surface::Quick);
         }
         _ => {
-            let status = description("");
-            parent.append(&status);
-            let target = status.downgrade();
-            app.bind_for(Surface::Quick, &status, move |state| {
-                if let Some(label) = target.upgrade() {
-                    label.set_text(&settings_core::panel::status(state)[0].1);
-                }
-            });
-            let networking = column();
-            parent.append(&networking);
-            let target = networking.downgrade();
-            app.bind_for(Surface::Quick, &networking, move |state| {
-                if let Some(networking) = target.upgrade() {
-                    networking.set_visible(!state.network.technologies.is_empty());
-                }
-            });
-            toggle(
-                app,
-                Surface::Quick,
-                &networking,
-                "Networking",
-                |s| !s.network.offline,
-                |enabled| Action::Networking { enabled },
-            );
+            // No summary line and no master Networking switch here: the tabs
+            // below already say which subsystem is on or off, and the whole
+            // stack can be switched from the full settings page.
             network::tabs(app, parent, Surface::Quick, true);
             let auth = column();
             parent.append(&auth);

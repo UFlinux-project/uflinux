@@ -206,18 +206,36 @@ impl Client {
                 }
             }
             Action::BluetoothScan => {
+                // BlueZ answers StartDiscovery with org.bluez.Error.InProgress
+                // when a discovery is already running, and refuses outright
+                // when the adapter is off. Telling those apart keeps an
+                // already-scanning adapter from reporting "turn Bluetooth on".
                 let adapters = self.adapter_paths();
-                let mut started = false;
+                if adapters.is_empty() {
+                    return Err("No Bluetooth adapter is available".into());
+                }
+                if !self.view.borrow().powered {
+                    return Err("Turn Bluetooth on before scanning".into());
+                }
+                let mut failure = None;
                 for path in adapters {
-                    if bus::call(&self.bus, NAME, &path, ADAPTER, "StartDiscovery", None)
-                        .await
-                        .is_ok()
+                    if let Err(error) =
+                        bus::call(&self.bus, NAME, &path, ADAPTER, "StartDiscovery", None).await
                     {
-                        started = true;
+                        // Already discovering counts as a started scan; the
+                        // PropertiesChanged signal refreshes the view anyway.
+                        if !error.contains("org.bluez.Error.InProgress") {
+                            failure.get_or_insert(error);
+                        }
                     }
                 }
-                if !started {
-                    return Err("Turn Bluetooth on before scanning".into());
+                // A scan may already be running on every adapter, in which
+                // case the cached view says so even though each call failed.
+                if self.view.borrow().discovering {
+                    return Ok(());
+                }
+                if let Some(error) = failure {
+                    return Err(error);
                 }
             }
             Action::BluetoothPair { device } => self.device_call(device, "Pair").await?,
