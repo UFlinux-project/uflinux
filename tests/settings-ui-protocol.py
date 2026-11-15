@@ -54,6 +54,18 @@ def click(a):
 current=['network']
 def page(name):
     command('uflinux-settings','--page',name);current[0]=name;time.sleep(.2)
+def network_tabs():
+    # A network tab exists exactly when its technology or subsystem is
+    # available (see tabs() in pages/network.rs), so derive the expected set
+    # from the published daemon state instead of hardcoding a layout the
+    # connman fixture may not provide (it exposes wifi only).
+    s=state();n=s['network'];kinds={t['kind'] for t in n['technologies']}
+    labels=[]
+    if 'wifi' in kinds or n['wifi_hardware_blocked'] or n['wifi_software_blocked']:labels.append('Wi-Fi')
+    if 'ethernet' in kinds:labels.append('Ethernet')
+    if s['bluetooth']['available']:labels.append('Bluetooth')
+    if s['vpn']['available']:labels.append('VPN')
+    return labels
 def diagnostics():
     try:
         network=state().get('network')
@@ -72,17 +84,16 @@ time.sleep(.3)
 # Every page tab must be a visible control, and switching tabs must not resize
 # the window (the stack keeps one homogeneous size request).
 def tab(label):
-    # A transient session-bus failure can leave the resident UI on its empty
-    # startup snapshot, and a quiet fixture bus then emits no Changed to
-    # recover it. Re-activate the page and ask the daemon to re-publish
-    # between rounds, and dump the daemon state plus the AT-SPI tree on
-    # failure so the next occurrence distinguishes a wifi-less snapshot from
-    # a broken accessibility tree.
+    # GtkStackSwitcher exposes its buttons as AT-SPI page tabs, not toggle
+    # buttons. A transient session-bus failure can also leave the resident UI
+    # on its empty startup snapshot with no Changed to recover it, so
+    # re-activate the page and ask the daemon to re-publish between rounds,
+    # and dump the daemon state plus the AT-SPI tree on failure.
     for _ in range(10):
         for _ in range(20):
             while GLib.MainContext.default().pending(): GLib.MainContext.default().iteration(False)
             try:
-                found=find(label,'toggle button')
+                found=next((a for a in tree() if a.name==label and a.getRoleName() in ('page tab','toggle button')),None)
                 if found:return found
             except (RuntimeError,LookupError,AttributeError,GLib.GError):pass
             time.sleep(.05)
@@ -94,8 +105,8 @@ def window_size():
     return frame.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
 page('network')
 sizes=[]
-for label in ('Wi-Fi','Ethernet','Bluetooth','VPN'):
-    tab(label);sizes.append(window_size())
+for label in network_tabs():
+    click(tab(label));sizes.append(window_size())
 assert len(set((s.width,s.height) for s in sizes))==1,'Network tabs changed the window size'
 page('audio')
 for label in ('Output','Input'):
