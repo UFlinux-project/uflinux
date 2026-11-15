@@ -9,7 +9,7 @@ arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
 license="GPL-2.0-only"
 depends="dbus"
 makedepends="autoconf automake dbus-dev glib-dev libmnl-dev libnftnl-dev libtool readline-dev linux-headers"
-subpackages="$pkgname-dbg $pkgname-doc $pkgname-dev $pkgname-openrc $pkgname-vpn $pkgname-vpn-openrc"
+subpackages="$pkgname-dbg $pkgname-doc $pkgname-dev $pkgname-vpn $pkgname-vpn-openrc:vpn_openrc $pkgname-openrc"
 source="https://www.kernel.org/pub/linux/network/connman/connman-$pkgver.tar.xz
 	libresolv.patch dbus-rules.patch implicit.patch fix-implicit-basename.patch
 	iwd-external-credentials.patch connman.initd connman.confd connman-vpn.initd connman-vpn.confd"
