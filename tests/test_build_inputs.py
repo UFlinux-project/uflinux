@@ -172,6 +172,23 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaises(tarfile.FilterError):
                 publisher.safe_extract(archive, Path(tmp) / "extract")
 
+    def test_publication_requires_boot_records_for_exactly_the_tested_images(self):
+        ci_spec = importlib.util.spec_from_file_location(
+            "ci_matrix", Path(builder.PROJECT) / "scripts/ci-matrix.py")
+        ci = importlib.util.module_from_spec(ci_spec)
+        ci_spec.loader.exec_module(ci)
+        expected = {}
+        for event, ref, full in (("push", "refs/tags/v0.1.0", False),
+                                 ("workflow_dispatch", "refs/heads/main", True)):
+            for job in ci.configuration(event, ref, full)["vm"]["include"]:
+                expected.setdefault(job["arch"], set()).add(job["mode"])
+        # A boot-tested image must be gated, and an untested one must not block
+        # publication on a record that CI never produces.
+        self.assertEqual(publisher.BOOT_MODES,
+                         {arch: tuple(sorted(modes)) for arch, modes in expected.items()})
+        for arch in builder.ARCHES:
+            self.assertEqual(set(publisher.boot_modes(arch)), expected.get(arch, set()), arch)
+
 
 class DesktopDependencyTests(unittest.TestCase):
     def setUp(self):

@@ -77,7 +77,7 @@ first usable frame measurements. A usable frame is recorded after backend state
 has arrived and GTK has painted, rather than at process entry. Native headless
 results are separate from emulated installed-system measurements.
 
-`vm/x86_64/{native,uefi}/verified.json` is written only after ISO boot,
+`vm/x86_64/{bios,uefi}/verified.json` is written only after ISO boot,
 installation into existing XFS/ext4/ESP or BIOS partitions, installed boot and
 unrelated-partition preservation pass. The x86_64 test requires a real graphical
 login with 512 MiB RAM, one display and no swap, then exercises all Settings pages

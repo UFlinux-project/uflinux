@@ -30,6 +30,17 @@ def selection(current, history):
     return [current, *[release for release in history if release["version"] != current["version"]][:2]]
 
 
+# Firmware modes whose installed-system boot record gates publication. Only the
+# x86_64 ISO is started in CI (see the vm matrix in scripts/ci-matrix.py), so the
+# remaining architectures ship built images without boot verification.
+BOOT_MODES = {"x86_64": ("bios", "uefi")}
+
+
+def boot_modes(arch):
+    """Boot modes that must have a verified record for a release architecture."""
+    return BOOT_MODES.get(arch, ())
+
+
 def required_in_iso(pkgname):
     """Whether the live ISO must carry a published custom package.
 
@@ -94,8 +105,7 @@ def main():
                         raise ValueError("The ISO does not contain the current custom package: " + package.name)
                 if names != ALLOWED:
                     raise ValueError("Incomplete or unexpected custom package set for " + arch)
-                modes = ["bios", "uefi"] if arch in {"x86", "x86_64"} else ["native" if arch == "ppc64le" else "uefi"]
-                for mode in modes:
+                for mode in boot_modes(arch):
                     result = json.loads((out / "vm" / arch / mode / "verified.json").read_text())
                     iso = out / "images" / arch / f"uflinux-{args.version}-{arch}.iso"
                     if not result.get("xfs_install_reboot") or result.get("iso_sha256") != sha(iso):
