@@ -51,9 +51,11 @@ nura = device_lock["nura"]
 assert re.fullmatch(r"v[0-9]{2}\.[0-9]{2}|main", nura["branch"]), "Nura must be pinned to a release branch"
 assert nura["mirror"].startswith("https://") and not nura["mirror"].endswith("/")
 assert re.fullmatch(r"[0-9a-f]{64}", nura["repository_key_sha256"])
-assert set(nura["arches"]) <= set(arches) and set(nura["index_sha256"]) == set(nura["arches"])
-for digest in nura["index_sha256"].values():
-    assert re.fullmatch(r"[0-9a-f]{64}", digest), "Nura repository indexes must be pinned by sha256"
+assert set(nura["arches"]) <= set(arches)
+# The Nura index is deliberately not pinned by hash: postmarketOS rebuilds a
+# release branch's index regularly, so device packages are checked against the
+# live index of the pinned branch instead (see scripts/check-packages.py).
+assert "index_sha256" not in nura, "The Nura repository index must not be pinned by sha256"
 # The apps repository is UFLinux's own, so it may only carry architectures that
 # ship a UFLinux release.
 apps = lock["apps"]

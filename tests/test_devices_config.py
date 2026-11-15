@@ -55,7 +55,9 @@ class DevicesConfigTests(unittest.TestCase):
     def test_only_qcom_uses_the_nura_repository(self):
         self.assertEqual([name for name, device in devices.items() if device["nura"]], ["qcs6490"])
         self.assertEqual(lock["nura"]["arches"], ["aarch64"])
-        self.assertEqual(set(lock["nura"]["index_sha256"]), {"aarch64"})
+        # The Nura index is not pinned by hash: postmarketOS rebuilds a release
+        # branch's index regularly, so only the branch is a stable input.
+        self.assertNotIn("index_sha256", lock["nura"])
 
     def test_supported_targets_ship_a_bootloader_package(self):
         for device_id, device in devices.items():

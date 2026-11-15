@@ -27,11 +27,13 @@ For a source update:
 
 Device targets are pinned in `config/devices.json` and `config/devices.lock.json`.
 The optional Nura repository is a separate distribution: when the Alpine branch is
-raised, its branch, index hash and supported architecture list have to be re-verified
-against the matching Nura release before the device stage can use it again, and the
-board package lists have to be re-checked with `scripts/check-packages.py`. Adding a
-board is a config change plus a package-availability check; nothing in the builder
-has to learn about it.
+raised, its branch and supported architecture list have to be re-verified against
+the matching Nura release before the device stage can use it again, and the
+board package lists have to be re-checked with `scripts/check-packages.py`. The
+Nura index itself is not pinned by hash: postmarketOS rebuilds a release branch's
+index regularly, so the branch is the pin and the packages are checked against the
+branch's live index. Adding a board is a config change plus a package-availability
+check; nothing in the builder has to learn about it.
 
 Replace the reserved `noreply@example.invalid` packager identity with your real
 maintainer identity before public releases. It is a syntactically valid packaging

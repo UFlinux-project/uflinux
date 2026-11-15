@@ -40,8 +40,9 @@ board device trees under `/boot/dtbs`, and a `linux.efi` zboot image that
 `systemd-boot` loads directly. The Nura `dtbloader` EFI driver is carried in
 `EFI/systemd/drivers` as well: it installs a board device tree before
 `systemd-boot` runs, which covers boards whose firmware provides none. Nura is
-used **only** as an extra aarch64 package source pinned to a specific branch and
-index hash, and only for that kernel and driver. Both are *fetched and unpacked*
+used **only** as an extra aarch64 package source pinned to a specific branch (the
+index itself is not pinned: postmarketOS rebuilds a release branch's index
+regularly), and only for that kernel and driver. Both are *fetched and unpacked*
 rather than installed: Nura ships its own `mkinitfs` replacement which conflicts
 with the Alpine one the image needs, so apk must never solve across both
 repositories at once (see "Package sources"). Because the kernel is unpacked, no
@@ -185,8 +186,9 @@ building. apk solves against every repository in that file, and Nura's
 of `cmd:mkinitfs` — with both visible, apk refuses to select any package set that
 pulls in a kernel. So Nura packages (the mainline kernel and `dtbloader` for
 `qcs6490`) are fetched with `apk fetch --stdout --repository <nura>` — the URL
-arrives as `UFLINUX_NURA_REPOSITORY` and apk resolves the file from the pinned
-index without a solver run — and unpacked with `tar` at their package paths. The
+arrives as `UFLINUX_NURA_REPOSITORY` and apk resolves the file from the branch's
+current index without a solver run — and unpacked with `tar` at their package
+paths. The
 unpacked files are ordinary rootfs content, so they land in the image without a
 Nura entry in the installed database. The trade-off is that unpacked packages get
 no triggers: the profile copies the kernel, device trees and modules into the boot
@@ -255,7 +257,7 @@ published.
 
 The device stage has unit tests for the geometry, identifiers, package set, boot
 configuration contract and the post-build disk verification, and every package name
-is checked against the live Alpine and pinned Nura indexes. The `qcs6490` image has
+is checked against the live Alpine and Nura indexes. The `qcs6490` image has
 been booted on an Arrow Dragon Q6A from a USB stick: the board's firmware reaches
 `systemd-boot` and the entry loads, but with Alpine's `linux-lts` the HDMI output
 stayed black, which is what prompted the switch to the Nura mainline kernel. The

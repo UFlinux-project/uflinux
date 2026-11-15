@@ -136,17 +136,15 @@ def check_device(device_id):
         messages.append(f"{device_id} ({arch}): {len(installed)} device packages available")
     if device["nura"]:
         arch = device["arches"][0]
+        # The Nura index is deliberately not pinned: postmarketOS rebuilds a
+        # release branch's index regularly, so the pinned branch is the stable
+        # input and the packages are checked against the branch's live index.
         url = f"{device_lock['mirror']}/{device_lock['branch']}/{arch}/APKINDEX.tar.gz"
-        with urllib.request.urlopen(url, timeout=60) as response:
-            data = response.read()
-        digest = hashlib.sha256(data).hexdigest()
-        if digest != device_lock["index_sha256"][arch]:
-            raise RuntimeError(f"{device_id}: Nura {arch} index differs from its pin ({digest})")
         found = set(re.findall(r"^P:(.+)$", index_entries(url), re.M))
         missing = set(device["nura_packages"]) - found
         if missing:
             raise RuntimeError(f"{device_id}: unavailable Nura packages: {', '.join(sorted(missing))}")
-        messages.append(f"{device_id}: pinned Nura index provides {len(device['nura_packages'])} extra packages")
+        messages.append(f"{device_id}: Nura {device_lock['branch']} index provides {len(device['nura_packages'])} extra packages")
     return messages
 
 

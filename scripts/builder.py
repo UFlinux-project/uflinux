@@ -1054,9 +1054,10 @@ class Builder:
             download_pinned(nura["repository_key"], nura["repository_key_sha256"], "sha256", key)
             (keys / name).write_bytes(key.read_bytes())
             (keys / name).chmod(0o644)
-            index = nura["index_sha256"][arch]
-            download_pinned(f"{nura['mirror']}/{nura['branch']}/{arch}/APKINDEX.tar.gz", index,
-                            "sha256", self.cache / "downloads" / f"nura-APKINDEX-{arch}.tar.gz")
+            # The Nura index is deliberately not pinned: postmarketOS rebuilds a
+            # release branch's index regularly, so the branch itself is the pin.
+            # apk fetch --repository below downloads the current index itself, so
+            # there is nothing to cache here.
         # The published repository only carries this architecture once a release
         # has been published, so build against the signed repository we just made,
         # copied in exactly as the ISO assembly stage does.
