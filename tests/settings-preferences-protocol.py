@@ -21,6 +21,25 @@ def on_output(name='HEADLESS-1'):
 def showing(expected):
     entry=on_output() or {}
     return entry.get('file')==expected['wallpapers'][0]['file'] and entry.get('fit')==expected['wallpapers'][0]['fit']
+desktop=os.environ.get('UFLINUX_DESKTOP_PID','')
+desktop_log=os.environ.get('UFLINUX_DESKTOP_LOG','')
+def died():
+    """Why the wait can never succeed, if the shell that draws it is gone.
+    A dead desktop answers --status with the null fallback forever, so without
+    this the harness burns its whole budget and reports an opaque null instead
+    of the desktop's last lines."""
+    if desktop:
+        try:
+            os.kill(int(desktop),0)
+        except PermissionError:
+            return None
+        except (OSError,ValueError):
+            tail=''
+            try:
+                tail=' | '.join(Path(desktop_log).read_text(errors='replace').splitlines()[-3:])
+            except OSError:pass
+            return 'uflinux-desktop exited while waiting for the wallpaper'+(': '+tail if tail else '')
+    return None
 def wait(predicate):
     last=None
     for _ in range(80):
@@ -28,6 +47,8 @@ def wait(predicate):
             if predicate():return
             last=drawn()
         except (GLib.Error,subprocess.SubprocessError,OSError):pass
+        dead=died()
+        if dead:raise AssertionError(dead)
         time.sleep(.1)
     raise AssertionError('Preferences or drawn wallpaper did not converge: '+json.dumps(last))
 previous=call('GetState')['appearance']

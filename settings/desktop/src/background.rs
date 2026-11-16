@@ -118,6 +118,12 @@ impl Background {
     fn sync(self: &Rc<Self>, monitors: &gio::ListModel) {
         let current: Vec<_> = (0..monitors.n_items())
             .filter_map(|index| monitors.item(index)?.downcast::<gtk::gdk::Monitor>().ok())
+            // A display whose compositor connection broke mid-hotplug keeps
+            // the old monitor objects in the list, marked invalid, until the
+            // whole list is rebuilt. Building a surface for one of those
+            // addresses a wl_output the compositor already destroyed, which
+            // the protocol answers by killing the client.
+            .filter(|monitor| monitor.is_valid())
             .collect();
         let mut changed = false;
         self.surfaces.borrow_mut().retain(|surface| {
