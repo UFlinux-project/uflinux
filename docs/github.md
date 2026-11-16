@@ -70,13 +70,12 @@ is pinned to the verified image key, rather than trusted from the network alone.
 Pages and Releases are
 separate services; this is not a cross-service atomic transaction.
 
-Rebuild inputs are attested and uploaded to the unpublished draft by architecture,
-so a publication runner does not have to hold all architectures' input caches at
-once. The final SHA256SUMS includes those assets. ISOs and the final APK repository
-are published only after every input upload and verification job succeeds.
+GitHub Releases contains ISOs, compressed device images and their checksums.
+Rebuild inputs remain available as workflow artifacts under the configured retention
+period; package inventories and test records remain in the image and VM artifacts.
 
 The repository keeps the current generation and two previous generations of
-custom APKs. A snapshot in each release supplies the next publication's history.
+custom APKs. The next publication retrieves its history from the existing Pages repository.
 Upstream packages and ISOs are not hosted on Pages. Publishing refuses a Pages
 payload over 900 MiB and an individual release asset at or above 2 GiB.
 
@@ -89,17 +88,16 @@ To verify downloads:
 ```sh
 sha256sum -c SHA256SUMS
 gh attestation verify uflinux-0.1.0-x86_64.iso --repo OWNER/REPO
-gh attestation verify uflinux-apk-repository.tar.gz --repo OWNER/REPO
 gh attestation verify uflinux-0.1.0-rpi-aarch64.img.zst --repo OWNER/REPO
 ```
 
 Device images are not listed in `SHA256SUMS`; each has its own `.img.zst.sha256`
 sidecar next to it.
 
-Download the assets named in SHA256SUMS before checking it. The repository snapshot
-contains `uflinux.ec.pub`; install it under the same name in `/etc/apk/keys` when
+Download the ISOs named in SHA256SUMS before checking it. The Pages repository
+provides `uflinux.ec.pub`; install it under the same name in `/etc/apk/keys` when
 manually configuring a client. The apps repository is signed by a separate key,
 `uflinux3.ec384.pub`, which `uflinux-release` installs and which is also published
-next to the apps index. Obtain and verify the initial key through the
-authenticated release, rather than treating a checksum downloaded beside a file
-as independent authentication.
+next to the apps index. Verify the initial key through an independently trusted
+channel, rather than treating a checksum downloaded beside a file as independent
+authentication.

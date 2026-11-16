@@ -103,13 +103,16 @@ certificate/private key. A protected iwd profile performs authentication while
 ConnMan remains the connection controller. Profiles and imported certificates
 are machine-wide and root-readable; secrets are excluded from shared snapshots
 and preferences. Forgetting a connection removes its owned certificate files.
-The Bluetooth tab talks to BlueZ directly over the session bus: adapter power,
+The Bluetooth tab appears when a Bluetooth adapter is available and talks to BlueZ
+directly over the system bus: adapter power,
 scanning, pairing, unpairing, trusting and connecting devices, with signal and
 battery where the device reports them. Pairing uses BlueZ's default agent-less
 flow, so devices requiring an exchange of I/O capabilities can still fail to
 pair. The VPN tab manages `connman-vpnd` WireGuard tunnels: importing a client
-configuration creates the tunnel through the typed `vpn-import` request, and
-each listed tunnel can be connected, disconnected or removed. Private keys stay
+configuration creates the tunnel through the typed `vpn-import` request. The VPN
+tab stays available in Settings for setup and appears in quick settings when at
+least one tunnel is configured. Each
+listed tunnel can be connected, disconnected or removed. Private keys stay
 in the daemon; shared snapshots and preferences never echo them. Hotspots,
 tethering and virtual interfaces remain outside this UI.
 

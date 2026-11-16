@@ -77,7 +77,10 @@ def main():
             history = []
             previous = Path(temporary)
             if args.previous:
-                safe_extract(args.previous, previous)
+                if Path(args.previous).is_dir():
+                    previous = Path(args.previous).resolve()
+                else:
+                    safe_extract(args.previous, previous)
                 history = json.loads((previous / "releases.json").read_text())
                 if history:
                     order = builder.chroot("apk", "version", "-t", args.version, history[0]["version"], stdout=subprocess.PIPE).stdout.decode().strip()
@@ -155,16 +158,6 @@ def main():
             size = sum(p.stat().st_size for p in pages.rglob("*") if p.is_file())
             if size > 900 * 1024**2:
                 raise ValueError("Pages repository exceeds the 900 MiB safety budget")
-            snapshot = out / "uflinux-apk-repository.tar.gz"
-            # GNU tar + gzip -n preserve deterministic metadata.
-            tar = subprocess.Popen(["tar", "--sort=name", "--mtime=@" + builder.epoch, "--owner=0", "--group=0", "--numeric-owner", "-C", str(branch), "-cf", "-", "."], stdout=subprocess.PIPE)
-            with snapshot.open("wb") as stream:
-                subprocess.run(["gzip", "-9n"], stdin=tar.stdout, stdout=stream, check=True)
-            tar.stdout.close()
-            if tar.wait():
-                raise RuntimeError("Snapshot archive creation failed")
-            assets = [snapshot, *out.glob("images/*/*.iso"), *out.glob("metadata/*/*.spdx.json")]
-            (out / "SHA256SUMS").write_text("".join(sha(p) + "  " + p.name + "\n" for p in sorted(assets)))
         return 0
     finally:
         (builder.root / "var/lib/uflinux/keys" / SIGNING_KEY).unlink(missing_ok=True)

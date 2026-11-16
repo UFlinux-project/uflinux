@@ -60,7 +60,7 @@ pub fn tabs(app: &Rc<App>, parent: &gtk::Box, surface: Surface, compact: bool) {
                 || s.network.wifi_software_blocked,
             s.network.technologies.iter().any(|t| t.kind == "ethernet"),
             s.bluetooth.available,
-            s.vpn.available,
+            s.vpn.available && (matches!(surface, Surface::Full) || !s.vpn.tunnels.is_empty()),
         ];
         let Some(app) = weak.upgrade() else {
             return;

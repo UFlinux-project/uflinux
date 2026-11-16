@@ -293,44 +293,9 @@ jobs:
           VERSION: ${{ needs.checks.outputs.version }}
           GH_TOKEN: ${{ github.token }}
 
-  release-inputs:
-    needs: [checks, draft]
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix: ${{ fromJSON(needs.checks.outputs.matrix) }}
-    runs-on: ubuntu-26.04
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    env:
-      VERSION: ${{ needs.checks.outputs.version }}
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: inputs-${{ matrix.arch }}
-          path: out/inputs
-      - run: python3 scripts/release-inputs.py --arch '${{ matrix.arch }}' --version "$VERSION"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: out/uflinux-*.tar.gz
-      - name: Upload inputs to the unpublished draft
-        run: gh release upload "v$VERSION" --clobber out/uflinux-*.tar.gz
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: inputs-manifest-${{ matrix.arch }}
-          retention-days: 7
-          path: out/SHA256SUMS-*-inputs
-          overwrite: true
-
   publish:
     if: needs.checks.outputs.release == 'true'
-    needs: [checks, images, vm, release-inputs]
+    needs: [checks, images, vm, draft]
     runs-on: ubuntu-26.04
     environment:
       name: github-pages
@@ -362,11 +327,6 @@ jobs:
           pattern: vm-*
           merge-multiple: true
           path: out/vm
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: inputs-manifest-*
-          merge-multiple: true
-          path: out
       - run: python3 scripts/fetch-previous.py
       - name: Build complete signed APK repository
         env:
@@ -374,7 +334,7 @@ jobs:
           APK_SIGNING_PUBLIC_KEY: ${{ secrets.APK_SIGNING_PUBLIC_KEY }}
         run: |
           previous=()
-          if [ -f out/previous/uflinux-apk-repository.tar.gz ]; then previous+=(--previous out/previous/uflinux-apk-repository.tar.gz); fi
+          if [ -d out/previous/repository ]; then previous+=(--previous out/previous/repository); fi
           sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY python3 scripts/publish-repository.py --version "$VERSION" "${previous[@]}"
       - name: Check fresh clients and retained-version upgrades through the Pages layout
         run: |
@@ -384,8 +344,6 @@ jobs:
         with:
           subject-path: |
             out/images/*/*.iso
-            out/uflinux-*.tar.gz
-            out/metadata/*/*.spdx.json
             out/SHA256SUMS
       - run: python3 scripts/release.py prepare --version "$VERSION"
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
@@ -433,7 +391,7 @@ jobs:
           pattern: device-images-*
           merge-multiple: true
           path: out
-      - name: Upload device images to the draft release
+      - name: Upload device images to the release
         run: |
           shopt -s nullglob
           assets=(out/devices/*/*.img.zst out/devices/*/*.img.zst.sha256)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Archive audit records and regenerate the checksums for all release assets."""
+"""Archive audit records and generate checksums for release ISOs."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -20,16 +20,12 @@ with archive.open("wb") as stream:
 tar.stdout.close()
 if tar.wait():
     raise RuntimeError("Failed to create build record archive")
-assets = [*out.glob("images/*/*.iso"), *out.glob("uflinux-*.tar.gz"), *out.glob("metadata/*/*.spdx.json")]
+assets = sorted(out.glob("images/*/*.iso"))
+if not assets:
+    raise ValueError("No release ISOs found")
 if len({p.name for p in assets}) != len(assets):
     raise ValueError("Release asset basenames must be unique")
 if any(p.stat().st_size >= 2 * 1024**3 for p in assets):
     raise ValueError("An asset exceeds GitHub Releases' per-file size limit")
 checksums = "".join(sha(p) + "  " + p.name + "\n" for p in sorted(assets))
-for manifest in sorted(out.glob("SHA256SUMS-*-inputs")):
-    for line in manifest.read_text().splitlines():
-        digest, name = line.split("  ", 1)
-        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) or Path(name).name != name:
-            raise ValueError("Invalid input checksum manifest")
-        checksums += line + "\n"
 (out / "SHA256SUMS").write_text(checksums)

@@ -40,11 +40,15 @@ impl Client {
         });
         // BlueZ reports everything through these three signals; subscribing
         // narrowly (instead of every org.bluez signal) keeps reloads rare.
-        for member in ["PropertiesChanged", "InterfacesAdded", "InterfacesRemoved"] {
+        for (interface, member) in [
+            ("org.freedesktop.DBus.Properties", "PropertiesChanged"),
+            ("org.freedesktop.DBus.ObjectManager", "InterfacesAdded"),
+            ("org.freedesktop.DBus.ObjectManager", "InterfacesRemoved"),
+        ] {
             let weak = Rc::downgrade(&this);
             this.bus.signal_subscribe(
                 Some(NAME),
-                Some("org.freedesktop.DBus.Properties"),
+                Some(interface),
                 Some(member),
                 None,
                 None,
@@ -106,6 +110,7 @@ impl Client {
         )
         .await;
         if owner.is_err() {
+            self.adapters.borrow_mut().clear();
             *self.view.borrow_mut() = Bluetooth::default();
             self.publish();
             return;
@@ -133,10 +138,7 @@ impl Client {
         )>() else {
             return Err("Invalid BlueZ object list".into());
         };
-        let mut view = Bluetooth {
-            available: true,
-            ..Bluetooth::default()
-        };
+        let mut view = Bluetooth::default();
         let mut adapters = Vec::new();
         for (path, interfaces) in objects.0 {
             let path = path.to_string();
@@ -164,6 +166,7 @@ impl Client {
                 battery,
             });
         }
+        view.available = !adapters.is_empty();
         view.devices.sort_by(|a, b| {
             (b.connected, b.paired, a.name.to_lowercase()).cmp(&(
                 a.connected,

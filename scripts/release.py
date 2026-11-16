@@ -24,7 +24,7 @@ else:
                      "Live login: live / live. The live account has local administrative access. Installed systems use a new password and have no live autologin.\n\n"
                      "Device images are raw GPT disk images compressed with zstd. Uncompress and write them to an SD card or eMMC with `zstd -d < image.img.zst | sudo dd of=/dev/sdX bs=8M oflag=direct status=progress`. The root partition grows to fill the media on first boot. Images boot straight to the login screen and ship no regular user: log in as root (empty password), create an account with `adduser -G wheel,audio,video,netdev,input user` and set a root password with `passwd` before exposing the board to a network.\n\n"
                      "The x86_64 ISO passed the configured QEMU boot checks in both BIOS and UEFI mode, including XFS installation and reboot. Packages and ISOs for the other release architectures are built but not boot-tested. This is virtual-machine coverage; physical hardware compatibility depends on its firmware and graphics support. Device images marked experimental are published as a technology preview.\n\n"
-                     "Verify SHA256SUMS and GitHub artifact attestations before use. The signed APK repository snapshot contains custom packages and the public signing key. Build records include package inventories, SPDX metadata and test logs.\n")
+                     "Verify SHA256SUMS or the device image's checksum and GitHub artifact attestations before use.\n")
     result = subprocess.run(["gh", "release", "view", tag, "--repo", repository, "--json", "isDraft"], capture_output=True, text=True)
     if result.returncode:
         if "release not found" not in result.stderr.lower() and "HTTP 404" not in result.stderr:
@@ -34,6 +34,12 @@ else:
     elif not json.loads(result.stdout)["isDraft"]:
         raise RuntimeError("Refusing to modify an already published release")
     if args.operation == "prepare":
-        assets = [*Path("out").glob("images/*/*.iso"), *Path("out").glob("uflinux-*.tar.gz"),
-                  *Path("out").glob("metadata/*/*.spdx.json"), Path("out/SHA256SUMS")]
+        subprocess.run(["gh", "release", "edit", tag, "--repo", repository, "--notes-file", str(notes)], check=True)
+        assets = [*Path("out").glob("images/*/*.iso"), Path("out/SHA256SUMS")]
+        existing = subprocess.run(["gh", "release", "view", tag, "--repo", repository, "--json", "assets"],
+                                  capture_output=True, text=True, check=True)
+        for asset in json.loads(existing.stdout)["assets"]:
+            name = asset["name"]
+            if not (name.endswith((".iso", ".img.zst", ".img.zst.sha256")) or name == "SHA256SUMS"):
+                subprocess.run(["gh", "release", "delete-asset", tag, name, "--repo", repository, "--yes"], check=True)
         subprocess.run(["gh", "release", "upload", tag, "--repo", repository, "--clobber", *map(str, assets)], check=True)
