@@ -419,6 +419,8 @@ jobs:
     runs-on: ubuntu-26.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       VERSION: ${{ needs.checks.outputs.version }}
       GH_TOKEN: ${{ github.token }}

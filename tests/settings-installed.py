@@ -120,15 +120,15 @@ closed_pss = pss(desktop)
 with Path('/run/uflinux-settings-ui.log').open('w') as log:
     frontend = subprocess.Popen(['uflinux-settings', '--page', 'network'], env=environment,
                                 preexec_fn=demote, stdout=log, stderr=log)
-for _ in range(60):
+for _ in range(180):
     assert frontend.poll() is None, 'Settings exited during startup'
-    try:
-        gui_pid()
+    # A process can exist before GApplication registers on the session bus.
+    # Wait for the actual window to paint before sending it remote commands.
+    if 'UFLINUX_FIRST_FRAME_MS=' in Path('/run/uflinux-settings-ui.log').read_text():
         break
-    except AssertionError:
-        time.sleep(.5)
+    time.sleep(.5)
 else:
-    raise AssertionError('Settings did not start')
+    raise AssertionError('Settings did not render its first frame')
 for page in ('network', 'displays', 'audio', 'power', 'default-apps', 'datetime', 'appearance',
              'screen-capture', 'about'):
     run('uflinux-settings', '--page', page)
