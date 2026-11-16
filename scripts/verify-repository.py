@@ -66,7 +66,11 @@ def main():
             source = '/published'
         else:
             source = repository
-        builder.put('etc/apk/repositories', source + '\n')
+        repositories = root / 'etc/apk/repositories'
+        # Keep Alpine main and community available for dependencies of the
+        # packages in the repository under test.
+        with repositories.open('a') as configured:
+            configured.write(source + '\n')
         # A fresh root and cache ensure an already-trusted index cannot hide a
         # missing key. Keep upstream keys, but deliberately withhold our key.
         rejected = subprocess.run(['chroot', str(root), 'apk', '--no-cache', 'update'], capture_output=True, text=True)
