@@ -21,8 +21,10 @@ stable branch so security revisions can be incorporated. Their resolved package
 versions and hashes are recorded; a pinned minirootfs does not freeze those repos.
 
 The `apps` section pins UFLinux's own apps repository, which publishes
-`uflinux-files`: its URL, signing key, key hash, indexed architectures and
-per-architecture index hashes. `scripts/check.py` verifies the pins and that
+`uflinux-files`: its URL, signing key, key hash and indexed architectures. The
+index itself is not pinned by hash: the repository is republished whenever its
+packages are rebuilt, so the URL is the pin (the same policy as the Nura suite).
+`scripts/check.py` verifies the pins and that
 `aports/uflinux/uflinux3.ec384.pub` matches the published key, and
 `scripts/check-packages.py` re-checks the live indexes. Architectures the apps
 repository does not index never list it, because apk fails on an unreachable

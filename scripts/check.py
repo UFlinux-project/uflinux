@@ -62,9 +62,12 @@ apps = lock["apps"]
 assert apps["url"].startswith("https://") and not apps["url"].endswith("/")
 assert apps["repository_key"] == apps["url"] + "/uflinux3.ec384.pub"
 assert re.fullmatch(r"[0-9a-f]{64}", apps["repository_key_sha256"])
-assert set(apps["arches"]) <= set(arches) and set(apps["index_sha256"]) == set(apps["arches"])
-for digest in apps["index_sha256"].values():
-    assert re.fullmatch(r"[0-9a-f]{64}", digest), "Apps repository indexes must be pinned by sha256"
+assert set(apps["arches"]) <= set(arches)
+# Like the Nura suite, the apps index is deliberately not pinned by hash: the
+# repository is republished whenever its packages are rebuilt, so the URL is the
+# stable input and uflinux-files is checked against the live index instead (see
+# scripts/check-packages.py).
+assert "index_sha256" not in apps, "The apps repository index must not be pinned by sha256"
 # uflinux-release ships the copy of the key that apk trusts on disk, so it has to
 # be byte-identical to the key published next to the repository index.
 assert hashlib.sha256((ROOT / "aports/uflinux/uflinux3.ec384.pub").read_bytes()).hexdigest() \

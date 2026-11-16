@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Check declared desktop/installer dependencies against every target repository."""
 import concurrent.futures
-import hashlib
 import io
 import json
 from pathlib import Path
@@ -95,21 +94,19 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
 
 
 # uflinux-desktop-meta depends on uflinux-files, which only the apps repository
-# carries, so its pinned index has to stay reachable and keep providing it.
+# carries, so its index has to stay reachable and keep providing it. The index
+# is deliberately not pinned by hash: the repository is republished whenever its
+# packages are rebuilt, so the URL itself is the stable input and the packages
+# are checked against the live index (same policy as the Nura suite).
 apps = lock["apps"]
 
 
 def check_apps(arch):
     url = f"{apps['url']}/{arch}/APKINDEX.tar.gz"
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data = response.read()
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != apps["index_sha256"][arch]:
-        raise RuntimeError(f"{arch}: apps index differs from its pin ({digest})")
     found = set(re.findall(r"^P:(.+)$", index_entries(url), re.M))
     if "uflinux-files" not in found:
         raise RuntimeError(f"{arch}: the apps index no longer provides uflinux-files")
-    return f"{arch}: pinned apps index provides {len(found)} packages"
+    return f"{arch}: apps index provides {len(found)} packages"
 
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:

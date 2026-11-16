@@ -1045,8 +1045,10 @@ class Builder:
             download_pinned(apps["repository_key"], apps["repository_key_sha256"], "sha256", key)
             (keys / APPS_KEY).write_bytes(key.read_bytes())
             (keys / APPS_KEY).chmod(0o644)
-            download_pinned(f"{apps['url']}/{arch}/APKINDEX.tar.gz", apps["index_sha256"][arch],
-                            "sha256", self.cache / "downloads" / f"apps-APKINDEX-{arch}.tar.gz")
+            # The apps index is deliberately not pinned: the repository is
+            # republished whenever its packages are rebuilt, so the URL itself is
+            # the pin. apk fetch below downloads the current index itself, so
+            # there is nothing to cache here.
         if nura:
             # The key file name is what apk records in the signature check.
             name = urllib.parse.urlparse(nura["repository_key"]).path.rsplit("/", 1)[-1]

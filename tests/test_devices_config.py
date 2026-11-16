@@ -58,6 +58,10 @@ class DevicesConfigTests(unittest.TestCase):
         # The Nura index is not pinned by hash: postmarketOS rebuilds a release
         # branch's index regularly, so only the branch is a stable input.
         self.assertNotIn("index_sha256", lock["nura"])
+        # The apps index is not pinned either: the repository is republished
+        # whenever its packages are rebuilt, so only the URL is a stable input.
+        apps = json.loads((root / "config/sources.lock.json").read_text())["apps"]
+        self.assertNotIn("index_sha256", apps)
 
     def test_supported_targets_ship_a_bootloader_package(self):
         for device_id, device in devices.items():
