@@ -246,6 +246,22 @@ pub fn datetime(app: &Rc<App>, parent: &gtk::Box) {
     parent.append(&button(app, "Refresh clock status", || Action::Refresh));
 }
 pub fn appearance(app: &Rc<App>, parent: &gtk::Box) {
+    let weak = Rc::downgrade(app);
+    toggle(
+        app,
+        Surface::Full,
+        parent,
+        "Window previews",
+        |s| s.appearance.window_previews,
+        move |enabled| {
+            let mut appearance = weak
+                .upgrade()
+                .map(|app| app.appearance())
+                .unwrap_or_default();
+            appearance.window_previews = enabled;
+            Action::SetAppearance { appearance }
+        },
+    );
     parent.append(&description("Choose a local wallpaper. Images are limited to 16 megapixels and 32 MiB to keep memory use predictable."));
     let mut outputs = vec![("*".to_string(), "All displays".to_string())];
     outputs.extend(
@@ -382,10 +398,13 @@ pub fn appearance(app: &Rc<App>, parent: &gtk::Box) {
             .sort_by_key(|w| if w.output == "*" { 0 } else { 1 });
         Action::SetAppearance { appearance }
     }));
-    parent.append(&button(app, "Restore default wallpaper", || {
-        Action::SetAppearance {
-            appearance: Appearance::default(),
+    let weak = Rc::downgrade(app);
+    parent.append(&button(app, "Restore default wallpaper", move || {
+        let mut appearance = Appearance::default();
+        if let Some(app) = weak.upgrade() {
+            appearance.window_previews = app.appearance().window_previews;
         }
+        Action::SetAppearance { appearance }
     }));
 }
 pub fn about(app: &Rc<App>, parent: &gtk::Box) {

@@ -4,6 +4,7 @@ mod background;
 #[path = "../../start-menu/src/catalog.rs"]
 mod catalog;
 mod clock_watch;
+mod thumbnails;
 #[path = "../../start-menu/src/menu.rs"]
 mod menu;
 mod notifications;

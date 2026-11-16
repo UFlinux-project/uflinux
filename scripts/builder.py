@@ -144,6 +144,7 @@ def device_environment(name, device, arch, version, root_partuuid, esp):
     """Contract consumed by profiles/device-rootfs.sh."""
     env = {"UFLINUX_DEVICE": name, "UFLINUX_ARCH": arch,
            "UFLINUX_BOOT": device["boot"], "UFLINUX_SERIAL": device["serial"],
+           "UFLINUX_INITRAMFS_COMPRESSION": device.get("initramfs_compression", "zstd"),
            "UFLINUX_CMDLINE": device["cmdline"], "UFLINUX_VERSION": version,
            "UFLINUX_ROOTFS": device.get("rootfs", "ext4"),
            "UFLINUX_ROOT_PARTUUID": root_partuuid, "UFLINUX_ESP": esp,
@@ -267,10 +268,15 @@ def device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, epoch):
 
 
 def device_verify_image(image, device, arch, uuids, layout):
-    """Check the assembled disk: geometry, boot files and a Zstd initramfs."""
+    """Check the assembled disk, including the board's initramfs compression."""
     rootfs = device.get("rootfs", "ext4")
     if rootfs not in ROOTFS_SIGNATURES:
         raise ValueError(f"{image}: unknown root filesystem {rootfs}")
+    compression = device.get("initramfs_compression", "zstd")
+    signatures = {"gzip": (b"\x1f\x8b\x08", "gzip stream"),
+                  "zstd": (b"\x28\xb5\x2f\xfd", "Zstandard frame")}
+    if compression not in signatures:
+        raise ValueError(f"{image}: unsupported initramfs compression {compression}")
     actual = device_layout(image)
     for name, expected in (("ESP", layout["esp_start"]), ("ROOT", layout["root_start"])):
         found = (actual["esp"] if name == "ESP" else actual["root"])["start"]
@@ -292,8 +298,9 @@ def device_verify_image(image, device, arch, uuids, layout):
         boot[name.split("/", 1)[1] + "_bytes"] = path.stat().st_size
     with (stage / "boot/initramfs").open("rb") as handle:
         magic = handle.read(4)
-    if magic != b"\x28\xb5\x2f\xfd":
-        raise ValueError(f"{image}: the initramfs is not a Zstandard frame")
+    signature, description = signatures[compression]
+    if not magic.startswith(signature):
+        raise ValueError(f"{image}: the initramfs is not a {description}")
     # The dict literal form would look up EFI_SUFFIX even for boards that do
     # not boot through EFI, and riscv64 has no EFI binary name at all.
     if device["boot"] == "efi":
@@ -307,7 +314,7 @@ def device_verify_image(image, device, arch, uuids, layout):
     if not (stage / bootloader).is_file():
         raise ValueError(f"{image}: the ESP has no {bootloader}")
     remove_tree(stage)
-    return {"device_image_format": "gpt-" + rootfs, "initramfs_compression": "zstd",
+    return {"device_image_format": "gpt-" + rootfs, "initramfs_compression": compression,
             "arch": arch, "boot": device["boot"], "disk_guid": actual["disk"],
             "partitions": {"esp": {"start": layout["esp_start"], "size": layout["esp_size"],
                                    "uuid": uuids["esp"]},

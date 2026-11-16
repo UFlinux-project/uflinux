@@ -109,6 +109,8 @@ struct Surface {
     clock_time: gtk::Label,
 }
 pub struct Panel {
+    previews_enabled: std::cell::Cell<bool>,
+    thumbnail_cache: RefCell<HashMap<WindowId, (std::time::Instant, crate::thumbnails::Image)>>,
     app: Weak<App>,
     surfaces: RefCell<Vec<Surface>>,
     taskbar: RefCell<Taskbar>,
@@ -122,8 +124,16 @@ pub struct Panel {
     task_drag: RefCell<Option<String>>,
 }
 impl Panel {
+    pub fn set_previews_enabled(&self, enabled: bool) {
+        if self.previews_enabled.replace(enabled) != enabled {
+            self.hide_task_menus(None);
+            self.thumbnail_cache.borrow_mut().clear();
+        }
+    }
     pub fn new(app: &Rc<App>) -> Rc<Self> {
         let panel = Rc::new(Self {
+            previews_enabled: std::cell::Cell::new(true),
+            thumbnail_cache: RefCell::new(HashMap::new()),
             app: Rc::downgrade(app),
             surfaces: RefCell::new(Vec::new()),
             taskbar: RefCell::new(Taskbar::new(
@@ -510,6 +520,18 @@ impl Panel {
             }
         }
         self.window_ids.replace(ids);
+        let windows = self
+            .taskbar
+            .borrow()
+            .groups()
+            .into_iter()
+            .flat_map(|g| g.windows)
+            .collect::<Vec<_>>();
+        self.thumbnail_cache.borrow_mut().retain(|id, (_, image)| {
+            windows
+                .iter()
+                .any(|w| w.id == *id && w.app_id == image.app_id && w.title == image.title)
+        });
         self.render();
     }
     fn render(self: &Rc<Self>) {
@@ -832,6 +854,10 @@ impl Panel {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
             let activate =
                 gtk::Button::with_label(if title.is_empty() { &group.name } else { title });
+            if let Some(label) = activate.child().and_downcast::<gtk::Label>() {
+                label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                label.set_max_width_chars(28);
+            }
             activate.set_hexpand(true);
             activate.set_halign(gtk::Align::Fill);
             activate.style_context().add_class("flat");
@@ -965,6 +991,25 @@ impl Panel {
         title.style_context().add_class("uflinux-task-heading");
         header.append(&title);
         column.append(&header);
+        let cards = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let available_width = self
+            .surfaces
+            .borrow()
+            .iter()
+            .find(|s| s.buttons.values().any(|b| b.preview == *card))
+            .map(|s| (s.monitor.geometry().width() - 32).clamp(160, 1100))
+            .unwrap_or(800);
+        let scroll = gtk::ScrolledWindow::builder()
+            .child(&cards)
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .min_content_width(available_width.min(260))
+            .max_content_width(available_width)
+            .propagate_natural_width(true)
+            .build();
+        column.append(&scroll);
+        let mut pictures = Vec::new();
         for window in &group.windows {
             let window_id = window.id;
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -973,6 +1018,10 @@ impl Panel {
             } else {
                 &window.title
             });
+            if let Some(label) = activate.child().and_downcast::<gtk::Label>() {
+                label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                label.set_max_width_chars(28);
+            }
             activate.set_hexpand(true);
             activate.set_halign(gtk::Align::Fill);
             activate.set_tooltip_text(Some(&window.title));
@@ -988,6 +1037,44 @@ impl Panel {
                     }
                 }
             });
+            let tile = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            tile.set_width_request(260);
+            if self.previews_enabled.get() {
+                let picture = gtk::Picture::new();
+                picture.set_size_request(256, 144);
+                picture.set_content_fit(gtk::ContentFit::Contain);
+                picture.set_can_shrink(true);
+                picture.update_property(&[gtk::accessible::Property::Label(&format!(
+                    "Preview of {}",
+                    window.title
+                ))]);
+                let fallback = gtk::Image::new();
+                fallback.set_pixel_size(48);
+                if let Ok(icon) = gio::Icon::for_string(&group.icon) {
+                    fallback.set_from_gicon(&icon);
+                } else {
+                    fallback.set_icon_name(Some("application-x-executable"));
+                }
+                let stack = gtk::Stack::new();
+                stack.add_named(&fallback, Some("fallback"));
+                stack.add_named(&picture, Some("image"));
+                stack.set_visible_child_name("fallback");
+                let weak_stack = stack.downgrade();
+                picture.connect_paintable_notify(move |picture| {
+                    if let Some(stack) = weak_stack.upgrade() {
+                        stack.set_visible_child_name(if picture.paintable().is_some() {
+                            "image"
+                        } else {
+                            "fallback"
+                        });
+                    }
+                });
+                let image_button = gtk::Button::builder().child(&stack).build();
+                let target = activate.clone();
+                image_button.connect_clicked(move |_| target.emit_clicked());
+                tile.append(&image_button);
+                pictures.push((window.clone(), picture.downgrade()));
+            }
             row.append(&activate);
             let close = gtk::Button::from_icon_name("window-close-symbolic");
             close.set_tooltip_text(Some("Close window"));
@@ -1003,7 +1090,164 @@ impl Panel {
                 }
             });
             row.append(&close);
-            column.append(&row);
+            tile.append(&row);
+            cards.append(&tile);
+        }
+        if !pictures.is_empty() {
+            let weak = Rc::downgrade(self);
+            let content = column.downgrade();
+            let scroll = scroll.downgrade();
+            let popup = card.downgrade();
+            // Each popup owns its worker; unmapping cancels it independently of
+            // another popup opening during deferred teardown.
+            let request = Rc::new(RefCell::new(None::<crate::thumbnails::Request>));
+            let cancel = request.clone();
+            let cache_owner = Rc::downgrade(self);
+            column.connect_unmap(move |_| {
+                cancel.borrow_mut().take();
+                let owner = cache_owner.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_secs(30), move || {
+                    if let Some(panel) = owner.upgrade() {
+                        panel
+                            .thumbnail_cache
+                            .borrow_mut()
+                            .retain(|_, (at, _)| at.elapsed().as_secs() < 30);
+                    }
+                });
+            });
+            glib::spawn_future_local(async move {
+                let mut receiver = None::<async_channel::Receiver<crate::thumbnails::Image>>;
+                let mut active = Vec::new();
+                let paint = |picture: &gtk::Picture, image: &crate::thumbnails::Image| {
+                    let bytes = glib::Bytes::from_owned(image.pixels.clone());
+                    let texture = gtk::gdk::MemoryTexture::new(
+                        image.width,
+                        image.height,
+                        gtk::gdk::MemoryFormat::R8g8b8a8Premultiplied,
+                        &bytes,
+                        image.width as usize * 4,
+                    );
+                    picture.set_paintable(Some(&texture));
+                };
+                loop {
+                    glib::timeout_future(std::time::Duration::from_millis(100)).await;
+                    let (Some(panel), Some(content), Some(scroll)) =
+                        (weak.upgrade(), content.upgrade(), scroll.upgrade())
+                    else {
+                        break;
+                    };
+                    if !content.is_mapped() || !panel.previews_enabled.get() {
+                        break;
+                    }
+                    let all = panel
+                        .taskbar
+                        .borrow()
+                        .groups()
+                        .into_iter()
+                        .flat_map(|g| g.windows)
+                        .collect::<Vec<_>>();
+                    if pictures.iter().any(|(window, _)| {
+                        !all.iter().any(|w| {
+                            w.id == window.id
+                                && w.app_id == window.app_id
+                                && w.title == window.title
+                        })
+                    }) {
+                        if let Some(popup) = popup.upgrade() {
+                            popup.popdown();
+                        }
+                        break;
+                    }
+                    let valid = |window: &uflinux_desktop::taskbar::Window| {
+                        all.iter().any(|w| {
+                            w.id == window.id
+                                && w.app_id == window.app_id
+                                && w.title == window.title
+                        }) && all
+                            .iter()
+                            .filter(|w| w.app_id == window.app_id && w.title == window.title)
+                            .count()
+                            == 1
+                    };
+                    let mut visible = Vec::new();
+                    for (window, picture) in &pictures {
+                        let Some(picture) = picture.upgrade() else {
+                            continue;
+                        };
+                        if !valid(window) {
+                            picture.set_paintable(None::<&gtk::gdk::Texture>);
+                            continue;
+                        }
+                        if picture
+                            .parent()
+                            .and_then(|stack| stack.compute_bounds(&scroll))
+                            .is_some_and(|r| {
+                                r.x() < scroll.width() as f32 && r.x() + r.width() > 0.0
+                            })
+                        {
+                            visible.push(window.clone());
+                            if let Some((at, image)) = panel
+                                .thumbnail_cache
+                                .borrow_mut()
+                                .get_mut(&window.id)
+                                .filter(|(at, image)| {
+                                    at.elapsed().as_secs() < 30
+                                        && image.app_id == window.app_id
+                                        && image.title == window.title
+                                })
+                            {
+                                *at = std::time::Instant::now();
+                                if picture.paintable().is_none() {
+                                    paint(&picture, image);
+                                }
+                            }
+                        } else {
+                            picture.set_paintable(None::<&gtk::gdk::Texture>);
+                        }
+                    }
+                    let ids = visible.iter().map(|w| w.id).collect::<Vec<_>>();
+                    if ids != active {
+                        request.borrow_mut().take();
+                        receiver = None;
+                        if !visible.is_empty() {
+                            let (worker, rx) = crate::thumbnails::start(visible);
+                            request.replace(Some(worker));
+                            receiver = Some(rx);
+                        }
+                        active = ids;
+                    }
+                    if let Some(rx) = &receiver {
+                        while let Ok(image) = rx.try_recv() {
+                            if let Some((window, picture)) = pictures.iter().find(|(w, _)| {
+                                w.id == image.id
+                                    && w.app_id == image.app_id
+                                    && w.title == image.title
+                            }) {
+                                if valid(window) {
+                                    if let Some(picture) = picture.upgrade() {
+                                        paint(&picture, &image);
+                                    }
+                                    let mut cache = panel.thumbnail_cache.borrow_mut();
+                                    cache.retain(|_, (at, _)| at.elapsed().as_secs() < 30);
+                                    while cache.len() >= 64 {
+                                        if let Some(id) = cache
+                                            .iter()
+                                            .min_by_key(|(_, (at, _))| *at)
+                                            .map(|(id, _)| *id)
+                                        {
+                                            cache.remove(&id);
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    cache.insert(image.id, (std::time::Instant::now(), image));
+                                }
+                            }
+                        }
+                    }
+                }
+                request.borrow_mut().take();
+            });
         }
         // The pointer has to be able to cross from the task button into the
         // card, so the card gets its own copy of the leave countdown.

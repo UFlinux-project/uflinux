@@ -377,6 +377,9 @@ impl App {
     /// Repaints the wallpaper with the appearance the service published and
     /// reports what ended up on screen.
     fn apply_appearance(&self) {
+        if let Some(panel) = self.panel.borrow().as_ref() {
+            panel.set_previews_enabled(self.quick.appearance().window_previews);
+        }
         if let Some(background) = self.background.borrow().as_ref() {
             background.set(self.quick.appearance());
         }

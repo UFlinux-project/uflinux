@@ -17,7 +17,8 @@ static void global(void *data, struct wl_registry *registry, uint32_t id, const 
 static void removed(void *data,struct wl_registry *registry,uint32_t id) {(void)data;(void)registry;(void)id;}
 static uint32_t now(void) {struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return (uint32_t)(t.tv_sec*1000+t.tv_nsec/1000000);}
 int main(int argc,char **argv) {
-    if (argc!=7) {fputs("usage: pointer-driver x0 y0 x1 y1 width height\n",stderr);return 2;}
+    if (argc!=7 && argc!=8) {fputs("usage: pointer-driver x0 y0 x1 y1 width height [hover]\n",stderr);return 2;}
+    if (argc==8 && strcmp(argv[7],"hover")) return 2;
     uint32_t coordinates[6];
     for(int i=0;i<6;i++){char *end;long n=strtol(argv[i+1],&end,10);if(*end||n<0||n>100000)return 2;coordinates[i]=(uint32_t)n;}
     if(!coordinates[4]||!coordinates[5])return 2;
@@ -28,6 +29,8 @@ int main(int argc,char **argv) {
     struct zwlr_virtual_pointer_v1 *pointer=zwlr_virtual_pointer_manager_v1_create_virtual_pointer(manager,NULL);
     zwlr_virtual_pointer_v1_motion_absolute(pointer,now(),coordinates[0],coordinates[1],coordinates[4],coordinates[5]);
     zwlr_virtual_pointer_v1_frame(pointer);wl_display_roundtrip(display);usleep(150000);
+    /* Keep this device alive while the caller inspects a hover popup. */
+    if (argc==8) {sleep(30);goto done;}
     /* Activate the client before dragging; compositors may consume its first click. */
     zwlr_virtual_pointer_v1_button(pointer,now(),BTN_LEFT,WL_POINTER_BUTTON_STATE_PRESSED);
     zwlr_virtual_pointer_v1_frame(pointer);wl_display_roundtrip(display);

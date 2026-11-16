@@ -37,7 +37,13 @@ patched for the platform's display, so HDMI stays black. The image therefore
 runs the mainline kernel from Nura (postmarketOS),
 `linux-postmarketos-qcom-sc7280`, which ships the Qualcomm drivers built in, the
 board device trees under `/boot/dtbs`, and a `linux.efi` zboot image that
-`systemd-boot` loads directly. The Nura `dtbloader` EFI driver is carried in
+`systemd-boot` loads directly. This kernel requires a **gzip initramfs**:
+the inspected `7.0.8-r0` package enables `CONFIG_RD_GZIP` but disables
+`CONFIG_RD_ZSTD`. Using the ISO's Zstandard setting prevents the kernel from
+unpacking the early userspace, including the firmware and display modules.
+`qcs6490` therefore sets `initramfs_compression: gzip`; other boards default to
+Zstandard. See [the boot investigation](qcs6490-boot-investigation.md) for the
+package evidence and diagnostics. The Nura `dtbloader` EFI driver is carried in
 `EFI/systemd/drivers` as well: it installs a board device tree before
 `systemd-boot` runs, which covers boards whose firmware provides none. Nura is
 used **only** as an extra aarch64 package source pinned to a specific branch (the
@@ -123,7 +129,9 @@ live ISO's squashfs modloop. Passing the version is also what lets the Alpine
 `mkinitfs` build an initramfs for the unpacked Nura kernel: it only reads
 `/lib/modules/<version>` and its `modules.dep`, which for that kernel is the
 symlink to the merged-usr `/usr/lib/modules` created in the profile. It is
-verified to be a Zstandard frame.
+verified against the board's `initramfs_compression` setting (gzip for
+`qcs6490`, Zstandard by default). This is independent of the `.img.zst`
+compression used to distribute the complete disk image.
 
 mkinitfs collects firmware by scanning the `.ko` files it copies into the
 initramfs, so firmware needed by a driver that is **built into** the kernel has

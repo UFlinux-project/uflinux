@@ -1,5 +1,6 @@
 """Device disk images are laid out, described and checked deterministically."""
 import contextlib
+import gzip
 import io
 import json
 from pathlib import Path
@@ -136,6 +137,7 @@ class DeviceRootfsTests(unittest.TestCase):
                          "01234567-89AB-4CDE-8F01-23456789ABCD")
         self.assertEqual(env["UFLINUX_ESP"], "/device-esp")
         self.assertEqual(env["UFLINUX_ROOTFS"], "f2fs")
+        self.assertEqual(env["UFLINUX_INITRAMFS_COMPRESSION"], "zstd")
         self.assertNotIn("UFLINUX_DTB", env)
         self.assertNotIn("UFLINUX_NURA_PACKAGES", env)
         self.assertNotIn("UFLINUX_INITRAMFS_FILES", env)
@@ -146,6 +148,8 @@ class DeviceRootfsTests(unittest.TestCase):
                          "linux-postmarketos-qcom-sc7280 dtbloader")
         self.assertEqual(qcom["UFLINUX_NURA_REPOSITORY"], device_nura_repository())
         self.assertEqual(qcom["UFLINUX_DTBLOADER"], "/usr/share/dtbloader/dtbloader.efi")
+        # The actual Nura 7.0.8 kernel enables RD_GZIP but disables RD_ZSTD.
+        self.assertEqual(qcom["UFLINUX_INITRAMFS_COMPRESSION"], "gzip")
         # systemd-boot is told about the board tree through its own variable, so
         # that the extlinux-only FDT path stays untouched.
         self.assertEqual(qcom["UFLINUX_DEVICETREE"], DEVICES["qcs6490"]["dtb"])
@@ -169,7 +173,7 @@ class DeviceRootfsTests(unittest.TestCase):
 
 class DeviceImageCheckTests(unittest.TestCase):
     def report(self, boot, esp_files, initramfs=b"\x28\xb5\x2f\xfd" + b"initramfs",
-               rootfs="f2fs", arch="aarch64"):
+               rootfs="f2fs", arch="aarch64", device=None):
         """Run the checker against a synthetic disk whose ESP is faked."""
         uuids = device_uuids("0.1.0:check:" + boot)
         layout = device_partitions(1024)
@@ -198,7 +202,7 @@ class DeviceImageCheckTests(unittest.TestCase):
             saved_layout, saved_extract = builder.device_layout, builder.device_extract
             builder.device_layout, builder.device_extract = geometry, extract
             try:
-                report = device_verify_image(image, {"boot": boot, "rootfs": rootfs},
+                report = device_verify_image(image, device or {"boot": boot, "rootfs": rootfs},
                                              arch, uuids, layout)
             finally:
                 builder.device_layout, builder.device_extract = saved_layout, saved_extract
@@ -229,6 +233,24 @@ class DeviceImageCheckTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Zstandard"):
             self.report("efi", {"boot/vmlinuz": b"kernel",
                                 "boot/initramfs": b"\x1f\x8b\x08\x00gzip"})
+
+    def test_qcs6490_accepts_gzip_and_reports_its_actual_compression(self):
+        report = self.report("efi", {"boot/vmlinuz": b"kernel",
+                                     "boot/initramfs": gzip.compress(b"070701"),
+                                     "EFI/boot/bootaa64.efi": b"MZ"},
+                             device=DEVICES["qcs6490"])
+        self.assertEqual(report["initramfs_compression"], "gzip")
+
+    def test_qcs6490_rejects_the_zstd_initramfs_its_kernel_cannot_unpack(self):
+        with self.assertRaisesRegex(ValueError, "gzip stream"):
+            self.report("efi", {"boot/vmlinuz": b"kernel",
+                                "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
+                                "EFI/boot/bootaa64.efi": b"MZ"},
+                        device=DEVICES["qcs6490"])
+
+    def test_unknown_initramfs_compression_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unsupported initramfs compression"):
+            self.report("efi", {}, device={"boot": "efi", "initramfs_compression": "xz"})
 
     def test_report_accepts_the_root_filesystem_of_the_device(self):
         esp = {"boot/vmlinuz": b"kernel", "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",

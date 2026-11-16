@@ -8,7 +8,8 @@
 #
 # Required environment: UFLINUX_DEVICE UFLINUX_ARCH UFLINUX_BOOT
 # UFLINUX_SERIAL UFLINUX_CMDLINE UFLINUX_ROOT_PARTUUID UFLINUX_PACKAGES
-# UFLINUX_ESP UFLINUX_VERSION UFLINUX_ROOTFS. Optional: UFLINUX_NURA_PACKAGES
+# UFLINUX_ESP UFLINUX_VERSION UFLINUX_ROOTFS. Optional:
+# UFLINUX_INITRAMFS_COMPRESSION (defaults to zstd), UFLINUX_NURA_PACKAGES
 # (with UFLINUX_NURA_REPOSITORY), UFLINUX_DTBLOADER, UFLINUX_INITRAMFS_FILES,
 # UFLINUX_INITRAMFS_MODULES, and the device tree the boot loader is told about:
 # UFLINUX_DTB for extlinux, UFLINUX_DEVICETREE for systemd-boot.
@@ -23,6 +24,11 @@ root_partuuid="$UFLINUX_ROOT_PARTUUID"
 esp="$UFLINUX_ESP"
 version="$UFLINUX_VERSION"
 rootfs="$UFLINUX_ROOTFS"
+initramfs_compression="${UFLINUX_INITRAMFS_COMPRESSION:-zstd}"
+case "$initramfs_compression" in
+gzip|zstd) ;;
+*) echo "device-rootfs: unsupported initramfs compression $initramfs_compression" >&2; exit 1;;
+esac
 
 # Device images boot from an installed root, so the feature set of the ISO is
 # wrong here: cdrom and raid pull in drivers no supported board uses, and
@@ -187,9 +193,12 @@ done
 # The initramfs is built by hand rather than through update-kernel: the
 # --media option that update-kernel always passes is what produces the
 # squashfs modloop, and a device image has no modloop.
+# Compression must match the kernel's CONFIG_RD_* support. The Nura SC7280
+# kernel supports gzip but has CONFIG_RD_ZSTD disabled, so qcs6490 overrides
+# the usual zstd setting through its board configuration.
 rm -f "/boot/initramfs-$kflavor"
 # shellcheck disable=SC2086
-/sbin/mkinitfs -q -b / -C zstd -F "$features" \
+/sbin/mkinitfs -q -b / -C "$initramfs_compression" -F "$features" \
 	-i /project/aports/uflinux/uflinux-initramfs-init \
 	-o "/boot/initramfs-$kflavor" "$kversion"
 

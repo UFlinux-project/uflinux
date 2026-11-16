@@ -245,3 +245,151 @@ pub fn hdr_requested(source: &str) -> Option<bool> {
         }
     }
 }
+
+/// Change only the native switcher presentation, preserving personal bindings.
+pub fn set_window_previews_xml(source: &str, enabled: bool) -> Result<String> {
+    use quick_xml::{
+        Reader, Writer,
+        events::{BytesEnd, BytesStart, Event},
+    };
+    let mut reader = Reader::from_str(source);
+    let mut events = Vec::new();
+    loop {
+        match reader.read_event().map_err(|e| e.to_string())? {
+            Event::Eof => break,
+            Event::Empty(tag) => {
+                events.push(Event::Start(tag.to_owned()));
+                events.push(Event::End(BytesEnd::new(
+                    String::from_utf8_lossy(tag.name().as_ref()).into_owned(),
+                )));
+            }
+            event => events.push(event.into_owned()),
+        }
+    }
+    let mut writer = Writer::new(Vec::new());
+    let mut stack = Vec::<Vec<u8>>::new();
+    let (mut root, mut switcher, mut osd) = (false, false, false);
+    let attributes =
+        |tag: &BytesStart<'_>, values: &[(&str, &str)]| -> Result<BytesStart<'static>> {
+            let mut out = tag.to_owned();
+            out.clear_attributes();
+            for attr in tag.attributes() {
+                let attr = attr.map_err(|e| e.to_string())?;
+                if !values
+                    .iter()
+                    .any(|(key, _)| key.as_bytes() == attr.key.as_ref())
+                {
+                    out.push_attribute(attr);
+                }
+            }
+            for value in values {
+                out.push_attribute(*value);
+            }
+            Ok(out)
+        };
+    let style = if enabled { "thumbnail" } else { "classic" };
+    let preview = if enabled { "yes" } else { "no" };
+    let osd_tag = || {
+        let mut tag = BytesStart::new("osd");
+        tag.push_attribute(("show", "yes"));
+        tag.push_attribute(("style", style));
+        tag.push_attribute(("output", "focused"));
+        tag
+    };
+    for event in events {
+        let event = match event {
+            Event::Start(tag) => {
+                if stack.is_empty() {
+                    if root || tag.name().as_ref() != b"labwc_config" {
+                        return Err("Expected a labwc_config XML document".into());
+                    }
+                    root = true;
+                }
+                let name = tag.name().as_ref().to_vec();
+                let tag = if stack.len() == 1 && name == b"windowSwitcher" {
+                    if switcher {
+                        return Err("Duplicate windowSwitcher configuration".into());
+                    }
+                    switcher = true;
+                    attributes(&tag, &[("preview", preview), ("order", "focus")])?
+                } else if stack.len() == 2 && stack[1] == b"windowSwitcher" && name == b"osd" {
+                    if osd {
+                        return Err("Duplicate switcher OSD configuration".into());
+                    }
+                    osd = true;
+                    attributes(
+                        &tag,
+                        &[("show", "yes"), ("style", style), ("output", "focused")],
+                    )?
+                } else {
+                    tag
+                };
+                stack.push(name);
+                Event::Start(tag)
+            }
+            Event::End(tag) => {
+                if stack.last().map(Vec::as_slice) != Some(tag.name().as_ref()) {
+                    return Err("Malformed labwc XML".into());
+                }
+                if stack.len() == 2 && stack[1] == b"windowSwitcher" && !osd {
+                    writer
+                        .write_event(Event::Empty(osd_tag()))
+                        .map_err(|e| e.to_string())?;
+                }
+                if stack.len() == 1 && !switcher {
+                    let mut tag = BytesStart::new("windowSwitcher");
+                    tag.push_attribute(("preview", preview));
+                    tag.push_attribute(("order", "focus"));
+                    writer
+                        .write_event(Event::Start(tag))
+                        .map_err(|e| e.to_string())?;
+                    writer
+                        .write_event(Event::Empty(osd_tag()))
+                        .map_err(|e| e.to_string())?;
+                    writer
+                        .write_event(Event::End(BytesEnd::new("windowSwitcher")))
+                        .map_err(|e| e.to_string())?;
+                }
+                stack.pop();
+                Event::End(tag)
+            }
+            event => event,
+        };
+        writer.write_event(event).map_err(|e| e.to_string())?;
+    }
+    if !root || !stack.is_empty() {
+        return Err("Malformed labwc XML".into());
+    }
+    String::from_utf8(writer.into_inner()).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    #[test]
+    fn switcher_edit_preserves_personal_configuration() {
+        let input = "<labwc_config><!-- personal --><keyboard><keybind key='A-Tab'/></keyboard><windowSwitcher outlines='no'><osd style='classic'/><fields><field content='title'/></fields></windowSwitcher></labwc_config>";
+        let on = set_window_previews_xml(input, true).unwrap();
+        assert!(
+            on.contains("<!-- personal -->")
+                && (on.contains("outlines=\"no\"") || on.contains("outlines='no'"))
+        );
+        assert!(on.contains("thumbnail") && on.contains("keybind") && on.contains("fields"));
+        let off = set_window_previews_xml(&on, false).unwrap();
+        assert!(off.contains("style=\"classic\"") && off.contains("preview=\"no\""));
+        assert_eq!(set_window_previews_xml(&off, false).unwrap(), off);
+        assert!(
+            set_window_previews_xml("<labwc_config/>", true)
+                .unwrap()
+                .contains("thumbnail")
+        );
+        assert!(set_window_previews_xml("<wrong/>", true).is_err());
+        assert!(set_window_previews_xml("<labwc_config>", true).is_err());
+    }
+    #[test]
+    fn existing_appearance_defaults_previews_on() {
+        let appearance: crate::model::Appearance =
+            serde_json::from_str(r##"{"wallpapers":[],"color":"#000000"}"##).unwrap();
+        assert!(appearance.window_previews);
+    }
+}

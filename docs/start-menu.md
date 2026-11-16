@@ -64,15 +64,25 @@ Beside the Start button, application buttons come from the pinned favourites in
 `$XDG_CONFIG_HOME/uflinux/taskbar.json` plus the running-window groups. Right
 click opens a menu listing the group's windows with a close button each, and,
 for applications, entries to launch another window, pin or unpin the button and
-close all windows. Resting the pointer on a button for a moment opens the same
-menu as a window preview, which costs one timer and one small box instead of a
-screenshot. Pinned buttons can be rearranged by dragging one onto another; the
+close all windows. Resting the pointer on a running app opens thumbnail cards
+with activation and close controls. Settings → Appearance → Window previews
+controls both these images and labwc's native Alt+Tab thumbnail grid; it defaults
+to enabled. With previews disabled, hover cards retain window titles and Alt+Tab
+uses the classic list. Pinned buttons can be rearranged by dragging one onto another; the
 new order is written back to the same file, and an unreadable file falls back
 to the defaults rather than blocking the panel. The clock opens a popover with a
 month-navigable calendar and a notification centre that reads Mako's list while
 the popover is open and dismisses notifications individually or together. Mako
 itself is styled as dark rounded cards grouped by summary, anchored bottom-right
 above the panel.
+
+Taskbar capture runs only while cards are visible, at up to two frames per second
+per window and four frames per second in total. Images are at most 320 × 180;
+the cache holds at most 64 images (under 16 MiB), expiring after 30 seconds.
+One source buffer at a time is limited to 16 megapixels / 64 MiB. Images stay in
+memory. Unsupported capture, oversized sources, and ambiguous app-ID/title pairs
+fall back to icons and titles. Minimized windows may show a cached image or the
+fallback. Alt+Tab rendering is handled directly by labwc.
 
 StatusNotifier icons sit behind a single chevron at the right end of the taskbar,
 like the hidden-icons flyout on Windows, so background apps never push the clock

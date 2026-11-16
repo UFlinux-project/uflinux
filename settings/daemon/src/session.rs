@@ -127,7 +127,13 @@ pub fn run() -> Result<()> {
             if params.get::<(bool,)>()==Some((false,)){if let Some(app)=weak.upgrade(){app.queue_brightness(true);app.refresh_power();let task=app.clone();glib::MainContext::default().spawn_local(async move{let _=task.restore_displays().await;});}}
         });
         let initial=app.clone();glib::MainContext::default().spawn_local(async move{
-            let appearance=initial.view.borrow().appearance.clone();let _=initial.set_appearance(appearance,false).await;
+            let appearance=initial.view.borrow().appearance.clone();
+            let enabled = appearance.window_previews;
+            if let Err(error) = write_window_previews(enabled) {
+                initial.view.borrow_mut().error = Some(error);
+                initial.publish();
+            }
+            let _=initial.set_appearance(appearance,false).await;
         });
         let probed=app.clone();glib::MainContext::default().spawn_local(async move{
             let caps=capture::probe().await;
@@ -798,45 +804,67 @@ impl App {
         // The desktop draws the wallpaper, so this only has to decide whether
         // the request is safe to hand over. Nothing is spawned: a renderer that
         // is a child of the service dies with it, and the shell outlives it.
+        let background_changed = {
+            let view = self.view.borrow();
+            view.appearance.wallpapers != appearance.wallpapers
+                || view.appearance.color != appearance.color
+        };
         let copy = appearance.clone();
-        gio::spawn_blocking(move || {
-            if copy.wallpapers.len() > 16
-                || copy.color.len() != 7
-                || !copy.color.starts_with('#')
-                || !copy.color[1..].bytes().all(|b| b.is_ascii_hexdigit())
-            {
-                return Err("Invalid background settings".to_string());
-            }
-            for wallpaper in &copy.wallpapers {
-                if !["fill", "fit", "stretch", "center", "tile"].contains(&wallpaper.fit.as_str())
-                    || wallpaper.output.len() > 128
-                    || wallpaper.output.contains('\0')
+        if !persist || background_changed {
+            gio::spawn_blocking(move || {
+                if copy.wallpapers.len() > 16
+                    || copy.color.len() != 7
+                    || !copy.color.starts_with('#')
+                    || !copy.color[1..].bytes().all(|b| b.is_ascii_hexdigit())
                 {
-                    return Err("Invalid wallpaper layout".into());
+                    return Err("Invalid background settings".to_string());
                 }
-                let path = Path::new(&wallpaper.file);
-                let metadata = path
-                    .metadata()
-                    .map_err(|_| "Wallpaper file is unavailable")?;
-                if !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
-                    return Err("Wallpaper must be a regular image smaller than 32 MiB".into());
+                for wallpaper in &copy.wallpapers {
+                    if !["fill", "fit", "stretch", "center", "tile"]
+                        .contains(&wallpaper.fit.as_str())
+                        || wallpaper.output.len() > 128
+                        || wallpaper.output.contains('\0')
+                    {
+                        return Err("Invalid wallpaper layout".into());
+                    }
+                    let path = Path::new(&wallpaper.file);
+                    let metadata = path
+                        .metadata()
+                        .map_err(|_| "Wallpaper file is unavailable")?;
+                    if !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
+                        return Err("Wallpaper must be a regular image smaller than 32 MiB".into());
+                    }
+                    let (_, width, height) =
+                        gdk_pixbuf::Pixbuf::file_info(path).ok_or("Unsupported wallpaper image")?;
+                    if width <= 0 || height <= 0 || width as i64 * height as i64 > 16_777_216 {
+                        return Err("Wallpaper exceeds the 16 megapixel memory limit".into());
+                    }
                 }
-                let (_, width, height) =
-                    gdk_pixbuf::Pixbuf::file_info(path).ok_or("Unsupported wallpaper image")?;
-                if width <= 0 || height <= 0 || width as i64 * height as i64 > 16_777_216 {
-                    return Err("Wallpaper exceeds the 16 megapixel memory limit".into());
-                }
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|_| "Wallpaper worker failed")??;
+                Ok(())
+            })
+            .await
+            .map_err(|_| "Wallpaper worker failed")??;
+        }
+        let path = hdr_path();
+        let previous = fs::read(&path).ok();
+        let update_switcher =
+            persist && self.view.borrow().appearance.window_previews != appearance.window_previews;
+        if update_switcher {
+            let enabled = appearance.window_previews;
+            write_window_previews(enabled)?;
+        }
         if persist {
-            files::save_json(
+            if let Err(error) = files::save_json(
                 &files::config_dir().join("appearance.json"),
                 &appearance,
                 0o600,
-            )?;
+            ) {
+                if update_switcher {
+                    let _ = restore_xml(&path, &previous);
+                    let _ = Command::new("labwc").arg("--reconfigure").status();
+                }
+                return Err(error);
+            }
         }
         self.view.borrow_mut().appearance = appearance;
         self.publish();
@@ -845,6 +873,30 @@ impl App {
 }
 fn hdr_path() -> PathBuf {
     files::config_dir().parent().unwrap().join("labwc/rc.xml")
+}
+fn write_window_previews(enabled: bool) -> Result<()> {
+    let path = hdr_path();
+    let previous = fs::read(&path).ok();
+    let source = match fs::read_to_string(&path) {
+        Ok(source) => source,
+        // The distribution configuration already enables thumbnails. Avoid
+        // creating a personal configuration just to repeat the default.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && enabled => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "<labwc_config/>".into(),
+        Err(_) => return Err("Cannot read your labwc configuration".into()),
+    };
+    let xml = files::set_window_previews_xml(&source, enabled)?;
+    if xml == source {
+        return Ok(());
+    }
+    files::atomic(&path, xml.as_bytes(), 0o600)?;
+    match Command::new("labwc").arg("--reconfigure").status() {
+        Ok(status) if status.success() => Ok(()),
+        _ => {
+            let _ = restore_xml(&path, &previous);
+            Err("Cannot reload compositor settings".into())
+        }
+    }
 }
 fn write_hdr(enabled: bool) -> Result<()> {
     let path = hdr_path();

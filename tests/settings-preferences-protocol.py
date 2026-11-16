@@ -11,7 +11,9 @@ bus=Gio.bus_get_sync(Gio.BusType.SESSION)
 results=Path(os.environ.get('UFLINUX_SMOKE_RESULTS','/tmp/uflinux-settings-smoke-results'))
 def call(method,action=None):
     value=GLib.Variant('(s)',(json.dumps(action),)) if action else None
-    return json.loads(bus.call_sync('org.uflinux.Settings1','/org/uflinux/Settings','org.uflinux.Settings1',method,value,None,Gio.DBusCallFlags.NO_AUTO_START,15000,None).unpack()[0])
+    # Image validation can take much longer under emulation or a loaded runner.
+    timeout=120000 if method=='Execute' else 15000
+    return json.loads(bus.call_sync('org.uflinux.Settings1','/org/uflinux/Settings','org.uflinux.Settings1',method,value,None,Gio.DBusCallFlags.NO_AUTO_START,timeout,None).unpack()[0])
 def drawn():
     return json.loads(subprocess.check_output(['uflinux-desktop','--status'],text=True,timeout=5)).get('background')
 def on_output(name='HEADLESS-1'):
@@ -52,7 +54,17 @@ def wait(predicate):
         time.sleep(.1)
     raise AssertionError('Preferences or drawn wallpaper did not converge: '+json.dumps(last))
 previous=call('GetState')['appearance']
-wallpaper={'wallpapers':[{'output':'*','file':'/usr/share/backgrounds/uflinux/Dark_Ivy.jpg','fit':'fit'}],'color':'#153658'}
+# The shared preference applies to native Alt+Tab immediately and persists.
+for enabled in (False, True):
+    changed = dict(previous, window_previews=enabled)
+    call('Execute', {'action':'set-appearance', 'appearance':changed})
+    wait(lambda: call('GetState')['appearance'] == changed)
+    xml = (Path(os.environ['XDG_CONFIG_HOME'])/'labwc/rc.xml').read_text()
+    assert ('style="thumbnail"' if enabled else 'style="classic"') in xml
+call('Execute', {'action':'set-appearance', 'appearance':previous})
+wait(lambda: call('GetState')['appearance'] == previous)
+
+wallpaper={'wallpapers':[{'output':'*','file':'/usr/share/backgrounds/uflinux/Dark_Ivy.jpg','fit':'fit'}],'color':'#153658','window_previews':previous['window_previews']}
 call('Execute',{'action':'set-appearance','appearance':wallpaper})
 wait(lambda:call('GetState')['appearance']==wallpaper)
 stored=Path(os.environ['XDG_CONFIG_HOME'])/'uflinux/appearance.json'
@@ -65,7 +77,8 @@ assert not drawn()['failed'],drawn()['failed']
 try:
     call('Execute',{'action':'set-appearance','appearance':{'wallpapers':[{'output':'*','file':'/nonexistent/wallpaper.png','fit':'fill'}],'color':'#102c46'}})
     raise AssertionError('An unavailable wallpaper file was accepted')
-except GLib.Error:pass
+except GLib.Error as error:
+    assert Gio.DBusError.get_remote_error(error)=='org.uflinux.Settings.Error.Failed',error
 assert call('GetState')['appearance']==wallpaper
 assert showing(wallpaper)
 # Restarting the service must not disturb the wallpaper, and the service that

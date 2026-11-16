@@ -227,12 +227,15 @@ pub struct Brightness {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Appearance {
+    #[serde(default = "previews_enabled")]
+    pub window_previews: bool,
     pub wallpapers: Vec<Wallpaper>,
     pub color: String,
 }
 impl Default for Appearance {
     fn default() -> Self {
         Self {
+            window_previews: true,
             wallpapers: vec![Wallpaper {
                 output: "*".into(),
                 file: "/usr/share/backgrounds/uflinux/Dark_Ivy.jpg".into(),
@@ -241,6 +244,9 @@ impl Default for Appearance {
             color: "#102c46".into(),
         }
     }
+}
+fn previews_enabled() -> bool {
+    true
 }
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

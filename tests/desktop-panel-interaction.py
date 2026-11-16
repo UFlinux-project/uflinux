@@ -6,6 +6,7 @@ Every step checks that the desktop process is alive and still answers
 --status, so a crash in the popover lifecycle fails right at the step
 that caused it instead of at the end of the smoke run.
 """
+import atexit
 import json
 import os
 import subprocess
@@ -54,16 +55,30 @@ def click(node):
     node.queryAction().doAction(0)
 
 
+pointer_process = None
+
+def motion(x, y):
+    global pointer_process
+    if pointer_process is not None:
+        pointer_process.terminate()
+        pointer_process.wait()
+    pointer_process = subprocess.Popen([os.environ['UFLINUX_POINTER_DRIVER'], str(x), str(y),
+                                       str(x), str(y), '1280', '720', 'hover'])
+    time.sleep(.2)
+
+
 def hover(node):
-    rect = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-    x, y = rect.x + rect.width // 2, rect.y + rect.height // 2
-    subprocess.run([os.environ['UFLINUX_POINTER_DRIVER'], str(x), str(y),
-                    str(x), str(y), '1280', '720'], check=True)
+    rect = node.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
+    # GTK Wayland accessibility coordinates are relative to the layer
+    # surface; this fixture anchors its panel to the bottom of a 720px output.
+    motion(rect.x + rect.width // 2, 720 - rect.height // 2)
 
 
 def leave():
-    subprocess.run([os.environ['UFLINUX_POINTER_DRIVER'], '600', '100',
-                    '600', '100', '1280', '720'], check=True)
+    motion(600, 100)
+
+
+atexit.register(lambda: pointer_process is not None and pointer_process.poll() is None and pointer_process.terminate())
 
 
 def status():
@@ -161,13 +176,27 @@ def main():
         click(foot)  # launch
         time.sleep(1.5)
         step('favorite launched')
+        # Give the preview a uniquely named, directly launched capture fixture.
+        fixture = subprocess.Popen(['foot', '--app-id=foot', '--title=UFLinux preview fixture',
+                                    '-o', 'colors-dark.background=123456', 'sh', '-c', 'sleep 30'])
+        atexit.register(lambda: fixture.poll() is None and fixture.terminate())
+        time.sleep(.8)
         foot = wait_node(lambda n: n.name.lower() == 'foot')
         if foot is None:
             failures.append('favorite button vanished after launch')
             return finish(failures)
         for _ in range(2):
             hover(foot)
-            time.sleep(.6)
+            deadline = time.monotonic() + 4
+            while time.monotonic() < deadline:
+                pump()
+                if any(n.name == 'Preview of UFLinux preview fixture' and
+                       n.getState().contains(pyatspi.STATE_SHOWING) for n in nodes()):
+                    break
+                time.sleep(.1)
+            else:
+                dump_tree()
+                failures.append('captured preview image did not become visible')
             leave()
             time.sleep(.5)
             step('running favorite hover')

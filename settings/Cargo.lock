@@ -1017,6 +1017,7 @@ dependencies = [
  "settings-core",
  "uflinux-settings",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-wlr",
 ]
 

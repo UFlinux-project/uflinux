@@ -3,6 +3,7 @@
     "label": "Arrow Dragon Q6A and similar QCS6490 boards",
     "arches": ["aarch64"],
     "kernel": "postmarketos-qcom-sc7280",
+    "initramfs_compression": "gzip",
     "boot": "efi",
     "rootfs": "f2fs",
     "status": "experimental",
