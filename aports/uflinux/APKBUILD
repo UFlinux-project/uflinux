@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=10
+pkgrel=11
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -178,7 +178,7 @@ desktop() {
 		xdg-user-dirs labwc uflinux-desktop uflinux-settings uflinux-screencapture gpu-screen-recorder
 		xdg-desktop-portal xdg-desktop-portal-wlr ptyxis loupe htop mako
 		transmission-gtk celluloid gnome-disk-utility file-roller
-		eudev eudev-openrc elogind elogind-openrc dbus dbus-openrc dbus-x11
+		eudev eudev-openrc elogind elogind-openrc dbus dbus-openrc dbus-x11 util-linux-login
 		greetd greetd-openrc uflinux-regreet=0.2.0-r1 cage polkit-elogind
 		connman=2.0-r4 connman-openrc=2.0-r4 connman-vpn=2.0-r4 connman-vpn-openrc=2.0-r4
 		bluez bluez-openrc iwd iwd-openrc busybox-openrc tzdata wireguard-tools

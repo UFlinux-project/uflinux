@@ -138,6 +138,12 @@ if [ "$(printf '%s\n' "$kversion" | wc -l)" != 1 ]; then
 fi
 kflavor=${kversion##*-}
 
+# Rebuild the index after unpacking: the Nura 7.0.8 package ships modules.dep
+# entries with no dependency lists (including wireguard). Merely finding the
+# file is not sufficient; mkinitfs otherwise trusts it and modprobe loads
+# modules without their crypto/network prerequisites, causing unknown symbols.
+depmod -a "$kversion"
+
 # The marker is what arms the first-boot partition growth; the packaged
 # default says "generic" so the service stays inert on installed systems.
 mkdir -p /etc/uflinux

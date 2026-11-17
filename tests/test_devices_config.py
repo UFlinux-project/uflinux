@@ -44,6 +44,12 @@ class DevicesConfigTests(unittest.TestCase):
                 self.assertTrue(device.get("dtb"), device_id)
         self.assertEqual(devices["qcs6490"]["dtb"], "qcom/qcs6490-radxa-dragon-q6a.dtb")
 
+    def test_qcs6490_builtin_gpu_has_early_firmware(self):
+        files = set(devices["qcs6490"]["initramfs_files"])
+        self.assertTrue({"lib/firmware/qcom/a660_sqe.fw.zst",
+                         "lib/firmware/qcom/a660_gmu.bin.zst",
+                         "lib/firmware/qcom/qcs6490/a660_zap.mbn.zst"} <= files)
+
     def test_serial_console_matches_the_architecture(self):
         for device_id, device in devices.items():
             for arch in device["arches"]:

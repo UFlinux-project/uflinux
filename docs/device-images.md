@@ -145,6 +145,45 @@ never appears and HDMI stays black. A board therefore lists such files in
 `initramfs_files` in `config/devices.json`; the profile passes them to mkinitfs
 as `custom_files` and fails the build when a listed file is not installed.
 
+The Adreno driver is built in too. The same list includes `a660_sqe.fw`,
+`a660_gmu.bin` and the board's `qcom/qcs6490/a660_zap.mbn`, supplied as compressed
+`.zst` files. Without early firmware, the kernel can report
+`adreno_request_fw: failed to load a660_sqe.fw` before mounting root; rendering
+startup may fail even though the text console works. Supplying firmware removes
+that known failure, but a successful accelerated graphical session still needs
+hardware verification.
+
+An ARM64 initramfs assembled with Alpine mkinitfs 3.14.1, the Nura 7.0.8
+module tree and Alpine's `linux-firmware-qcom-20260519-r0` was inspected on
+2026-11-17. All four configured early firmware files were present under
+`usr/lib/firmware`, with `/lib -> usr/lib`, matched the source package bytes,
+and passed Zstandard integrity checks. The kernel's embedded configuration
+enables `CONFIG_RD_GZIP` and `CONFIG_FW_LOADER_COMPRESS_ZSTD`. The device-tree
+ADSP/CDSP firmware paths also resolved in the unpacked root filesystem.
+This is archive-level verification of a reconstructed initramfs, not a
+successful hardware-loading result or inspection of a flashed disk image.
+
+`tests/test_qcs6490_kernel_inputs.py` can check a generated archive by setting
+`UFLINUX_TEST_QCOM_INITRAMFS` to its path and
+`UFLINUX_TEST_QCOM_FIRMWARE_APK` to the firmware APK. That check verifies the
+ARM64 init binary, firmware contents and compression integrity, rather than
+only the filenames in the board configuration. Runtime acceptance by the GPU
+and secure firmware must still be checked on the board.
+
+After unpacking the kernel, the profile always runs `depmod -a <version>`.
+The inspected Nura `7.0.8-r0` package has a `modules.dep` WireGuard entry with
+no prerequisites, although its module declares crypto and UDP-tunnel
+dependencies. Regeneration restores those dependencies and the binary index,
+so both mkinitfs and the installed modprobe can load the required modules first.
+
+For the Dragon Q6A, networking support depends on the interface. The USB
+RTL8153 Ethernet device (`0bda:8153`) is supported by `r8152`, which requires
+the `mii` module; regenerating the dependency index is necessary here too.
+The onboard AIC USB Wi-Fi device (`a69c:8d80`) has no matching driver in the
+inspected Nura 7.0.8 module package. Installing firmware or enabling iwd alone
+does not supply that missing driver. Onboard Wi-Fi is not currently supported
+by this image's selected kernel package.
+
 The same `custom_files` mechanism also carries the boot files of the splash
 wrapper. The profile builds the initramfs with `-i aports/uflinux/uflinux-initramfs-init`,
 and mkinitfs only *replaces* `/init` with it — it does not copy Alpine's
@@ -254,6 +293,15 @@ passwd
 `greetd` with the UFLinux greeter is enabled by default, so the account can log
 in graphically. Serial gettys are configured per board from the board description
 (`ttyMSM0`, `ttyAMA0` or `ttyS0` at 115200 8n1) in addition to `tty1`/`tty2`.
+
+The shared desktop package installs `util-linux-login`, whose PAM-enabled
+`/bin/login` replaces the BusyBox login applet. Alpine's PAM `base-session`
+opens an elogind session and provides `XDG_RUNTIME_DIR` for a fresh local TTY
+login. With D-Bus and elogind running, log in as `user`, stop greetd if needed,
+and run `uflinux-session` without sudo. Installing the login package while
+already logged in requires logging out and back in; it does not retrofit the
+current shell's session. Do not replace this with a shared runtime directory
+or a manually exported `/tmp` path.
 
 ## Writing an image
 
