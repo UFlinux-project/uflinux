@@ -107,10 +107,11 @@ uses; the `device-images` CI job installs them.
 
 The disk, partition and FAT volume identifiers are derived from the version, board
 id and architecture, so a rebuild produces the same GUIDs. The kernel command line
-uses `root=PARTUUID=<ROOT partition GUID> rootwait rootfstype=<fs> rootflags=rw`:
-Alpine's `nlplug-findfs` matches `PARTUUID` against the **partition** GUID, not the
-disk GUID, and the explicit type means the initramfs carries only the one
-filesystem module it needs. The ESP carries the kernel as `boot/vmlinuz` and the
+uses `root=UUID=<ROOT filesystem UUID> rootwait rootfstype=<fs> rootflags=ro`.
+The formatters set the filesystem UUID to the root partition GUID too. Alpine's
+initramfs passes root to BusyBox `mount`, which resolves filesystem `UUID=` and
+`LABEL=` but not `PARTUUID=`. The explicit type means the initramfs carries only
+the one filesystem module it needs. The ESP carries the kernel as `boot/vmlinuz` and the
 initramfs as `boot/initramfs`, plus whatever the boot scheme needs:
 
 - `efi` — `EFI/boot/bootaa64.efi` or `EFI/boot/bootx64.efi` (systemd-boot, copied
@@ -206,7 +207,10 @@ partition by hand, and nothing in the image can `apk upgrade` them.
 
 The `uflinux-device` OpenRC service (from the `uflinux-device` package, which is
 published in the release repository but not bundled in the live ISO) runs early in the
-`boot` runlevel. It is inert unless `/etc/uflinux/device` exists, so it does nothing
+`boot` runlevel, after filesystem checks and before the root remount and
+`localmount`. It must not depend on `localmount` while ordering itself before
+`modules`: that creates a circular dependency and boot timeouts. It is inert
+unless `/etc/uflinux/device` exists, so it does nothing
 on an ordinary installed system; a device image writes that file with the board id.
 When armed it runs `growpart` on the root partition once and then grows the
 filesystem to fill it — `resize.f2fs -f` for f2fs (while the root is still mounted
@@ -219,16 +223,17 @@ An f2fs root is grown in place, but the kernel does not re-read the superblock o
 remount, so the new space only becomes visible in `df` after the next reboot. The
 filesystem is already usable at its full size for writes that need it.
 
-Images ship **no regular user**. `root` has an empty password, so the first login is
-`root` with a blank password; log in over the serial console or on the framebuffer
-console (`tty1`) and then:
+Every device image ships a regular account: **user / user**. Select the UFLinux
+session at the graphical greeter, or use this account on the text/serial console.
+The account belongs to `wheel`, `audio`, `video`, `input`, `netdev` and, when
+available, `render`. Both `sudo` and `doas` allow administrative commands with
+the account's password. To change it after login:
 
 ```sh
 passwd
-adduser -G wheel,audio,video,netdev,input yourname
 ```
 
-`greetd` with the UFLinux greeter is enabled by default, so the new account can log
+`greetd` with the UFLinux greeter is enabled by default, so the account can log
 in graphically. Serial gettys are configured per board from the board description
 (`ttyMSM0`, `ttyAMA0` or `ttyS0` at 115200 8n1) in addition to `tty1`/`tty2`.
 

@@ -71,6 +71,7 @@ write_mkinitfs_conf
 
 # shellcheck disable=SC2086
 apk add --no-progress $UFLINUX_PACKAGES
+/usr/libexec/uflinux-image-user
 
 # Optional extras that only exist in the pinned Nura repository. They are
 # unpacked rather than installed, and fetched with an explicit --repository so
@@ -239,16 +240,20 @@ if [ -d /boot/overlays ]; then
 	cp -a /boot/*.dtb "$esp/"
 fi
 
-# The root is found by partition UUID rather than device name, and has to be
-# mounted read-write because nothing runs the live-session switch to rw. Its
+# The root is found by filesystem UUID rather than device name, and has to be
+# handed over read-only for filesystem checks and the f2fs resize. OpenRC's
+# root service subsequently remounts it read-write. Its
 # type is stated explicitly so the kernel does not have to guess, which also
 # matches the single filesystem feature in the initramfs. The framebuffer
-# console comes first so that boards with a display are usable even when the
-# serial console is not wired up.
-rootargs="root=PARTUUID=$root_partuuid rootwait rootfstype=$rootfs rootflags=rw"
+# console comes last: Alpine uses the last console= for switch_root -c, so
+# userspace output stays visible when the serial console is not wired up.
+# All root formatters use the root partition GUID as the filesystem UUID too.
+# Alpine passes root= to BusyBox mount, which resolves UUID= and LABEL= but
+# not PARTUUID=. Kernel PARTUUID support cannot resolve a userspace mount.
+rootargs="root=UUID=$root_partuuid rootwait rootfstype=$rootfs rootflags=ro"
 case "$cmdline" in
 *console=*) consoleargs="" ;;
-*) consoleargs=" console=tty0 console=$serial,115200n8" ;;
+*) consoleargs=" console=$serial,115200n8 console=tty0" ;;
 esac
 
 case "$boot" in

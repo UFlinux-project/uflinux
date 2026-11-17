@@ -9,9 +9,12 @@ state_dir="/var/lib/uflinux"
 state_file="$state_dir/device-resized"
 
 depend() {
-	need localmount
-	after root
-	before modules
+	# Root is already mounted by the initramfs; waiting for localmount while
+	# ordering before modules creates a cycle through fsck/root/localmount.
+	# Grow after checks, while f2fs is still read-only, before root remounts rw.
+	need fsck
+	after modules clock
+	before root localmount bootmisc
 }
 
 # Split a root block device such as /dev/mmcblk0p2 or /dev/sda2 into the disk
@@ -58,7 +61,6 @@ start() {
 	fstype="$(findmnt -no FSTYPE /)" || fstype=""
 	if [ -z "$source" ] || ! split_root_device "$source"; then
 		ewarn "cannot determine the root disk of $source, skipping the resize"
-		touch "$state_file"
 		eend 0
 		return 0
 	fi
@@ -68,7 +70,6 @@ start() {
 	root_part="$disk$grow_sep$part"
 	if [ ! -b "$disk" ] || [ ! -b "$root_part" ]; then
 		ewarn "$disk or $root_part is not a block device, skipping the resize"
-		touch "$state_file"
 		eend 0
 		return 0
 	fi

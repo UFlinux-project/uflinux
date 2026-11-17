@@ -80,7 +80,7 @@ for device_id, device in devices.items():
 for path in [*ROOT.glob("scripts/*.py"), *ROOT.glob("tests/*.py"), ROOT / "aports/uflinux/uflinux-install", ROOT / "aports/uflinux/uflinux-install-gui-backend", ROOT / "aports/uflinux/uflinux-boot-assets.py"]:
     ast.parse(path.read_text(), filename=str(path))
 for path in [*ROOT.glob("scripts/*.sh"), *ROOT.glob("tests/*.sh"), *ROOT.glob("profiles/*.sh"), *ROOT.glob("aports/*/APKBUILD"),
-             *[ROOT / "aports/uflinux" / n for n in ("uflinux-session", "uflinux-autostart", "uflinux-live.initd", "uflinux-compositor", "uflinux-network-init", "uflinux-bootsplash", "uflinux-splash.initd", "uflinux-splash-stop.initd", "uflinux-device.initd")], *ROOT.glob("settings/data/*.initd"), ROOT / "settings/data/uflinux-power-button"]:
+             *[ROOT / "aports/uflinux" / n for n in ("uflinux-session", "uflinux-autostart", "uflinux-live.initd", "uflinux-image-user", "uflinux-compositor", "uflinux-network-init", "uflinux-bootsplash", "uflinux-splash.initd", "uflinux-splash-stop.initd", "uflinux-device.initd")], *ROOT.glob("settings/data/*.initd"), ROOT / "settings/data/uflinux-power-button"]:
     subprocess.run(["sh", "-n", str(path)], check=True)
 for path in (ROOT / "aports/uflinux").glob("*.xml"):
     ET.parse(path)

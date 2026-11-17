@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=4
+pkgrel=6
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -15,7 +15,7 @@ subpackages="uflinux-release:release uflinux-defaults:defaults uflinux-desktop-m
 options="!check"
 makedepends="rsvg-convert python3"
 builddir="$srcdir"
-source="uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.svg uflinux-entry.svg uflinux-bullet.svg
+source="uflinux-image-user uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.svg uflinux-entry.svg uflinux-bullet.svg
 	uflinux-boot-assets.py uflinux-splash-original.png plymouthd.conf
 	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-plymouth.files uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-autostart uflinux-theme-sync uflinux-install uflinux-install-gui-backend
 	uflinux-live.initd uflinux-device.initd uflinux.desktop uflinux-logo.svg artwork-NOTICE labwc-rc.xml labwc-menu.xml
@@ -90,6 +90,7 @@ package() {
 	install -Dm755 "$srcdir/uflinux-theme-sync" "$pkgdir/usr/libexec/uflinux-theme-sync"
 	install -Dm755 "$srcdir/uflinux-compositor" "$pkgdir/usr/libexec/uflinux-compositor"
 	install -Dm755 "$srcdir/uflinux-network-init" "$pkgdir/usr/libexec/uflinux-network-init"
+	install -Dm755 "$srcdir/uflinux-image-user" "$pkgdir/usr/libexec/uflinux-image-user"
 	install -Dm755 "$srcdir/uflinux-install" "$pkgdir/usr/sbin/uflinux-install"
 	install -Dm755 "$srcdir/uflinux-install-gui-backend" "$pkgdir/usr/libexec/uflinux-install-gui-backend"
 	install -Dm755 "$srcdir/uflinux-live.initd" "$pkgdir/etc/init.d/uflinux-live"
@@ -155,7 +156,7 @@ defaults() {
 	depends="adw-gtk3 papirus-icon-theme gsettings-desktop-schemas uflinux-initramfs=$pkgver-r$pkgrel"
 	replaces="plymouth greetd greetd-agreety-config connman connman-openrc iwd busybox-openrc"
 	replaces_priority=100
-	amove usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init
+	amove usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init usr/libexec/uflinux-image-user
 	amove etc/fonts etc/rc.conf.d etc/xdg etc/greetd etc/pam.d etc/connman etc/iwd etc/conf.d usr/bin \
 		usr/share/wayland-sessions usr/share/backgrounds usr/share/themes usr/share/dbus-1 \
 		usr/share/icons usr/share/glib-2.0/schemas usr/lib/firefox usr/share/licenses/uflinux-defaults
@@ -181,7 +182,7 @@ desktop() {
 		connman=2.0-r4 connman-openrc=2.0-r4 connman-vpn=2.0-r4 connman-vpn-openrc=2.0-r4
 		bluez bluez-openrc iwd iwd-openrc busybox-openrc tzdata wireguard-tools
 		pipewire pipewire-pulse wireplumber upower font-ubuntu-nerd font-ubuntu-mono-nerd font-noto font-noto-cjk papirus-icon-theme adwaita-icon-theme
-		mesa-dri-gallium mesa-va-gallium libva-utils doas"
+		mesa-dri-gallium mesa-va-gallium libva-utils doas sudo"
 	# Hardware video encoding for gpu-screen-recorder needs a VA-API driver for
 	# the GPU; without one, recording fails with "no video codec available".
 	# The gallium driver covers AMD/Intel-gen11+/Nouveau/VirtIO; the Intel
@@ -252,6 +253,7 @@ installer() {
 }
 
 sha512sums="
+51b9323ee7513c1214550c1a1c8c527e1fb7cdca8ab07b18420ddc3434440b7aa366dba39a79f1d2cf26bcbbaf52afb4534514e5ca2979a8f645ca25bfb38ec4  uflinux-image-user
 e609def5a7fde0e7a128b5eb705e0d96cbddf8530614b9663d4f47a7e7b872fa8555170c093e4571d5937b60ddd46b074eaa7e5272fd2447bf0fe3e6151addcb  uflinux-openrc.conf
 10521c4f6117171e6a6ce28419b241cea95237462acc5d89119962a7340862260aecd32a69f3012a235e5f6a85afad5700c0e9771cf3049f28d85be4644c3ea4  uflinux.plymouth
 2656a127ebcff1432a2101d0e84183c09865e709e754ce20b80e4ec4cb70e6f83724ae7bcc262ce66d05f46e0bc07761a4a003a2165b574aea6ca539063b84c1  uflinux-spinner.svg
@@ -274,8 +276,8 @@ e7547d393b9489bfaf96ea7f1f580099e8d01487e7a59cc897001032e0f0f424b68d77d21e92ac38
 0c37806c49629bb84275ed096c735d37d879483bdf4e1320fdc7ab0a0755bf376544c023227ed1d2321997c27a26128139e1865d6caac291aaf09a145a62c367  uflinux-theme-sync
 5cc1c71cc2a62ccec2d542c78316d0b65f2254b4ba2c45ab9d36b84e26952cb8f960487c2c2972d055446aba368dd5c5fa99168daed7fd5c9be0085967cb38fd  uflinux-install
 35c122aeebee0d0b1dc0a8156d63745fce0bf66d293900a7d478e8361fe959d686b012bd7caaa0b8ac22ff254e537f009585c0983f504d9c4ed37ce952e323ca  uflinux-install-gui-backend
-153f498b540da75c6398e7eb271d360ee2ced012d2cd5c77d11d8833c48bcd12fc51f2e46169f7351b38a8e8e7faa24c790776fe5d6537d78b6dafa497eec49f  uflinux-live.initd
-8607fa0d7de0314915f3150b55192b21e503026cec08a494e626fdfd3d8424026705df558366663df41d94582bbe7f54a21434756fa1ed4a9a4d2eb8c9f5dfa4  uflinux-device.initd
+7153126defd63a0b0a46cd40080194b8435f751413e9ac97eaa9fc66f81b661d7f5f5b6398931fcab52adac8e609f560dcb461700575f0c84a5d85c36f664ef8  uflinux-live.initd
+a35a415f240913bbaf6381baf9f7e12a66cc79d45662b6c15d68a8e0b601e0812865d3c8a4498ef9618660ddb7cdbdeb0bbb8b46a9be933f1e481ee73901db70  uflinux-device.initd
 e6df4f4a610b45f3426de64299f2fcc0e53691cf4f62a571cc9a3a0c168628042f31ea328e202bcec79d0aa62204e370265b38ea131772c8c548a5b1a19a9d11  uflinux.desktop
 f1c52e9fb8613e71ef77817ffcfad4638be5fba1c606218562955ad6a0d75a087bce62ed514d8687af9fa25940d64513ba0b535f1de370c51a1db9b2ed399256  uflinux-logo.svg
 17da1c30e1f7b8441f113b0d38bea115439e6238ffb063d71638b28d2e994b1bc06e04a421bc5bfedcf05c48825eeaae47a172a0f047f381af12551401123224  artwork-NOTICE

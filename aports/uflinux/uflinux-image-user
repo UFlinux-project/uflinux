@@ -1,0 +1,17 @@
+#!/bin/sh
+# Only image assembly/live startup calls this, never a package upgrade trigger.
+set -eu
+if ! id user >/dev/null 2>&1; then
+	adduser -D -s /bin/ash -G users user
+	printf 'user:user\n' | chpasswd
+fi
+for group in wheel audio video input netdev render; do
+	if getent group "$group" >/dev/null; then
+		addgroup user "$group"
+	fi
+done
+install -d -m755 /etc/doas.d /etc/sudoers.d
+printf '%s\n' 'permit persist user as root' > /etc/doas.d/uflinux-user.conf
+printf '%s\n' 'user ALL=(ALL:ALL) ALL' > /etc/sudoers.d/uflinux-user
+chmod 600 /etc/doas.d/uflinux-user.conf
+chmod 440 /etc/sudoers.d/uflinux-user

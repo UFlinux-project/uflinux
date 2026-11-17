@@ -56,7 +56,9 @@ and riscv64. Firefox uses a streamlined toolbar with horizontal tabs and a hidde
 bookmarks bar; users can change these defaults.
 Settings offers TLP Power saver, Balanced and Performance modes. Physical
 power-button actions are configured in Settings and handled by BusyBox acpid.
-The live login is **live / live**, with passwordless local `doas`; root is locked
+All live ISOs and board/VM disk images provide **user / user**, with
+password-authenticated `sudo` and `doas` access and the UFLinux graphical session.
+The live ISO also retains **live / live**, with passwordless local `doas`; root is locked
 and SSH is disabled. Installation creates a new password-protected user and does
 not copy the live account or its autologin settings.
 
