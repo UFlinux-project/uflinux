@@ -164,16 +164,16 @@ done
 gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner org.uflinux.Settings1 | grep -q true
 G_DEBUG=fatal-criticals UFLINUX_SETTINGS_BENCH=1 /usr/bin/uflinux-desktop --daemon > "$results/desktop.log" 2>&1 &
 panel=$!; pids="$pids $panel"
-foot --app-id=uflinux-smoke --title=UFLinux-Smoke sh -c 'sleep 600' > "$results/foot.log" 2>&1 &
+ptyxis --standalone --title=UFLinux-Smoke -x 'sleep 600' > "$results/ptyxis.log" 2>&1 &
 terminal=$!; pids="$pids $terminal"
 for _attempt in $(seq 1 60); do
 	wlrctl toplevel list > "$results/toplevels.txt"
-	grep -q uflinux-smoke "$results/toplevels.txt" && break
+	grep -q org.gnome.Ptyxis "$results/toplevels.txt" && break
 	sleep 1
 done
-grep -q uflinux-smoke "$results/toplevels.txt"
-wlrctl toplevel minimize app_id:uflinux-smoke
-wlrctl toplevel focus app_id:uflinux-smoke
+grep -q org.gnome.Ptyxis "$results/toplevels.txt"
+wlrctl toplevel minimize app_id:org.gnome.Ptyxis
+wlrctl toplevel focus app_id:org.gnome.Ptyxis
 sleep 3
 alive "$panel" 'Resident desktop' "$results/desktop.log"
 kill -0 "$terminal"

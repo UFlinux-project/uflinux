@@ -129,9 +129,9 @@ if [ "${UFLINUX_TEST_TASKBAR:-0}" = 1 ]; then
         echo 'Desktop did not return after a taskbar restart' >&2
         exit 1
     }
-    printf '%s\n' '{"pinned":["firefox.desktop","foot.desktop"]}' > "$XDG_CONFIG_HOME/uflinux/taskbar.json"
+    printf '%s\n' '{"pinned":["firefox.desktop","org.gnome.Ptyxis.desktop"]}' > "$XDG_CONFIG_HOME/uflinux/taskbar.json"
     restart_desktop
-    grep -q '"firefox.desktop","foot.desktop"' "$XDG_CONFIG_HOME/uflinux/taskbar.json"
+    grep -q '"firefox.desktop","org.gnome.Ptyxis.desktop"' "$XDG_CONFIG_HOME/uflinux/taskbar.json"
     printf '%s\n' 'not json' > "$XDG_CONFIG_HOME/uflinux/taskbar.json"
     "$UFLINUX_DESKTOP_BIN" --quit
     wait "$desktop"

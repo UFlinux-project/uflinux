@@ -41,9 +41,8 @@
 .uflinux-task-menu button:hover { background: alpha(@theme_fg_color, 0.10); }
 .uflinux-task-menu .uflinux-task-heading { opacity: 0.7; padding: 2px 6px 4px; }
 .uflinux-panel.software-renderer .uflinux-task-menu { box-shadow: none; }
-/* The hover preview is a popover as well. It is a card, not a menu: a header
-   with the app icon and name over one row per window, each with its own close
-   button. The min-width stops the card resizing between apps. */
+/* Each window preview has one icon/title/close header above its image.
+   The min-width stops the card resizing between apps. */
 .uflinux-task-preview { min-width: 260px; padding: 2px; }
 .uflinux-task-preview button { background: transparent; color: @theme_fg_color; border: none; box-shadow: none; border-radius: 6px; padding: 0 6px; min-height: 30px; }
 .uflinux-task-preview button:hover { background: alpha(@theme_fg_color, 0.10); }

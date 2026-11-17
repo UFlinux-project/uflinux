@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=8
+pkgrel=9
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -175,7 +175,7 @@ desktop() {
 	pkgdesc="UFLinux minimal desktop dependencies"
 	depends="uflinux-release=$pkgver-r$pkgrel uflinux-defaults=$pkgver-r$pkgrel uflinux-bootsplash-openrc=$pkgver-r$pkgrel
 		xdg-user-dirs labwc uflinux-desktop uflinux-settings uflinux-screencapture gpu-screen-recorder
-		xdg-desktop-portal xdg-desktop-portal-wlr foot loupe htop mako
+		xdg-desktop-portal xdg-desktop-portal-wlr ptyxis loupe htop mako
 		transmission-gtk celluloid gnome-disk-utility file-roller
 		eudev eudev-openrc elogind elogind-openrc dbus dbus-openrc dbus-x11
 		greetd greetd-openrc uflinux-regreet=0.2.0-r1 cage polkit-elogind
@@ -278,8 +278,8 @@ e0e40c8867a95ec24e1cabfa7f34e35b69583123f21dbb1ff6409a7a40b69bf67e6072e397a4bc25
 e6df4f4a610b45f3426de64299f2fcc0e53691cf4f62a571cc9a3a0c168628042f31ea328e202bcec79d0aa62204e370265b38ea131772c8c548a5b1a19a9d11  uflinux.desktop
 f1c52e9fb8613e71ef77817ffcfad4638be5fba1c606218562955ad6a0d75a087bce62ed514d8687af9fa25940d64513ba0b535f1de370c51a1db9b2ed399256  uflinux-logo.svg
 17da1c30e1f7b8441f113b0d38bea115439e6238ffb063d71638b28d2e994b1bc06e04a421bc5bfedcf05c48825eeaae47a172a0f047f381af12551401123224  artwork-NOTICE
-69763d7ea607b76f3827475ec362ece09767c4949a9f809e8ba7bf2fe1a827fe079cf9d782362489db7ff3f16f088c6d362d52c79616598c476a16c4978a89e2  labwc-rc.xml
-c3894da7a02e8d9606e6f0946772e641eb6b0f8511da7ff368e0a0bfa8bec45be0e8b1acf9f3f6c7cb2ab8dc35b0b649db5971e1ac28ac8d05bcb721a64c53c0  labwc-menu.xml
+458aa8ca0e737540d67e6021c4c3bd89498df0d863cf55623b70829b4d04222e090c08e3e6432a4382ff5676bba6cd58dd238b984a4d987e82c99487f89a29a4  labwc-rc.xml
+4d5e99153a366ec53abf1a201ec8f0d174c4235581c7178038dcaf31b540ff53b794a4ba1bb3a6090c63f96173323b42ba4868427a896bc64d7a24ef80261e45  labwc-menu.xml
 f25b2a1b852ea3519078d149f2ab86eedaddb811a2f4c6437a4e572072ddf7b758fa8b2570c9ba6f266ed2ac585a5e3f11e056a8e6e77df3de89c8814f9acb7e  labwc-autostart
 f635e02bd8f0b6b859571a578336b978585dc93baae7a6a9d4ee74aa038d29c813706cd72ae5c8a90391b0f05d37b33bcfb8c146c969ffbd6da5680dcd6dd9ed  labwc-environment
 250c6f15d6d3621d324a9f69c200c9d985cdd3b3d996d2b54dddb63de108595fa21d906c2b03aab1ae0a083fde8a0c2a36f01d9b5554f5db776db3178831d976  mako.conf

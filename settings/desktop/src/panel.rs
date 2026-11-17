@@ -22,7 +22,7 @@ struct TaskbarConfig {
 impl Default for TaskbarConfig {
     fn default() -> Self {
         Self {
-            pinned: vec!["foot.desktop".into(), "org.uflinux.Files.desktop".into()],
+            pinned: vec!["org.gnome.Ptyxis.desktop".into(), "org.uflinux.Files.desktop".into()],
         }
     }
 }
@@ -137,7 +137,14 @@ impl Panel {
             app: Rc::downgrade(app),
             surfaces: RefCell::new(Vec::new()),
             taskbar: RefCell::new(Taskbar::new(
-                settings_core::files::read_json::<TaskbarConfig>(&taskbar_config_path()).pinned,
+                settings_core::files::read_json::<TaskbarConfig>(&taskbar_config_path())
+                    .pinned
+                    .into_iter()
+                    .map(|id| match id.as_str() {
+                        "foot" | "foot.desktop" => "org.gnome.Ptyxis.desktop".into(),
+                        _ => id,
+                    })
+                    .collect(),
             )),
             tracker: RefCell::new(None),
             tray: RefCell::new(None),
@@ -572,6 +579,11 @@ impl Panel {
                     // The hover preview is its own popover so the right-click
                     // menu and the card can never fight over one child.
                     let preview = gtk::Popover::new();
+                    // A hover card must not take a pointer grab: that makes
+                    // the anchor receive leave, close the card, then enter
+                    // again even though the physical pointer never moved.
+                    preview.set_autohide(false);
+                    preview.set_position(gtk::PositionType::Top);
                     preview.set_parent(&button);
                     let weak = Rc::downgrade(self);
                     preview.connect_hide(move |popover| {
@@ -614,8 +626,7 @@ impl Panel {
                     });
                     button.add_controller(click);
                     // Resting the pointer on a running app previews its windows
-                    // in a card of its own, so a hover costs one timer and one
-                    // small box rather than a screenshot.
+                    // in a card of its own, with capture limited to its lifetime.
                     let hover = gtk::EventControllerMotion::new();
                     let pending = Rc::new(std::cell::Cell::new(None::<glib::SourceId>));
                     let grace = Rc::new(std::cell::Cell::new(None::<glib::SourceId>));
@@ -628,14 +639,15 @@ impl Panel {
                         let weak = Rc::downgrade(self);
                         let preview_output = output.clone();
                         move |_, _, _| {
-                            if menu.is_visible() || card.is_visible() || weak.upgrade().is_none() {
-                                return;
-                            }
                             if let Some(id) = pending.take() {
                                 id.remove();
                             }
                             if let Some(id) = grace.take() {
                                 id.remove();
+                            }
+                            // Re-entering the anchor keeps an existing card up.
+                            if menu.is_visible() || card.is_visible() || weak.upgrade().is_none() {
+                                return;
                             }
                             let weak = weak.clone();
                             let card = card.clone();
@@ -840,10 +852,10 @@ impl Panel {
     /// panel's steady-state cost independent of how many menus a session opens.
     fn task_menu(self: &Rc<Self>, menu: &gtk::Popover, group: &Group) -> Option<gtk::Box> {
         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        column.style_context().add_class("uflinux-task-menu");
+        column.add_css_class("uflinux-task-menu");
         let heading = gtk::Label::new(Some(&group.name));
         heading.set_halign(gtk::Align::Start);
-        heading.style_context().add_class("uflinux-task-heading");
+        heading.add_css_class("uflinux-task-heading");
         column.append(&heading);
         let application = group.pinned || group.id.contains('.');
         let mut windows = Vec::with_capacity(group.windows.len());
@@ -860,8 +872,8 @@ impl Panel {
             }
             activate.set_hexpand(true);
             activate.set_halign(gtk::Align::Fill);
-            activate.style_context().add_class("flat");
-            activate.style_context().add_class("uflinux-task-row");
+            activate.add_css_class("flat");
+            activate.add_css_class("uflinux-task-row");
             let weak = Rc::downgrade(self);
             let popup = menu.clone();
             let window_id = *window_id;
@@ -876,7 +888,7 @@ impl Panel {
             row.append(&activate);
             let close = gtk::Button::from_icon_name("window-close-symbolic");
             close.set_tooltip_text(Some("Close window"));
-            close.style_context().add_class("flat");
+            close.add_css_class("flat");
             let weak = Rc::downgrade(self);
             let popup = menu.clone();
             close.connect_clicked(move |_| {
@@ -893,8 +905,8 @@ impl Panel {
         if application {
             let launch = gtk::Button::with_label("Launch a new window");
             launch.set_halign(gtk::Align::Fill);
-            launch.style_context().add_class("flat");
-            launch.style_context().add_class("uflinux-task-row");
+            launch.add_css_class("flat");
+            launch.add_css_class("uflinux-task-row");
             let weak = Rc::downgrade(self);
             let popup = menu.clone();
             let id = group.id.clone();
@@ -915,8 +927,8 @@ impl Panel {
                 "Pin to taskbar"
             });
             pin.set_halign(gtk::Align::Fill);
-            pin.style_context().add_class("flat");
-            pin.style_context().add_class("uflinux-task-row");
+            pin.add_css_class("flat");
+            pin.add_css_class("uflinux-task-row");
             let weak = Rc::downgrade(self);
             let popup = menu.clone();
             let id = group.id.clone();
@@ -936,8 +948,8 @@ impl Panel {
         if windows.len() > 1 {
             let close_all = gtk::Button::with_label("Close all windows");
             close_all.set_halign(gtk::Align::Fill);
-            close_all.style_context().add_class("flat");
-            close_all.style_context().add_class("uflinux-task-row");
+            close_all.add_css_class("flat");
+            close_all.add_css_class("uflinux-task-row");
             let weak = Rc::downgrade(self);
             let popup = menu.clone();
             let ids = windows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
@@ -959,8 +971,8 @@ impl Panel {
         Some(column)
     }
 
-    /// Contents for the hover preview: a small card with the app's name and one
-    /// row per window. Deliberately not the right-click menu, so resting the
+    /// Contents for the hover preview: one tile per window, with its icon,
+    /// title and close button above the thumbnail. Deliberately not the right-click menu, so resting the
     /// pointer on a task never looks like a context menu appeared. Like the
     /// menu, the card is rebuilt on demand and thrown away when it closes.
     fn task_preview(
@@ -973,24 +985,8 @@ impl Panel {
             return None;
         }
         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        column.style_context().add_class("uflinux-popup-card");
-        column.style_context().add_class("uflinux-task-preview");
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let icon = gtk::Image::new();
-        icon.set_pixel_size(16);
-        if let Ok(gicon) = gio::Icon::for_string(&group.icon) {
-            icon.set_from_gicon(&gicon);
-        } else {
-            icon.set_icon_name(Some("application-x-executable"));
-        }
-        header.append(&icon);
-        let title = gtk::Label::new(Some(&group.name));
-        title.set_halign(gtk::Align::Start);
-        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        title.set_max_width_chars(28);
-        title.style_context().add_class("uflinux-task-heading");
-        header.append(&title);
-        column.append(&header);
+        column.add_css_class("uflinux-popup-card");
+        column.add_css_class("uflinux-task-preview");
         let cards = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let available_width = self
             .surfaces
@@ -1013,20 +1009,29 @@ impl Panel {
         for window in &group.windows {
             let window_id = window.id;
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            let icon = gtk::Image::new();
+            icon.set_pixel_size(16);
+            if let Ok(gicon) = gio::Icon::for_string(&group.icon) {
+                icon.set_from_gicon(&gicon);
+            } else {
+                icon.set_icon_name(Some("application-x-executable"));
+            }
+            row.append(&icon);
             let activate = gtk::Button::with_label(if window.title.is_empty() {
                 &group.name
             } else {
                 &window.title
             });
             if let Some(label) = activate.child().and_downcast::<gtk::Label>() {
+                label.set_xalign(0.0);
                 label.set_ellipsize(gtk::pango::EllipsizeMode::End);
                 label.set_max_width_chars(28);
             }
             activate.set_hexpand(true);
             activate.set_halign(gtk::Align::Fill);
             activate.set_tooltip_text(Some(&window.title));
-            activate.style_context().add_class("flat");
-            activate.style_context().add_class("uflinux-task-row");
+            activate.add_css_class("flat");
+            activate.add_css_class("uflinux-task-row");
             let weak = Rc::downgrade(self);
             let popup = card.clone();
             activate.connect_clicked(move |_| {
@@ -1039,6 +1044,7 @@ impl Panel {
             });
             let tile = gtk::Box::new(gtk::Orientation::Vertical, 4);
             tile.set_width_request(260);
+            tile.append(&row);
             if self.previews_enabled.get() {
                 let picture = gtk::Picture::new();
                 picture.set_size_request(256, 144);
@@ -1073,12 +1079,12 @@ impl Panel {
                 let target = activate.clone();
                 image_button.connect_clicked(move |_| target.emit_clicked());
                 tile.append(&image_button);
-                pictures.push((window.clone(), picture.downgrade()));
+                pictures.push((window.clone(), picture.downgrade(), activate.downgrade()));
             }
             row.append(&activate);
             let close = gtk::Button::from_icon_name("window-close-symbolic");
             close.set_tooltip_text(Some("Close window"));
-            close.style_context().add_class("flat");
+            close.add_css_class("flat");
             let weak = Rc::downgrade(self);
             let popup = card.clone();
             close.connect_clicked(move |_| {
@@ -1090,7 +1096,6 @@ impl Panel {
                 }
             });
             row.append(&close);
-            tile.append(&row);
             cards.append(&tile);
         }
         if !pictures.is_empty() {
@@ -1146,17 +1151,36 @@ impl Panel {
                         .into_iter()
                         .flat_map(|g| g.windows)
                         .collect::<Vec<_>>();
-                    if pictures.iter().any(|(window, _)| {
-                        !all.iter().any(|w| {
-                            w.id == window.id
-                                && w.app_id == window.app_id
-                                && w.title == window.title
-                        })
+                    if pictures.iter().any(|(window, _, _)| {
+                        !all.iter()
+                            .any(|w| w.id == window.id && w.app_id == window.app_id)
                     }) {
                         if let Some(popup) = popup.upgrade() {
                             popup.popdown();
                         }
                         break;
+                    }
+                    // Titles change during ordinary browsing and terminal
+                    // activity. Update the existing card and replace capture
+                    // requests, without unmapping the popup under the pointer.
+                    for (window, picture, activate) in &mut pictures {
+                        if let Some(current) = all.iter().find(|w| w.id == window.id) {
+                            if current.title != window.title {
+                                *window = current.clone();
+                                if let Some(picture) = picture.upgrade() {
+                                    // The stable window ID is unchanged. Keep
+                                    // its last image until the new capture is
+                                    // ready rather than flashing the fallback.
+                                    picture.update_property(&[gtk::accessible::Property::Label(
+                                        &format!("Preview of {}", window.title),
+                                    )]);
+                                }
+                                if let Some(activate) = activate.upgrade() {
+                                    activate.set_label(&window.title);
+                                    activate.set_tooltip_text(Some(&window.title));
+                                }
+                            }
+                        }
                     }
                     let valid = |window: &uflinux_desktop::taskbar::Window| {
                         all.iter().any(|w| {
@@ -1170,7 +1194,7 @@ impl Panel {
                             == 1
                     };
                     let mut visible = Vec::new();
-                    for (window, picture) in &pictures {
+                    for (window, picture, _) in &pictures {
                         let Some(picture) = picture.upgrade() else {
                             continue;
                         };
@@ -1205,7 +1229,10 @@ impl Panel {
                             picture.set_paintable(None::<&gtk::gdk::Texture>);
                         }
                     }
-                    let ids = visible.iter().map(|w| w.id).collect::<Vec<_>>();
+                    let ids = visible
+                        .iter()
+                        .map(|w| (w.id, w.app_id.clone(), w.title.clone()))
+                        .collect::<Vec<_>>();
                     if ids != active {
                         request.borrow_mut().take();
                         receiver = None;
@@ -1218,7 +1245,7 @@ impl Panel {
                     }
                     if let Some(rx) = &receiver {
                         while let Ok(image) = rx.try_recv() {
-                            if let Some((window, picture)) = pictures.iter().find(|(w, _)| {
+                            if let Some((window, picture, _)) = pictures.iter().find(|(w, _, _)| {
                                 w.id == image.id
                                     && w.app_id == image.app_id
                                     && w.title == image.title

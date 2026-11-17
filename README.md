@@ -41,7 +41,7 @@ supplementary artifact and cannot block a release. A configured test is not evid
 successful run: use the workflow results and attached build records to determine
 which architectures have actually passed.
 
-The desktop includes Foot, UFLinux Files, Loupe, htop, Mako, Transmission, Celluloid, GNOME Disks, File Roller,
+The desktop includes Ptyxis, UFLinux Files, Loupe, htop, Mako, Transmission, Celluloid, GNOME Disks, File Roller,
 and ConnMan with iwd, PipeWire with
 pipewire-pulse, WirePlumber, and UFLinux Settings in Rust and plain GTK4. ConnMan's
 SNTP client handles time synchronization. The taskbar opens a combined quick-settings

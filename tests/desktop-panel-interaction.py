@@ -57,14 +57,14 @@ def click(node):
 
 pointer_process = None
 
-def motion(x, y):
+def motion(x, y, settle=.2):
     global pointer_process
     if pointer_process is not None:
         pointer_process.terminate()
         pointer_process.wait()
     pointer_process = subprocess.Popen([os.environ['UFLINUX_POINTER_DRIVER'], str(x), str(y),
                                        str(x), str(y), '1280', '720', 'hover'])
-    time.sleep(.2)
+    time.sleep(settle)
 
 
 def hover(node):
@@ -158,59 +158,80 @@ def main():
     if not alive():
         failures.append('clock click killed the desktop')
 
-    foot = wait_node(lambda n: n.name.lower() == 'foot')
-    if foot is None:
-        print('FAIL: foot favorite not found; tree:')
+    ptyxis = wait_node(lambda n: n.name.lower() == 'ptyxis')
+    if ptyxis is None:
+        print('FAIL: ptyxis favorite not found; tree:')
         dump_tree()
-        failures.append('foot favorite not found')
+        failures.append('ptyxis favorite not found')
     else:
         step('favorite found')
         # Let each one-shot hover timeout expire before leaving. Repeating the
         # cycle catches attempts to remove a source that has already fired.
         for _ in range(2):
-            hover(foot)
+            hover(ptyxis)
             time.sleep(.6)
             leave()
             time.sleep(.4)
             step('idle favorite hover')
-        click(foot)  # launch
+        click(ptyxis)  # launch
         time.sleep(1.5)
         step('favorite launched')
         # Give the preview a uniquely named, directly launched capture fixture.
-        fixture = subprocess.Popen(['foot', '--app-id=foot', '--title=UFLinux preview fixture',
-                                    '-o', 'colors-dark.background=123456', 'sh', '-c', 'sleep 30'])
+        fixture = subprocess.Popen(['ptyxis', '--new-window', '-x',
+                                    r"""sh -c 'printf "\033]2;UFLinux preview fixture\007"; sleep 2; printf "\033]2;UFLinux preview updated\007"; sleep 30'"""])
         atexit.register(lambda: fixture.poll() is None and fixture.terminate())
         time.sleep(.8)
-        foot = wait_node(lambda n: n.name.lower() == 'foot')
-        if foot is None:
+        ptyxis = wait_node(lambda n: n.name.lower() == 'ptyxis')
+        if ptyxis is None:
             failures.append('favorite button vanished after launch')
             return finish(failures)
-        for _ in range(2):
-            hover(foot)
+        for expected_title in ('UFLinux preview fixture', 'UFLinux preview updated'):
+            hover(ptyxis)
             deadline = time.monotonic() + 4
             while time.monotonic() < deadline:
                 pump()
-                if any(n.name == 'Preview of UFLinux preview fixture' and
+                if any(n.name == 'Preview of ' + expected_title and
                        n.getState().contains(pyatspi.STATE_SHOWING) for n in nodes()):
+                    preview = find(lambda n: n.name == expected_title)
                     break
                 time.sleep(.1)
             else:
                 dump_tree()
                 failures.append('captured preview image did not become visible')
+                preview = None
+            # The same card must remain mapped, not disappear and reopen under
+            # an unmoving pointer when the popup takes a pointer grab.
+            until = time.monotonic() + 3
+            while preview is not None and time.monotonic() < until:
+                pump()
+                if not preview.getState().contains(pyatspi.STATE_SHOWING):
+                    failures.append('preview closed under a stationary pointer')
+                    break
+                time.sleep(.05)
+            if preview is not None and preview.name != 'UFLinux preview updated':
+                failures.append('preview title did not update in place')
+            # Return before the leave grace expires; the same card must survive.
+            motion(600, 100, settle=.05)
+            hover(ptyxis)
+            time.sleep(.5)
+            if preview is not None and not preview.getState().contains(pyatspi.STATE_SHOWING):
+                failures.append('returning to the icon did not cancel preview dismissal')
             leave()
             time.sleep(.5)
+            if preview is not None and preview.getState().contains(pyatspi.STATE_SHOWING):
+                failures.append('preview stayed open after leaving both icon and card')
             step('running favorite hover')
-        click(foot)  # activate
+        click(ptyxis)  # activate
         time.sleep(.7)
         step('favorite activated')
-        click(foot)  # minimize
+        click(ptyxis)  # minimize
         time.sleep(.7)
         step('favorite minimized')
-        foot = wait_node(lambda n: n.name.lower() == 'foot')
-        if foot is None:
+        ptyxis = wait_node(lambda n: n.name.lower() == 'ptyxis')
+        if ptyxis is None:
             failures.append('favorite button vanished after minimize')
             return finish(failures)
-        click(foot)  # activate again
+        click(ptyxis)  # activate again
         time.sleep(.7)
         step('favorite reactivated')
         if not alive():
