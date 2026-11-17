@@ -1,7 +1,7 @@
 [terminal]
 vt = 1
 [default_session]
-command = "dbus-run-session cage -s -mlast -d -- regreet"
+command = "env WLR_LIBINPUT_NO_DEVICES=1 dbus-run-session cage -s -mlast -d -- regreet"
 user = "greetd"
 [initial_session]
 command = "/usr/bin/uflinux-session"

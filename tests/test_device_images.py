@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import builder
@@ -65,6 +66,33 @@ class DeviceLayoutTests(unittest.TestCase):
 
 
 class DeviceRootfsTests(unittest.TestCase):
+    def test_root_snapshot_preserves_mountpoints_without_build_mount_contents(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            destination = Path(temporary) / "rootfs"
+            for name in ("dev", "proc", "sys", "run", "project"):
+                (source / name).mkdir(parents=True)
+                (source / name / "build-only").write_text("must not ship")
+            (source / "etc").mkdir()
+            (source / "etc/hostname").write_text("uflinux-test\n")
+            with patch.dict(os.environ, {"TAR_OPTIONS": ""}):
+                builder.device_snapshot(source, destination, rootfs=True)
+            for name in ("dev", "proc", "sys", "run"):
+                self.assertTrue((destination / name).is_dir(), name)
+                self.assertEqual(list((destination / name).iterdir()), [], name)
+                self.assertEqual((destination / name).stat().st_mode & 0o777, 0o755)
+            self.assertFalse((destination / "project").exists())
+            self.assertEqual((destination / "etc/hostname").read_text(), "uflinux-test\n")
+
+    def test_esp_snapshot_does_not_gain_root_mountpoints(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "esp-source"
+            (source / "boot").mkdir(parents=True)
+            (source / "boot/vmlinuz").write_bytes(b"kernel")
+            destination = Path(temporary) / "esp"
+            builder.device_snapshot(source, destination)
+            self.assertEqual(sorted(path.name for path in destination.iterdir()), ["boot"])
+
     def test_build_uses_the_copied_signed_repository(self):
         lines = device_repositories("/repo", "aarch64").split()
         self.assertEqual(lines[0], "/repo")
@@ -119,7 +147,7 @@ class DeviceRootfsTests(unittest.TestCase):
         self.assertNotIn("efibootmgr", device_packages(DEVICES["spacemit-k1"], "riscv64"))
 
     def test_only_f2fs_devices_pull_in_the_f2fs_tools(self):
-        # resize.f2fs is what grows an f2fs root on first boot; the XFS vm image
+        # F2FS boards carry tools for offline maintenance; the XFS vm image
         # already carries xfsprogs for the shared desktop set.
         for name in ("qcs6490", "rpi", "spacemit-k1"):
             arch = DEVICES[name]["arches"][0]

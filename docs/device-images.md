@@ -2,8 +2,9 @@
 
 Besides the generic live ISOs, UFLinux builds **installed** GPT disk images for
 specific boards. A device image writes straight to the board's SD card or eMMC,
-boots to the login screen, and grows its root partition to the size of the media
-on first boot. There is no squashfs modloop, no `live` user and no live session.
+boots to the login screen, and uses an installed root filesystem. XFS images
+expand on first boot; F2FS images keep their initial size and require offline
+expansion. There is no squashfs modloop, no `live` user and no live session.
 
 Device images are **supplementary**: they are built on tags and attached to the
 same release as the ISOs, but a failing or missing image never blocks publication
@@ -205,6 +206,13 @@ partition by hand, and nothing in the image can `apk upgrade` them.
 
 ## First boot
 
+The rootfs snapshot excludes build-time `/dev`, `/proc`, `/sys` and `/run`
+contents, but recreates those directories empty with mode 0755 before formatting
+the image. They must already exist when the initramfs mounts root read-only:
+Alpine moves its runtime mounts there before `switch_root`, and cannot create
+missing directories on a read-only filesystem. Without them, OpenRC loses its
+device nodes and kernel interfaces, and udev, gettys and the greeter fail.
+
 The `uflinux-device` OpenRC service (from the `uflinux-device` package, which is
 published in the release repository but not bundled in the live ISO) runs early in the
 `boot` runlevel, after filesystem checks and before the root remount and
@@ -212,16 +220,26 @@ published in the release repository but not bundled in the live ISO) runs early 
 `modules`: that creates a circular dependency and boot timeouts. It is inert
 unless `/etc/uflinux/device` exists, so it does nothing
 on an ordinary installed system; a device image writes that file with the board id.
-When armed it runs `growpart` on the root partition once and then grows the
-filesystem to fill it — `resize.f2fs -f` for f2fs (while the root is still mounted
-read-only, which is the only way the kernel allows), `xfs_growfs /` for XFS and
-`resize2fs` for ext4 — and records `/var/lib/uflinux/device-resized`, so a later
-partition change is not undone and a reboot does not repeat the work. Failures are
-warnings, not boot failures.
+For XFS/ext4 it runs `growpart` on the root partition once, then
+`xfs_growfs /` or `resize2fs`, and records `/var/lib/uflinux/device-resized`, so
+a later partition change is not undone and a reboot does not repeat the work.
+Failures are warnings, not boot failures.
 
-An f2fs root is grown in place, but the kernel does not re-read the superblock on
-remount, so the new space only becomes visible in `df` after the next reboot. The
-filesystem is already usable at its full size for writes that need it.
+**F2FS roots are not automatically resized.** The service returns before
+`growpart` or any filesystem changes and does not record a successful resize.
+`resize.f2fs` rewrites on-disk metadata directly; running it on a mounted root,
+even read-only, then remounting writable can leave the kernel using stale
+metadata. The previous implementation incorrectly treated this as a supported
+online expansion path. See the [upstream resize implementation](https://kernel.googlesource.com/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools/+/refs/heads/master/fsck/resize.c).
+F2FS expansion must be performed from another system or rescue environment
+while the target filesystem is completely unmounted, with a backup first.
+
+A reported reboot failure (`SIT is corrupted`, `Failed to initialize F2FS
+segment manager`, `Data consistency error`) indicates existing filesystem
+damage. The build correction prevents the unsafe operation; it does not repair
+an already damaged card. Preserve data before running offline `fsck.f2fs` or
+reflashing. The old service must also be replaced or disabled before booting a
+repaired card, otherwise it can repeat the unsafe resize.
 
 Every device image ships a regular account: **user / user**. Select the UFLinux
 session at the graphical greeter, or use this account on the text/serial console.
@@ -245,7 +263,8 @@ sync
 ```
 
 The uncompressed image is 6144 MiB (5120 MiB for `vm`), so any larger card or eMMC
-works and the root partition grows to fill it. Verify the checksum sidecar and the
+works. XFS roots expand automatically; F2FS roots retain their initial size
+until expanded offline. Verify the checksum sidecar and the
 GitHub attestation first:
 
 ```sh

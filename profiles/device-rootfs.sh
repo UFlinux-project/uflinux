@@ -241,7 +241,7 @@ if [ -d /boot/overlays ]; then
 fi
 
 # The root is found by filesystem UUID rather than device name, and has to be
-# handed over read-only for filesystem checks and the f2fs resize. OpenRC's
+# handed over read-only for filesystem checks. OpenRC's
 # root service subsequently remounts it read-write. Its
 # type is stated explicitly so the kernel does not have to guess, which also
 # matches the single filesystem feature in the initramfs. The framebuffer

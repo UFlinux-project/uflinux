@@ -1,20 +1,23 @@
 #!/bin/sh
 set -eu
 : "${XDG_RUNTIME_DIR:?A login session is required}"
+# Start on boards with no keyboard/mouse connected yet; libinput still handles
+# devices plugged in later. Preserve an explicit stricter policy for debugging.
+export WLR_LIBINPUT_NO_DEVICES="${WLR_LIBINPUT_NO_DEVICES:-1}"
 if [ -n "${WLR_RENDERER:-}" ]; then
-	export UFLINUX_RENDERER=$WLR_RENDERER
+	export UFLINUX_RENDERER="$WLR_RENDERER"
 	exec labwc --merge-config
 fi
 selected=$(uflinux-settingsctl renderer)
 case "$selected" in
-	explicit:*) export UFLINUX_RENDERER=${selected#explicit:}; exec labwc --merge-config ;;
+	explicit:*) export UFLINUX_RENDERER="${selected#explicit:}"; exec labwc --merge-config ;;
 	vulkan) candidates='vulkan gles2 pixman' ;;
 	gles2) candidates='gles2 pixman' ;;
 	*) candidates=pixman ;;
 esac
 for renderer in $candidates; do
 	rm -f "$XDG_RUNTIME_DIR/uflinux-compositor-ready"
-	export WLR_RENDERER=$renderer UFLINUX_RENDERER=$renderer
+	export WLR_RENDERER="$renderer" UFLINUX_RENDERER="$renderer"
 	if [ "$renderer" = pixman ] && [ -z "${GSK_RENDERER:-}" ]; then
 		export GSK_RENDERER=cairo
 	fi

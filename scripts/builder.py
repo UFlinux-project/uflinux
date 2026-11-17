@@ -34,7 +34,7 @@ GPT_ESP_TYPE = "C12A7328-F81F-11D2-BA4B-00A0C93EC9B0"
 GPT_LINUX_TYPE = "0FC63DAF-8483-477B-8E3F-43138715FD6D"
 # The device rootfs is assembled from a throwaway chroot whose transient mounts
 # and build inputs must not become part of the installed filesystem.
-DEVICE_ROOT_EXCLUDES = ("proc", "sys", "dev", "cache", "repo", "nura", "project",
+DEVICE_ROOT_EXCLUDES = ("proc", "sys", "dev", "run", "cache", "repo", "nura", "project",
                         "device-esp", "device-image", ".uflinux-bootstrap", "etc/apk/cache")
 DEVICE_ESP = "/device-esp"
 DEVICE_PROJECT_DIRS = ("aports", "profiles", "config", "scripts", "patches")
@@ -127,7 +127,8 @@ def device_packages(device, arch):
                  "labwc-lang", "firefox", "ublock-origin", "vulkan-loader", "xfsprogs"]
     packages += ["alpine-base", "apk-tools", "zstd", "util-linux", "dosfstools", "mtools",
                  "e2fsprogs", "e2fsprogs-extra", "cloud-utils-growpart", "linux-firmware"]
-    # resize.f2fs ships in f2fs-tools and does the first-boot grow of an f2fs root.
+    # Keep f2fs-tools available for diagnosis and offline maintenance. Mounted
+    # F2FS roots must not be expanded by the first-boot service.
     if device.get("rootfs", "ext4") == "f2fs":
         packages.append("f2fs-tools")
     # Nura packages are not installed: the profile fetches and unpacks them, so
@@ -173,7 +174,7 @@ def device_environment(name, device, arch, version, root_partuuid, esp):
     return env
 
 
-def device_snapshot(source, destination):
+def device_snapshot(source, destination, *, rootfs=False):
     """Copy an installed rootfs into an image staging tree, minus build artefacts."""
     destination.mkdir(parents=True, exist_ok=True)
     excludes = [f"--exclude=./{name}" for name in DEVICE_ROOT_EXCLUDES]
@@ -186,6 +187,15 @@ def device_snapshot(source, destination):
     reader.wait()
     if reader.returncode or writer.returncode:
         raise RuntimeError(f"failed to snapshot {source}")
+    if rootfs:
+        # Excluding build-time mounts also excludes their directories. Alpine
+        # must move /dev, /proc and /sys into the new root before switch_root;
+        # with a read-only root it cannot create missing destinations at boot.
+        # Keep this out of ESP snapshots, which share the copying helper.
+        for name in ("dev", "proc", "sys", "run"):
+            mountpoint = destination / name
+            mountpoint.mkdir(mode=0o755, parents=True, exist_ok=True)
+            mountpoint.chmod(0o755)
     return destination
 
 
@@ -1120,7 +1130,7 @@ class Builder:
             remove_tree(snapshot)
             staging = snapshot / "rootfs"
             esp = snapshot / "esp"
-            device_snapshot(root.root, staging)
+            device_snapshot(root.root, staging, rootfs=True)
             device_snapshot(root.root / DEVICE_ESP.lstrip("/"), esp)
         disk = snapshot / "disk"
         disk.parent.mkdir(parents=True, exist_ok=True)

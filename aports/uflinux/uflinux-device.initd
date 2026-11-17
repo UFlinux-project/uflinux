@@ -11,7 +11,7 @@ state_file="$state_dir/device-resized"
 depend() {
 	# Root is already mounted by the initramfs; waiting for localmount while
 	# ordering before modules creates a cycle through fsck/root/localmount.
-	# Grow after checks, while f2fs is still read-only, before root remounts rw.
+	# Run after checks and before the regular root remount.
 	need fsck
 	after modules clock
 	before root localmount bootmisc
@@ -55,10 +55,16 @@ start() {
 	[ -e "$state_file" ] && return 0
 
 	ebegin "Preparing UFLinux device storage"
-	# Both the source and the type have to be read before the root is made
-	# writable: f2fs is grown while still mounted read-only.
+	# F2FS growth is an offline operation. Even a read-only mount keeps cached
+	# metadata which becomes stale if resize.f2fs changes the backing device.
+	# Returning before growpart also leaves the partition table untouched.
 	source="$(findmnt -no SOURCE /)" || source=""
 	fstype="$(findmnt -no FSTYPE /)" || fstype=""
+	if [ "$fstype" = f2fs ]; then
+		ewarn "F2FS root expansion requires an unmounted filesystem; keeping its current size"
+		eend 0
+		return 0
+	fi
 	if [ -z "$source" ] || ! split_root_device "$source"; then
 		ewarn "cannot determine the root disk of $source, skipping the resize"
 		eend 0
@@ -83,19 +89,9 @@ start() {
 		fi
 	fi
 
-	# The initramfs hands the root filesystem over read-only by default.
-	# resize.f2fs can grow a mounted f2fs only through the kernel interface
-	# when the mount is read-only, so it runs before the remount; ext4 and
-	# XFS want a writable mount, so they get the remount first.
+	# Only filesystems with supported online growth reach this point.
+	# ext4 and XFS want a writable mount, so they get the remount first.
 	case "$fstype" in
-	f2fs)
-		if ! resize.f2fs -f "$root_part"; then
-			ewarn "resize.f2fs failed for $root_part"
-			eend 1
-			return 1
-		fi
-		mount -o remount,rw / 2>/dev/null
-		;;
 	xfs)
 		mount -o remount,rw / 2>/dev/null
 		if ! xfs_growfs /; then
