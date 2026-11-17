@@ -42,8 +42,8 @@ the inspected `7.0.8-r0` package enables `CONFIG_RD_GZIP` but disables
 `CONFIG_RD_ZSTD`. Using the ISO's Zstandard setting prevents the kernel from
 unpacking the early userspace, including the firmware and display modules.
 `qcs6490` therefore sets `initramfs_compression: gzip`; other boards default to
-Zstandard. See [the boot investigation](qcs6490-boot-investigation.md) for the
-package evidence and diagnostics. The Nura `dtbloader` EFI driver is carried in
+Zstandard. The package evidence and the fetch-and-unpack diagnostics are in
+"Package sources" below. The Nura `dtbloader` EFI driver is carried in
 `EFI/systemd/drivers` as well: it installs a board device tree before
 `systemd-boot` runs, which covers boards whose firmware provides none. Nura is
 used **only** as an extra aarch64 package source pinned to a specific branch (the
@@ -275,5 +275,5 @@ been booted on an Arrow Dragon Q6A from a USB stick: the board's firmware reache
 `systemd-boot` and the entry loads, but with Alpine's `linux-lts` the HDMI output
 stayed black, which is what prompted the switch to the Nura mainline kernel. The
 other images have not been booted on physical hardware yet, and none of them are
-covered by the QEMU ISO boot tests. That is why the board targets are labelled
-experimental and why the release notes describe device images as a preview.
+covered by the QEMU ISO boot tests. That is why the QCS6490 and SpacemiT targets are
+labelled experimental and why the release notes describe device images as a preview.

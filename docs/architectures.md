@@ -43,8 +43,8 @@ board-specific Raspberry Pi tarballs. Mainframes commonly lack a local display;
 UFLinux provides a serial console, while the desktop can be tested with a headless
 Wayland backend. No remote-desktop service is enabled by default.
 
-Every target runs Ironbar's upstream tests during compilation. Verification
-checks the actual Ironbar config, a headless labwc compositor, foreign-toplevel
+Every target runs the Settings workspace unit tests during compilation
+(`cargo test --workspace --frozen`). Verification checks a headless labwc compositor, foreign-toplevel
 protocol availability, terminal mapping, minimizing/focusing, panel survival,
 screenshot creation, and memory reporting. Missing physical battery/network/audio
 hardware is not represented as physical-device testing. The VM tests exercise real

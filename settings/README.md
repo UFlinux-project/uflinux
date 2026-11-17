@@ -34,7 +34,7 @@ credentials are machine-wide in root-protected ConnMan/iwd storage.
 TLP provides Power saver, Balanced and Performance modes, with a persistent
 selection. Alpine's TLP 1.10 package includes the profile commands introduced in
 1.9; no tlp-pd or power-profiles-daemon runs alongside this service. Profiles are
-available in Settings and the Ironbar Power menu, or through `uflinux-settingsctl power-profile
+available in Settings and the taskbar Power menu, or through `uflinux-settingsctl power-profile
 balanced`. Physical power-button behavior is configured only in Settings, with
 separate AC/battery choices. A small OpenRC service explicitly runs BusyBox acpid;
 elogind ignores the physical power key and performs the requested power action.

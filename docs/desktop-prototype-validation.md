@@ -1,9 +1,12 @@
 # Unified desktop prototype validation
 
-The unified desktop is packaged separately for isolated testing. The default
-session still uses Ironbar until the functionality and release gates in the
-replacement plan pass. Do not run the prototype beside the normal panel in a
-regular session: both provide panel and tray services.
+The unified desktop is now the default session: `uflinux-autostart` starts
+`uflinux-desktop --supervise`, and the Ironbar panel it replaced is no longer
+packaged. The measurements below were taken against that legacy panel as the
+baseline, so they describe a comparison rather than a current-versus-current
+comparison; the harness still takes `--ironbar` and `--legacy-dir` pointing at an
+older release. Do not run a second desktop beside the session's own panel: both
+provide panel and tray services.
 
 The isolated smoke test runs a headless labwc session with a private D-Bus bus:
 

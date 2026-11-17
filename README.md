@@ -1,7 +1,7 @@
 # UFLinux
 
-A minimal Alpine Linux desktop with labwc and a Windows 10-inspired Ironbar taskbar.
-The initial source baseline is Alpine **3.24.4** and Ironbar **0.19.1**.
+A minimal Alpine Linux desktop with labwc and a Windows 10-inspired taskbar built in
+plain GTK4. The initial source baseline is Alpine **3.24.4**.
 
 The repository builds real Alpine packages and ISO images for `x86`, `x86_64`,
 `aarch64`, `armv7`, `ppc64le`, and `riscv64`.
@@ -71,10 +71,14 @@ own bootloader, kernel and root partition.
 - [GitHub setup and publishing](docs/github.md)
 - [This repository’s signing and Pages setup](docs/github-setup.md)
 - [Build stages, outputs, and source verification](docs/building.md)
+- [Parallel package build validation](docs/parallel-build-validation.md)
+- [Boot-image compression](docs/compression.md)
+- [Optimization audit](docs/optimization-audit.md)
 - [Installation and updates](docs/installing.md)
 - [Device disk images for boards and virtual machines](docs/device-images.md)
 - [Architecture coverage and validation](docs/architectures.md)
 - [Initial local validation results](docs/validation.md)
+- [Unified desktop prototype measurements](docs/desktop-prototype-validation.md)
 - [Settings architecture, controls and resource targets](docs/settings.md)
 - [Settings validation results](docs/settings-validation.md)
 - [Start menu controls](docs/start-menu.md)

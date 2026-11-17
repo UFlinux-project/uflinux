@@ -30,7 +30,7 @@ hardware are hidden; use the arrow beside an input or output volume slider to
 choose its audio device. Advanced options are
 available from each panel's Settings link. `--quick-settings` is an alias for the
 Network panel. Escape, an outside click or a repeated taskbar click dismisses the
-active panel. Ironbar supplies the originating monitor. The GUI reuses its
+active panel. The taskbar draws the flyout on the monitor that owns it. The GUI reuses its
 process and exits after its last window closes; no shell processes poll status.
 
 Screen Capture configures `uflinux-screencapture`, the tool launched by Print Screen. It
@@ -47,8 +47,8 @@ plus both Intel VA-API drivers (x86) so recording works out of the box on AMD an
 
 `uflinux-settingsd` is a headless GLib/GIO session service. A sleeping Wayland
 worker handles output protocols; libpulse integrates asynchronously with GLib.
-ConnMan and Pulse subscriptions update a shared snapshot and Ironbar reactive
-variables. Audio reconnects after server restarts. Clock state is rechecked every
+ConnMan and Pulse subscriptions update a shared snapshot that the desktop shell, the
+Settings GUI and `uflinux-settingsctl` read over D-Bus. Audio reconnects after server restarts. Clock state is rechecked every
 15 seconds and published when synchronization or policy changes.
 
 Session D-Bus interface `org.uflinux.Settings1` at `/org/uflinux/Settings` exposes
@@ -234,6 +234,6 @@ desktop dependencies. Missing test facilities fail the gate rather than silently
 claiming coverage. Physical HDR, VRR, DDC/CI, suspend and GPU support remain
 separate hardware validation. See [recorded results](settings-validation.md).
 
-The resident [Start menu](start-menu.md) runs in a separate GTK4 process and
-launches Settings when requested. See its [validation record](start-menu-validation.md) for launcher tests
+The resident [Start menu](start-menu.md) runs inside the taskbar's `uflinux-desktop`
+process and launches Settings when requested. See its [validation record](start-menu-validation.md) for launcher tests
 and measurements.

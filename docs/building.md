@@ -14,9 +14,11 @@ On the configured Ubuntu runners, install `qemu-user-binfmt binfmt-support` and 
 python3 scripts/preflight.py --arch ppc64le
 ```
 
-`config/sources.lock.json` pins minirootfs hashes, aports and Ironbar commit archive
-hashes, feature choices, and the default source epoch. Downloaded files are checked
-again on every reuse. Alpine's official package repositories remain on the named
+`config/sources.lock.json` pins minirootfs hashes, commit archive hashes for the
+vendored sources (aports, ConnMan, gnome-backgrounds, gpu-screen-recorder, the
+labwc themes and ReGreet), feature choices, and the default source epoch.
+Downloaded files are checked again on every reuse. Alpine's official package
+repositories remain on the named
 stable branch so security revisions can be incorporated. Their resolved package
 versions and hashes are recorded; a pinned minirootfs does not freeze those repos.
 
@@ -51,7 +53,8 @@ restores a cache directory cannot read those files otherwise.
 
 GitHub compiles five independent origins per architecture: `connman`,
 `gpu-screen-recorder`, `uflinux-regreet`, `uflinux-settings` and `uflinux`. PR/main builds schedule
-twenty compile jobs; manual/tag runs schedule 35, with at most eight compile jobs running together.
+five compile jobs (x86_64 only); a release tag or a full-matrix manual run schedules 30, one
+per architecture and origin, with at most eight compile jobs running together.
 Each origin has its own VM, development signing key, timeout and cache. Heavy Rust
 builds and their native clean-rebuild comparisons run independently. Signing and
 ISO assembly wait for a complete validated set of APKs.
@@ -87,8 +90,11 @@ Each native origin must have its clean-rebuild report before collection succeeds
 See [local parallel-build validation](parallel-build-validation.md) for completed
 checks and their scope.
 
-Twenty-two custom APKs are built: patched ConnMan (runtime/OpenRC/dev/docs/debug),
-Ironbar, Settings components and the distribution packages. ConnMan's pinned
+Thirty-one custom APKs are built: patched ConnMan (runtime/OpenRC/dev/docs/debug, seven),
+ReGreet (one), patched gpu-screen-recorder (runtime/dev/docs/debug, four), the Settings
+origin (nine: GUI, desktop shell, screencapture tool, installer UI, daemon/CLI, system
+helper, OpenRC, documentation and debug symbols) and the distribution packages (ten).
+ConnMan's pinned
 upstream source and Alpine compatibility patches are retained with build inputs.
 
 - `packages`: root installs recipe dependencies with `SUDO_APK=apk abuild -F deps`;
@@ -107,9 +113,10 @@ upstream source and Alpine compatibility patches are retained with build inputs.
   the initramfs stream are checked after ISO extraction. Compression settings and
   the helper patch checksum are recorded in the source lock. The apk-tools 3 and
   compression patches are in `patches`; see [compression details](compression.md).
-- `verify`: installs the custom packages through apk, validates Ironbar's actual
-  configuration, tests a headless desktop and toplevel controls, and exercises the
-  installer safeguards. Firmware boot and disk installation are separate VM jobs.
+- `verify`: installs the custom packages through apk, tests a headless desktop and toplevel
+  controls against the resident desktop shell (quick-settings panels, Start menu and
+  wallpaper drawing), checks every shipped executable's architecture and library linkage, and
+  exercises the installer safeguards. Firmware boot and disk installation are separate VM jobs.
 - `device` (with `--device`): installs the board's package set into a separate
   chroot, configures an installed (non-live) system, regenerates the initramfs
   without a modloop, and writes a raw GPT disk image without loop devices or
@@ -175,17 +182,20 @@ and gzip without timestamps. GitHub uses the source commit time. These controls
 help reproducibility; byte-for-byte reproducibility is not claimed until two
 clean builds with identical resolved packages have been compared.
 
-Ironbar and Settings use `opt-level=s`, fat LTO, eight codegen units,
-abort-on-panic, and dynamically linked Alpine libraries. Their release builds use
+The Rust origins build with `opt-level=s`, eight codegen units, abort-on-panic, and
+dynamically linked Alpine libraries. The Settings origin additionally forces fat LTO in
+its APKBUILD, overriding the workspace's `lto = "thin"`; ReGreet only sets the
+optimization level. Release builds use
 Cargo's default Rust debug-info level; Alpine still splits any available debug
 symbols into the debug APKs. There is no `target-cpu=native` or host instruction-set tuning.
 
-Settings uses the same release optimization and hardening practices. Settings
-and the resident Start menu share `settings/Cargo.lock`. Their UIs link GTK4;
+Settings, the desktop shell and the screencapture tool share `settings/Cargo.lock`. Their UIs link GTK4;
 the session service and privileged helper do not. `cargo auditable` records dependency data.
-The six Settings APKs split GUI, daemon/CLI, system helper, OpenRC, documentation
-and debug symbols. Ironbar omits its NetworkManager and volume modules and carries
-the checksum-pinned `IRONBAR_OUTPUT` child-environment patch.
+The nine Settings APKs split GUI, desktop shell, screencapture tool, installer UI,
+daemon/CLI, system helper, OpenRC, documentation and debug symbols.
+The Start menu is not a separate crate in the workspace: its sources
+live in `settings/start-menu/src` and are compiled into `uflinux-desktop` with `#[path]`
+module declarations, so the taskbar, its panels and the Start menu are one process.
 
 After editing Settings source or data, run:
 
@@ -207,10 +217,10 @@ elogind, Vulkan/EGL and GLib development packages listed in its APKBUILD.
 The Power panel uses Alpine's TLP 1.10 series, with the three-profile interface
 introduced in 1.9. Power packages are checked for all six architectures. Tests
 run the actual BusyBox ACPI parser in a private chroot with synthetic input events;
-the installed x86_64 VM verifies real TLP transitions, shared Ironbar status and
+the installed x86_64 VM verifies real TLP transitions, the desktop's shared power status and
 physical-key Do nothing/Shut down behavior. TLP is never executed on the build
 host. Live VM tests allocate 4096 MiB. The diskless root unpacks the desktop and
-full Papirus icon theme into tmpfs, whose default capacity is half of RAM. This
+full Papirus icon theme into tmpfs, whose default capacity is 75 % of RAM. This
 is separate from the installed reference target; a 2048 MiB live VM exhausted
 its root filesystem during boot after the artwork/theme addition. The runner
 rejects boot-time APK database errors and logs root byte/inode capacity.

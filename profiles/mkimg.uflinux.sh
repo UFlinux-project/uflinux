@@ -9,7 +9,7 @@ profile_uflinux() {
 	done
 	apks="$selected"
 	title="UFLinux"
-	desc="Minimal Alpine live desktop with labwc and Ironbar"
+	desc="Minimal Alpine live desktop with labwc and the UFLinux desktop shell"
 	image_name="uflinux"
 	profile_abbrev="uflinux"
 	hostname="uflinux"

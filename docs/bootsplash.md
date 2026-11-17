@@ -66,10 +66,11 @@ checks daemon exit and restarts greetd. The installed 512 MiB acceptance test al
 runs through the normal splash-to-greetd handoff. Other graphics hardware requires
 separate validation; architecture support does not guarantee a usable local GPU.
 
-Completed locally on 8 November 2026: 48 Python regression checks, ShellCheck,
+Completed locally on 8 November 2026, against the 22 custom APKs of that build and
+the Ironbar taskbar it shipped: 48 Python regression checks, ShellCheck,
 actionlint, package availability checks for all seven targets, native UFLinux
-package compilation, and fresh-root signature/ELF/library/headless desktop checks
-for all 22 custom APKs. Existing unchanged ConnMan, Ironbar and Settings APKs were
+package compilation, and fresh-root signature/ELF/library/headless desktop checks.
+Existing unchanged ConnMan, Ironbar and Settings APKs were
 reused and their original signatures verified before development signing.
 
 Both x86_64 BIOS and UEFI runs passed animation capture, live and installed

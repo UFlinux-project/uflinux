@@ -2,6 +2,8 @@
 
 This is the historical pre-Settings development ISO. Current ConnMan+iwd/GTK4
 work and its separate artifacts are recorded in [Settings validation](settings-validation.md).
+The taskbar in these artifacts was Ironbar, which the current tree has replaced with
+the in-repo `uflinux-desktop` shell; the Ironbar numbers below are kept as recorded.
 
 The initial development build was checked on 8 November 2026. These results
 describe **x86_64 only**. The other five architectures have a configured CI

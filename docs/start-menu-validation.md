@@ -2,7 +2,9 @@
 
 This historical record predates the separate resident launcher. It covers the
 original plain GTK4 launcher in `.cache/start-out/`, separately
-from previous development images. The earlier tested Plymouth image remains in
+from previous development images. The launcher later became a resident process and
+has since been merged into the taskbar binary, so the current Start menu runs inside
+`uflinux-desktop`; see [the Start menu guide](start-menu.md). The earlier tested Plymouth image remains in
 `.cache/splash-final-out/`. This is a development-key build, not a published release.
 
 ## Native x86_64 checks

@@ -41,6 +41,7 @@ reproducibility. Other architectures may have different size trade-offs.
 
 ## Validation
 
+Recorded for the development image of 8 November 2026, whose taskbar was Ironbar.
 The x86_64 image passed both BIOS and UEFI live boot, signed-modloop mounting,
 Ironbar validation, XFS installation/reboot and preservation of an unrelated
 partition. Installed Settings/flyout, GTK authentication, TLP and ACPI tests passed

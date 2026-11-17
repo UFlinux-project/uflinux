@@ -6,7 +6,7 @@ Papirus and GNOME's `Dark_Ivy.jpg`. Those assets were third-party artwork used b
 the original distribution, rather than artwork authored by UFLinux.
 
 Papirus comes from Alpine's signed `papirus-icon-theme` package. GTK3, GTK4,
-and labwc select Papirus by default; Ironbar uses the GTK theme for its
+and labwc select Papirus by default; the desktop shell uses the GTK theme for its
 application icons. Adwaita remains available for fallback icons. Personal
 preferences can override the packaged defaults.
 
@@ -37,7 +37,7 @@ wallpaper also selects Dark Ivy. No GNOME desktop or settings daemon is needed.
 
 The leaf logo is copied unchanged from the original
 [Calamares branding](https://github.com/UFlinux-project/uf-calamares-settings/blob/53217a0b7edc494658a1dfcfee649365a19d0c79/etc/calamares/branding/uflinux/uflinuxlogo-spaces.svg).
-It appears on Ironbar's Start button, the Settings application icon and About.
+It appears on the taskbar Start button, the Settings application icon and About.
 The imported SVGs are checked against the exact upstream bytes recorded in
 `config/artwork.lock.json`.
 

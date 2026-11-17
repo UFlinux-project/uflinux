@@ -1,7 +1,10 @@
 # Parallel package build validation
 
 Local x86_64 checks completed on 8 November 2026. These exercise the package-job
-split; they are separate from the earlier development ISO's boot records.
+split; they are separate from the earlier development ISO's boot records. The
+taskbar in these artifacts was Ironbar, which the current tree has replaced with
+the in-repo `uflinux-desktop` shell, so the per-origin test counts below no longer
+match a present-day build.
 
 - Four independent package commands ran concurrently, with separate roots, caches
   and development signing keys. They produced all 21 expected APKs.

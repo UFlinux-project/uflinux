@@ -1,6 +1,8 @@
 # Settings and power validation
 
 These results describe local x86_64 development builds on 8 November 2026.
+The taskbar in these artifacts was Ironbar, which the current tree has replaced with
+the in-repo `uflinux-desktop` shell; the Ironbar numbers below are kept as recorded.
 The earlier ISO in `out/` is unchanged; its results are in
 [the original validation record](validation.md). New images, signed APKs,
 inventories, screenshots and reports are written to `out-settings/`.

@@ -12,15 +12,16 @@ For a source update:
 2. Update the corresponding versions, archive URLs, SHA-256/SHA-512 values, aports
    commit, and source epoch in `config/sources.lock.json`. Avoid moving branches
    and tags as build inputs; record immutable commits and actual archive hashes.
-3. Update the Ironbar APKBUILD version, commit URL, build directory, checksum, and
-   desktop dependency when upgrading Ironbar. Review its Cargo lockfile, minimum
-   Rust/GTK requirements, feature names, config schema, and labwc compatibility.
+3. Update the Settings APKBUILD version, source checksum and `pkgrel` when the
+   workspace changes. Review its Cargo lockfile, minimum Rust/GTK requirements,
+   feature names, and labwc compatibility. The desktop shell, Start menu and
+   screencapture tool build from the same workspace and APKBUILD.
 4. If changing Alpine branches, update the branch URLs in the UFLinux APKBUILD and
    overlay generator together with the lockfile and publishing path. Recheck the
    pinned mkimage compatibility patch against the new source.
 5. Update `uflinux`'s package version and the distribution default version. Bump
-   Ironbar's `pkgrel` for packaging, flags, or patch changes without an upstream
-   version change; update the exact desktop dependency at the same time.
+   the affected origins' `pkgrel` for packaging, flags, or patch changes without an
+   upstream version change; update the exact desktop dependency at the same time.
 6. Run `python3 scripts/update-checksums.py` after changing local package assets,
    inspect its diff, run `scripts/check.py`, then use the full manual build matrix.
 7. Review package/boot/desktop reports before creating the version tag.
@@ -42,7 +43,7 @@ actual repository as part of adopting the project.
 
 Dependabot updates pinned GitHub Actions. The pinned actionlint Go source commit
 is reviewed separately. Changes to runner images, QEMU, firmware, Alpine's kernel,
-or Ironbar require the relevant tests to pass again; do not mark failed targets
+or the desktop shell require the relevant tests to pass again; do not mark failed targets
 as optional simply to produce a release.
 
 ## Signing keys
@@ -89,16 +90,17 @@ signature streams excluded. It still includes control metadata and timestamps;
 matching only the executable is a weaker check.
 
 Compare repeat-build hashes before declaring reproducible releases. Record the
-baseline ISO size, stripped Ironbar size, boot time, and desktop RSS from attached
+baseline ISO size, desktop binary size, boot time, and desktop RSS from attached
 records. No unmeasured minimum-memory or performance claim is implied by the
 word "lightweight".
 
 Settings changes require `cargo fmt` and frozen workspace tests. The build
 calculates the local source checksum; update the Settings version with
 `scripts/settings-source.py --update` when needed.
-Check Ironbar's patch against the pinned upstream revision before upgrading it;
-keep its originating-monitor environment test. Do not re-enable the removed
-NetworkManager/volume modules while using the combined Settings backend.
+Check the gpu-screen-recorder patch series against the pinned upstream snapshot
+before upgrading it, and keep the capture tool's originating-monitor tests in the
+desktop harness. The desktop shell reads network, audio and power state only
+through the Settings backend; do not add a second client for the same hardware.
 
 ConnMan is also a maintained custom package. Track Alpine's ConnMan security
 updates and upstream releases, update its locked source/hash and package revision,

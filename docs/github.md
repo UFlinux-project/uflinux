@@ -6,13 +6,16 @@
    such as `v*`; its default branch restrictions may otherwise reject tag builds.
 4. Generate a persistent EC signing key outside this repository (P-256 or P-384):
 
+   Keep the key in a directory of its own (`$HOME/.config/uflinux` is the desktop's
+   user-preference directory):
+
    ```sh
-   install -d -m 700 "$HOME/.config/uflinux"
+   install -d -m 700 "$HOME/.config/uflinux3-signing"
    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
-     -out "$HOME/.config/uflinux/uflinux.ec"
-   chmod 600 "$HOME/.config/uflinux/uflinux.ec"
-   openssl pkey -in "$HOME/.config/uflinux/uflinux.ec" -pubout \
-     -out "$HOME/.config/uflinux/uflinux.ec.pub"
+     -out "$HOME/.config/uflinux3-signing/uflinux.ec"
+   chmod 600 "$HOME/.config/uflinux3-signing/uflinux.ec"
+   openssl pkey -in "$HOME/.config/uflinux3-signing/uflinux.ec" -pubout \
+     -out "$HOME/.config/uflinux3-signing/uflinux.ec.pub"
    ```
 
 5. Add two Actions secrets containing the **PEM file contents**, not paths or
