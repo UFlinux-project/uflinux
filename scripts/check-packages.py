@@ -8,6 +8,7 @@ import re
 import shlex
 import sys
 import tarfile
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -103,7 +104,16 @@ apps = lock["apps"]
 
 def check_apps(arch):
     url = f"{apps['url']}/{arch}/APKINDEX.tar.gz"
-    found = set(re.findall(r"^P:(.+)$", index_entries(url), re.M))
+    try:
+        index = index_entries(url)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise RuntimeError(
+                f"{arch}: apps repository index is missing at {url}; "
+                "restore the architecture in the apps repository before building"
+            ) from error
+        raise
+    found = set(re.findall(r"^P:(.+)$", index, re.M))
     if "uflinux-files" not in found:
         raise RuntimeError(f"{arch}: the apps index no longer provides uflinux-files")
     return f"{arch}: apps index provides {len(found)} packages"

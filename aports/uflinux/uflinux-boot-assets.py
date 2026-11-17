@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive the Plymouth boot assets from the pinned original UFLinux splash.
+"""Derive the Plymouth wordmark from the pinned original UFLinux splash.
 
 Only the standard library is used so packaging needs no image toolkit: the
 imported original is an unmodified 8-bit RGBA PNG, which is decoded directly.
@@ -12,9 +12,8 @@ import sys
 import zlib
 from pathlib import Path
 
-# Content boxes measured on the pinned original: the leaf mark and the logotype,
-# separated by the empty column band between them.
-LEAF = (37, 10, 174, 225)
+# Logotype content box measured on the pinned original.
+# The fallback logo is rasterized separately from the website SVG.
 WORDMARK = (271, 90, 331, 79)
 
 
@@ -110,7 +109,6 @@ def main():
     parser.add_argument("--outdir", type=Path, required=True)
     arguments = parser.parse_args()
     arguments.outdir.mkdir(parents=True, exist_ok=True)
-    cut_to_alpha(arguments.original, LEAF, arguments.outdir / "bgrt-fallback.png")
     cut_to_alpha(arguments.original, WORDMARK, arguments.outdir / "watermark.png")
     return 0
 

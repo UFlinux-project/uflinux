@@ -35,11 +35,11 @@ the Settings app's 16-megapixel image limit. Dark Ivy is the login default;
 Appearance's wallpaper chooser starts in the bundled collection. Restore default
 wallpaper also selects Dark Ivy. No GNOME desktop or settings daemon is needed.
 
-The leaf logo is copied unchanged from the original
-[Calamares branding](https://github.com/UFlinux-project/uf-calamares-settings/blob/53217a0b7edc494658a1dfcfee649365a19d0c79/etc/calamares/branding/uflinux/uflinuxlogo-spaces.svg).
-It appears on the taskbar Start button, the Settings application icon and About.
-The imported SVGs are checked against the exact upstream bytes recorded in
-`config/artwork.lock.json`.
+The simplified leaf logo is copied unchanged from the
+[UFLinux website](https://uflinux.org/assets/logo.svg) on 17 November 2026.
+It appears on the taskbar Start button, the Settings application icon, About,
+and the boot splash fallback. The imported SVGs are checked against the exact
+upstream bytes recorded in `config/artwork.lock.json`.
 
 The GNOME 3.38.0 source archive URL and SHA-512 are pinned in
 `config/sources.lock.json` and APKBUILD. Its SHA-256 was also checked against
@@ -48,12 +48,12 @@ other rebuild inputs, and APKBUILD verifies it during extraction. No wallpaper
 is fetched at login. Papirus versions and APK hashes are recorded in each image's
 normal resolved-package inventory.
 
-The logo retains GPL-3.0-only. Dark Ivy is by Garrett LeSage; Endless Shapes and
+The website SVG contains no license notice; its source is recorded in the
+artwork notice. Dark Ivy is by Garrett LeSage; Endless Shapes and
 the Symbolics images are by Jakub Steiner, under CC BY-SA 3.0. Cold Warm is by
 invisiblepower and Road by Joshua Welch, under CC0. The exact GNOME attribution
 and license notice, GPL text and artwork notice are installed in
-`/usr/share/licenses/uflinux-defaults/`. Settings' copy of the logo is covered by
-its GPL license and source attribution in `settings/README.md`.
+`/usr/share/licenses/uflinux-defaults/`. Settings' copy of the logo has source attribution in `settings/README.md`.
 
 The package/desktop verification suite checks Papirus and branded icon lookup,
 SVG rendering, every bundled image's dimensions, bounded previews, the Start
@@ -72,4 +72,4 @@ not built during this artwork change.
 The adw-gtk3 follow-up also passed independent GTK3/GTK4 theme probes and the
 full native desktop suite. Reports are in `.cache/adw-out/checks/x86_64/`.
 
-The [startup animation](bootsplash.md) also uses the original leaf logo.
+The [startup animation](bootsplash.md) also uses the simplified website leaf logo.

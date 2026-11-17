@@ -8,17 +8,13 @@
     "icon_theme": "Papirus"
   },
   "logo": {
-    "repository": "https://github.com/UFlinux-project/uf-calamares-settings",
-    "commit": "53217a0b7edc494658a1dfcfee649365a19d0c79",
-    "path": "etc/calamares/branding/uflinux/uflinuxlogo-spaces.svg",
-    "url": "https://raw.githubusercontent.com/UFlinux-project/uf-calamares-settings/53217a0b7edc494658a1dfcfee649365a19d0c79/etc/calamares/branding/uflinux/uflinuxlogo-spaces.svg",
-    "sha512": "f1c52e9fb8613e71ef77817ffcfad4638be5fba1c606218562955ad6a0d75a087bce62ed514d8687af9fa25940d64513ba0b535f1de370c51a1db9b2ed399256",
-    "license": "GPL-3.0-only",
+    "url": "https://uflinux.org/assets/logo.svg",
+    "retrieved": "2026-11-17",
+    "sha512": "2c4bc926abc85b818305af2c8fcba0aff27d8c307d59fea20415c60c0c47874b63efc3cceccc95ba569587d748d607f54b94c768b66b9642f4e8c6089e180d13",
     "copies": [
       "aports/uflinux/uflinux-logo.svg",
       "settings/data/org.uflinux.Settings.svg"
-    ],
-    "git_blob_sha1": "d2ec6551aac7e710e5f4e20321e1dc338f30ea53"
+    ]
   },
   "logotype": {
     "repository": "https://github.com/UFlinux-project/main",
@@ -54,8 +50,9 @@
     "original_theme_repository": "https://github.com/UFlinux-project/ufplymouththeme",
     "original_theme_commit": "f56aa102eb205c174fe28a64064a134c5e813e52",
     "original_theme_assets_available": false,
-    "logo_source": "logotype",
+    "logo_source": "logo",
     "animation": "UFLinux spinner throbber, GPL-3.0-only",
-    "implementation": "Alpine Plymouth two-step with BGRT firmware background, OpenRC lifecycle"
+    "implementation": "Alpine Plymouth two-step with BGRT firmware background, OpenRC lifecycle",
+    "wordmark_source": "logotype"
   }
 }

@@ -9,7 +9,7 @@ The repository builds real Alpine packages and ISO images for `x86`, `x86_64`,
 On release tags it additionally builds installed disk images for four device
 targets: Dragon Q6A-class QCOM boards, Raspberry Pi 3–5, SpacemiT K1 boards such
 as the Orange Pi RV2, and virtual machines.
-The [startup animation](docs/bootsplash.md) reuses the original UFLinux leaf logo.
+The [startup animation](docs/bootsplash.md) uses the simplified leaf logo from [uflinux.org](https://uflinux.org/).
 
 ```sh
 python3 scripts/check.py
@@ -88,7 +88,7 @@ own bootloader, kernel and root partition.
 - [Maintenance, signing, and key rotation](docs/maintenance.md)
 
 UFLinux scripts, Settings and configuration use GPL-3.0-only, matching this
-repository’s license. The original UFLinux leaf logo is reused under GPL-3.0-only.
+repository’s license. The simplified UFLinux logo comes from uflinux.org; see the artwork notice for provenance.
 Wallpapers retain their CC BY-SA 3.0 or CC0 licenses; Papirus is supplied by Alpine.
 Vendored files and distributed packages retain their upstream licenses and
 attribution. See the artwork guide and the ISO APK inventory.

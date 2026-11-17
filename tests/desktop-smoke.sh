@@ -28,6 +28,16 @@ RC
 : > "$XDG_RUNTIME_DIR/config/autostart"
 pids=""
 cleanup() {
+	status=$?
+	trap - EXIT HUP INT TERM
+	if [ "$status" -ne 0 ]; then
+		for log in "$results/desktop.log" "$results/labwc.log"; do
+			if [ -f "$log" ]; then
+				printf '\n--- %s ---\n' "$log" >&2
+				tail -80 "$log" >&2 || :
+			fi
+		done
+	fi
 	for pid in $pids; do kill "$pid" 2>/dev/null || :; done
 	# Under qemu-user the host process name is qemu-*, not the guest daemon
 	# name. Restrict cleanup to this session's unique runtime directory.
@@ -47,6 +57,7 @@ for process in Path('/proc').glob('[0-9]*'):
 PY
 	wait 2>/dev/null || :
 	rm -rf "$XDG_RUNTIME_DIR"
+	exit "$status"
 }
 trap cleanup EXIT HUP INT TERM
 # A resident process that dies is usually reported much later as a client
@@ -162,7 +173,11 @@ for _attempt in $(seq 1 100); do
     sleep .1
 done
 gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner org.uflinux.Settings1 | grep -q true
-G_DEBUG=fatal-criticals UFLINUX_SETTINGS_BENCH=1 /usr/bin/uflinux-desktop --daemon > "$results/desktop.log" 2>&1 &
+# GDK routes libwayland's error details through its debug log. Without these,
+# a protocol failure can report only EPROTO, with no interface, object or cause.
+# Keep the wire trace in the diagnostics artifact, including output hotplug and
+# fractional-scale changes, which can race differently under qemu-user.
+G_MESSAGES_DEBUG=Gdk WAYLAND_DEBUG=client G_DEBUG=fatal-criticals UFLINUX_SETTINGS_BENCH=1 /usr/bin/uflinux-desktop --daemon > "$results/desktop.log" 2>&1 &
 panel=$!; pids="$pids $panel"
 ptyxis --standalone --title=UFLinux-Smoke -x 'sleep 600' > "$results/ptyxis.log" 2>&1 &
 terminal=$!; pids="$pids $terminal"

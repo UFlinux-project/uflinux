@@ -64,8 +64,7 @@ the verified distribution source with `python3 scripts/settings-source.py --upda
 from the repository root after editing sources. Hardware and memory claims require
 the integration/VM tests; a successful compile is not hardware certification.
 
-The application icon reuses the original GPL-3.0 UFLinux leaf logo, unchanged,
-from UFlinux-project/uf-calamares-settings commit
-53217a0b7edc494658a1dfcfee649365a19d0c79,
-etc/calamares/branding/uflinux/uflinuxlogo-spaces.svg. Source attribution and exact
-checksums are recorded in config/artwork.lock.json in the distro repository.
+The application icon uses the simplified UFLinux leaf logo copied unchanged from
+https://uflinux.org/assets/logo.svg on 17 November 2026. Source attribution and
+exact checksums are recorded in config/artwork.lock.json in the distro repository.
+The downloaded SVG contains no license notice; see aports/uflinux/artwork-NOTICE.

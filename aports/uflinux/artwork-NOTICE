@@ -9,19 +9,21 @@ Papirus is supplied by Alpine's signed papirus-icon-theme package. Its upstream
 source, copyright and GPL-3.0-only license are maintained by that package.
 https://github.com/PapirusDevelopmentTeam/papirus-icon-theme
 
-The UFLinux leaf logo is copied without alteration from:
-https://github.com/UFlinux-project/uf-calamares-settings/blob/53217a0b7edc494658a1dfcfee649365a19d0c79/etc/calamares/branding/uflinux/uflinuxlogo-spaces.svg
-That repository distributes it under GPL-3.0. A copy is in GPL-3.0 alongside this
-notice. The same unchanged logo is used for the Settings application icon.
+The simplified UFLinux leaf logo is copied without alteration from:
+https://uflinux.org/assets/logo.svg
+Retrieved from https://uflinux.org/ on 17 November 2026. Exact source bytes and
+SHA-512 are recorded in config/artwork.lock.json. The same SVG is used for the
+desktop panel and Settings application icon, and rasterized with rsvg-convert
+for the Plymouth fallback logo. The downloaded SVG contains no license notice.
 
 The boot logotype is the original UFLinux bootloader splash, copied without
 alteration from:
 https://github.com/UFlinux-project/main/blob/067f3069b20f78995920d30795d48d36c96fcdf7/config/bootloaders/grub-pc/splash.png
 That repository distributes it under GPL-3.0. Packaging keeps this file
 unaltered as uflinux-splash-original.png and derives the Plymouth images from it
-at build time: uflinux-boot-assets.py copies the leaf box into bgrt-fallback.png
-and the logotype box into watermark.png, turning the black background into
-transparency without resampling. The spinner, padlock, passphrase entry and
+at build time: uflinux-boot-assets.py copies only the logotype box into
+watermark.png, turning the black background into transparency without resampling.
+The old leaf in this reference splash is not used. The spinner, padlock, passphrase entry and
 bullet images are original UFLinux artwork under GPL-3.0-only.
 
 Wallpaper images are copied without alteration from gnome-backgrounds 3.38.0:

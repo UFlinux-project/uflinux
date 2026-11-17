@@ -10,16 +10,18 @@ The theme uses Plymouth's `two-step` module with `UseFirmwareBackground=true`,
 which is the only Plymouth plugin that reads
 `/sys/firmware/acpi/bgrt/{status,xoffset,yoffset,image}`. On machines without
 BGRT — BIOS firmware, most ARM boards, virtual machines — `bgrt-fallback.png`
-occupies exactly the same slot, so the original white leaf appears where the
-firmware logo would have been and nothing shifts. The firmware logo, the leaf
-and the logotype are all derived from pinned upstream artwork; provenance is in
+occupies exactly the same slot, so the simplified website leaf logo appears
+where the firmware logo would have been and nothing shifts. The firmware
+supplies its own logo. The leaf and logotype use pinned upstream artwork;
+provenance is in
 `config/artwork.lock.json` and `artwork-NOTICE`.
 
 Packaging keeps the upstream bootloader splash unaltered as
 `uflinux-splash-original.png`. `uflinux-boot-assets.py` (standard library only)
-copies its leaf box to `bgrt-fallback.png` and its logotype box to
-`watermark.png`, converting the black background into alpha without resampling,
-so both images also compose correctly over a vendor logo. The spinner is
+copies only its logotype box to `watermark.png`, converting the black background
+into alpha without resampling. The old leaf in the splash is not used.
+`rsvg-convert` renders the simplified website SVG into `bgrt-fallback.png` at its
+native 220 × 220 size, retaining the white circle and black leaf. The spinner is
 rasterized into 24 `throbber-NNNN.png` frames at a 15-degree step, which the
 `two-step` module animates itself; `lock.png`, `entry.png` and `bullet.png`
 cover the passphrase and filesystem-check dialogs. `rsvg-convert` is build-only.
