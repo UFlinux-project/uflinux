@@ -890,13 +890,11 @@ fn write_window_previews(enabled: bool) -> Result<()> {
         return Ok(());
     }
     files::atomic(&path, xml.as_bytes(), 0o600)?;
-    match Command::new("labwc").arg("--reconfigure").status() {
-        Ok(status) if status.success() => Ok(()),
-        _ => {
-            let _ = restore_xml(&path, &previous);
-            Err("Cannot reload compositor settings".into())
-        }
+    if let Err(error) = reconfigure_compositor(compositor_pid()) {
+        let _ = restore_xml(&path, &previous);
+        return Err(error);
     }
+    Ok(())
 }
 fn write_hdr(enabled: bool) -> Result<()> {
     let path = hdr_path();
@@ -909,11 +907,30 @@ fn write_hdr(enabled: bool) -> Result<()> {
     };
     let xml = files::set_hdr_xml(&xml, enabled)?;
     files::atomic(&path, xml.as_bytes(), 0o600)?;
-    Command::new("labwc")
-        .arg("--reconfigure")
-        .status()
-        .map_err(|_| "Cannot reload compositor settings")?;
-    Ok(())
+    reconfigure_compositor(compositor_pid())
+}
+/// labwc reloads its configuration when it is signalled through the identifier
+/// a session exports at startup, so a missing or stale identifier means there
+/// is no compositor to notify rather than a rejected configuration. The saved
+/// file still applies to the next session.
+fn compositor_pid() -> Option<libc::pid_t> {
+    live_compositor(std::env::var("LABWC_PID").ok())
+}
+fn live_compositor(published: Option<String>) -> Option<libc::pid_t> {
+    published?
+        .parse::<libc::pid_t>()
+        .ok()
+        .filter(|pid| *pid > 0 && unsafe { libc::kill(*pid, 0) } == 0)
+}
+fn reconfigure_compositor(compositor: Option<libc::pid_t>) -> Result<()> {
+    if compositor.is_none() {
+        eprintln!("uflinux-settingsd: no compositor to reload; applying at the next session");
+        return Ok(());
+    }
+    match Command::new("labwc").arg("--reconfigure").status() {
+        Ok(status) if status.success() => Ok(()),
+        _ => Err("Cannot reload compositor settings".into()),
+    }
 }
 fn restore_xml(path: &Path, previous: &Option<Vec<u8>>) -> Result<()> {
     match previous {
@@ -988,4 +1005,26 @@ fn information() -> BTreeMap<String, String> {
     data.insert("Session".into(), "labwc / Wayland".into());
     data.insert("Settings".into(), env!("CARGO_PKG_VERSION").into());
     data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unpublished_or_stale_compositor_is_not_notified() {
+        assert_eq!(live_compositor(None), None);
+        assert_eq!(live_compositor(Some("".into())), None);
+        assert_eq!(live_compositor(Some("not-a-pid".into())), None);
+        assert_eq!(live_compositor(Some("0".into())), None);
+        assert_eq!(live_compositor(Some("-1".into())), None);
+        assert_eq!(live_compositor(Some(libc::pid_t::MAX.to_string())), None);
+        let self_pid = std::process::id() as libc::pid_t;
+        assert_eq!(live_compositor(Some(self_pid.to_string())), Some(self_pid));
+    }
+
+    #[test]
+    fn settings_still_persist_without_a_running_compositor() {
+        assert!(reconfigure_compositor(None).is_ok());
+    }
 }

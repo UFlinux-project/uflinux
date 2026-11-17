@@ -83,11 +83,15 @@ for _attempt in $(seq 1 60); do
 	sleep 1
 done
 [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]
+# The settings service reloads the compositor with `labwc --reconfigure`, which
+# signals the process named by LABWC_PID rather than the socket it just waited
+# for. A real session exports the identifier from its autostart script.
+export LABWC_PID=$compositor
 # D-Bus activates a desktop from the environment the session bus saved, not this
 # shell's. Without this a desktop that has to activate itself, because the
 # resident one is gone or not registered yet, opens with no display and the
 # client ends up running a whole second shell in the foreground.
-dbus-update-activation-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+dbus-update-activation-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP XDG_SESSION_TYPE LABWC_PID
 wayland-info > "$results/wayland.txt"
 grep -q zwlr_foreign_toplevel_manager_v1 "$results/wayland.txt"
 python3 /project/tests/artwork-smoke.py > "$results/artwork.txt"
