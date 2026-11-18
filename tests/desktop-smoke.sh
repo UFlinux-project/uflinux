@@ -105,6 +105,16 @@ export LABWC_PID=$compositor
 dbus-update-activation-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP XDG_SESSION_TYPE LABWC_PID GSK_RENDERER XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME
 wayland-info > "$results/wayland.txt"
 grep -q zwlr_foreign_toplevel_manager_v1 "$results/wayland.txt"
+# Start PipeWire before anything can D-Bus-activate the portals.
+# xdg-desktop-portal-wlr initializes its screencast source when it is first
+# activated; with no audio server yet it gives up and never re-publishes
+# org.freedesktop.portal.ScreenCast, so the portal checks below would fail.
+/usr/libexec/pipewire-launcher > "$results/audio.log" 2>&1 &
+for _attempt in $(seq 1 30); do
+	pactl info > "$results/pulse.txt" 2>/dev/null && break
+	sleep 1
+done
+pactl info | grep -q 'PipeWire'
 python3 /project/tests/artwork-smoke.py > "$results/artwork.txt"
 # Record Wayland setup and guest syscalls. The trace distinguishes a stalled
 # compositor handshake from a D-Bus connection failure and identifies the
@@ -142,11 +152,6 @@ if [ "$notifications_ready" != 1 ]; then
 		exit 1
 	fi
 fi
-/usr/libexec/pipewire-launcher > "$results/audio.log" 2>&1 &
-for _attempt in $(seq 1 30); do
-	pactl info > "$results/pulse.txt" 2>/dev/null && break
-	sleep 1
-done
 pactl load-module module-null-sink sink_name=uflinux_test > "$results/audio-module.txt"
 for _attempt in $(seq 1 30); do
 	if pactl set-default-sink uflinux_test 2> "$results/audio-default-error.txt" &&
@@ -169,14 +174,35 @@ if [ "${UFLINUX_TEST_PORTALS:-}" = 1 ]; then
         --object-path /org/freedesktop/portal/desktop --timeout 45 \
         --method org.freedesktop.portal.Settings.Read org.freedesktop.appearance color-scheme \
         > "$results/portal-settings.txt"
-    gdbus call --session --dest org.freedesktop.portal.Desktop \
-        --object-path /org/freedesktop/portal/desktop --timeout 45 \
-        --method org.freedesktop.DBus.Properties.Get org.freedesktop.portal.ScreenCast version \
-        > "$results/portal-screencast.txt"
+    # The screencast interface is only exported once the portal has activated
+    # xdg-desktop-portal-wlr and that backend has finished initializing. Under
+    # emulation that can trail activation by seconds, so retry instead of
+    # trusting a single read.
+    screencast_ready=0
+    for _attempt in $(seq 1 30); do
+        if gdbus call --session --dest org.freedesktop.portal.Desktop \
+            --object-path /org/freedesktop/portal/desktop --timeout 45 \
+            --method org.freedesktop.DBus.Properties.Get org.freedesktop.portal.ScreenCast version \
+            > "$results/portal-screencast.txt" 2>&1; then screencast_ready=1; break; fi
+        sleep 1
+    done
+    if [ "$screencast_ready" != 1 ]; then
+        cat "$results/portal-screencast.txt" >&2
+        echo 'ScreenCast portal interface was never exported' >&2
+        exit 1
+    fi
     for backend in gtk4 wlr; do
-        gdbus call --session --dest org.freedesktop.DBus \
-            --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner \
-            "org.freedesktop.impl.portal.desktop.$backend" | grep -q true
+        backend_ready=0
+        for _attempt in $(seq 1 30); do
+            if gdbus call --session --dest org.freedesktop.DBus \
+                --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner \
+                "org.freedesktop.impl.portal.desktop.$backend" | grep -q true; then backend_ready=1; break; fi
+            sleep 1
+        done
+        if [ "$backend_ready" != 1 ]; then
+            echo "Portal backend $backend did not register on D-Bus" >&2
+            exit 1
+        fi
     done
 fi
 mkdir -p /tmp/uflinux-settings-smoke-results

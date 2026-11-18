@@ -33,6 +33,23 @@ def wait(predicate):
         if value: return value
         time.sleep(0.05)
     raise AssertionError('Audio subscriptions did not converge')
+def converge(predicate, action=None, timeout=120):
+    # Under an emulator a stream change can reach the server while its
+    # subscription event is dropped, which leaves the daemon's view frozen at
+    # the old values: GetState alone then never catches up. Every Execute ends
+    # with a re-introspection, and the stream actions are idempotent, so
+    # re-issue the action until the change is visible instead of failing the
+    # architecture.
+    deadline=time.time()+timeout
+    while True:
+        snapshot=state();value=predicate(snapshot)
+        if value: return value
+        if time.time()>=deadline:
+            raise AssertionError('Audio subscriptions did not converge')
+        try:
+            if action: execute(action)
+        except (GLib.Error,AssertionError): pass
+        time.sleep(1)
 
 # riscv64 is built and verified through qemu-user TCG, the slowest of the
 # emulated architectures. Once live streams start, its PipeWire graph thread
@@ -45,6 +62,12 @@ def wait(predicate):
 # the remaining checks instead of failing the architecture, like the
 # notification getsockopt defect in desktop-smoke.sh.
 emulated=platform.machine()=='riscv64'
+def stream_shown(index,input_stream,percent,muted):
+    def shown(snapshot):
+        stream=next((item for item in snapshot['streams'] if item['index']==index
+                     and item['input']==input_stream),None)
+        return stream if stream and stream['muted'] is muted and abs(stream['volume']-percent)<1 else None
+    return shown
 previous=state()['default_output']
 module=subprocess.check_output(['pactl','load-module','module-null-sink','sink_name=uflinux_alternate',
     'sink_properties=device.description=UFLinux-Alternate-Output'],text=True).strip()
@@ -127,8 +150,8 @@ try:
             children.append(subprocess.Popen(['parec','--device=uflinux_alternate.monitor','--client-name=uflinux-recording-test'],stdout=subprocess.DEVNULL))
             for input_stream in (False,True):
                 stream=wait(lambda s:next((v for v in s['streams'] if v['input']==input_stream),None))
-                execute({'action':'set-stream','input':input_stream,'index':stream['index'],'percent':23,'muted':True})
-                wait(lambda s:any(v['index']==stream['index'] and v['input']==input_stream and v['muted'] and abs(v['volume']-23)<1 for v in s['streams']))
+                converge(stream_shown(stream['index'],input_stream,23,True),
+                         {'action':'set-stream','input':input_stream,'index':stream['index'],'percent':23,'muted':True})
     # WirePlumber removes its automatic dummy sink while a real sink exists.
     subprocess.run(['pactl','unload-module',module],check=True);unloaded=True
     wait(lambda s:any(d['name']==previous for d in s['outputs']))

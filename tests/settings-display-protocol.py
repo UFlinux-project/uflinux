@@ -31,6 +31,44 @@ def config(outputs):
     return [{**{k:o[k] for k in ['name','enabled','x','y','scale','transform','adaptive_sync']},'mode':o['current']} for o in outputs]
 
 
+def layout():
+    """The compositor's outputs plus the surfaces the shell drew for them.
+
+    A hotplug removes a wl_output while clients are binding it, and a client
+    that binds an id the compositor already dropped is killed by the resulting
+    protocol error, so the shell's own view is part of the picture. A shell
+    that is gone answers --status with the null fallback, which is reported as
+    no surfaces at all."""
+    surfaces=config(state()['displays']['outputs'])
+    try:
+        status=json.loads(subprocess.check_output(['uflinux-desktop','--status'],text=True,timeout=5))
+    except (subprocess.SubprocessError,OSError,json.JSONDecodeError):
+        return surfaces,None
+    background=status.get('background') or {}
+    return surfaces,json.dumps(background.get('outputs',[]),sort_keys=True)
+
+
+def settle(timeout=30):
+    """Hand the session over only once the output list has gone quiet.
+
+    The last apply rebuilds the outputs, and the add/remove pairs it produces
+    stay in flight after Execute returns. Waiting for a second of an unchanged
+    layout lets the shell finish re-binding before the next test starts poking
+    it; on riscv64 it used to die from a wl_output global that had already been
+    removed by the time it bound it."""
+    deadline=time.time()+timeout
+    steady=None
+    seen=0.0
+    while time.time()<deadline:
+        current=layout()
+        if current[1] is not None and current==steady and time.time()-seen>=1:
+            return
+        steady=current
+        seen=time.time()
+        time.sleep(.1)
+    raise AssertionError('The output layout never settled after the hotplug cycles')
+
+
 before=config(state()['displays']['outputs'])
 assert before
 invalid=[{**o,'enabled':False} for o in before]
@@ -92,7 +130,8 @@ temporary[-1]['x']+=40
 call({'action':'apply-displays','outputs':temporary,'hdr':False})
 subprocess.run(['wtype','-M','ctrl','-M','alt','-k','F11','-m','alt','-m','ctrl'],check=True)
 wait(lambda s:s['displays']['pending'] is None and len(s['displays']['outputs'])==len(before) and any(o['enabled'] for o in s['displays']['outputs']))
-time.sleep(.5)
+settle()
 identifier=call({'action':'apply-displays','outputs':before,'hdr':False})['id']
 call({'action':'confirm-displays','id':identifier})
+settle()
 print('Display test/apply, timeout, caller loss, scaling, rotation, hotplug and last-output recovery passed')
