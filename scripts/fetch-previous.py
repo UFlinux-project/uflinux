@@ -5,15 +5,30 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 
 from builder import ARCHES, repository_url
 
+
+def open_repository_url(url, timeout):
+    for retry_delay in (5, 10, 20, None):
+        try:
+            return urllib.request.urlopen(url, timeout=timeout)
+        except urllib.error.HTTPError as error:
+            if retry_delay is None or error.code not in (429, 500, 502, 503, 504):
+                error.add_note(f'While fetching {url}')
+                raise
+            error.close()
+            print(f'HTTP {error.code} fetching {url}. Retrying in {retry_delay}s.', flush=True)
+            time.sleep(retry_delay)
+
+
 repository = repository_url(os.environ.get('APK_REPOSITORY_URL'))
 destination = Path('out/previous/repository')
 try:
-    with urllib.request.urlopen(repository + '/releases.json', timeout=30) as response:
+    with open_repository_url(repository + '/releases.json', timeout=30) as response:
         manifest = response.read(1024 * 1024 + 1)
 except urllib.error.HTTPError as error:
     if error.code != 404:
@@ -37,7 +52,7 @@ else:
         for name in {name for release in history for name in release['packages'][arch]}:
             if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+~-]*\.apk', name):
                 raise ValueError('Invalid APK snapshot filename')
-            with urllib.request.urlopen(repository + '/' + arch + '/' + name, timeout=60) as response:
+            with open_repository_url(repository + '/' + arch + '/' + name, timeout=60) as response:
                 with (target / name).open('wb') as output:
                     while chunk := response.read(1024 * 1024):
                         output.write(chunk)
