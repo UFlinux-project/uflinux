@@ -116,6 +116,9 @@ portal_source = lock["sources"]["xdg-desktop-portal-gtk4"]
 assert portal_source["sha512"] in portal
 assert f'_commit={portal_source["url"].rsplit("/", 1)[1]}' in portal
 assert f'pkgver={lock["xdg-desktop-portal-gtk4"]["version"]}\n' in portal
+for name, digest in lock["xdg-desktop-portal-gtk4"]["patches"].items():
+    assert digest + "  " + name in portal
+    assert hashlib.sha512((ROOT / "aports/xdg-desktop-portal-gtk4" / name).read_bytes()).hexdigest() == digest
 cursors = (ROOT / "aports/simp1e-cursors/APKBUILD").read_text()
 for source in ("simp1e-cursors", "cursor-generator"):
     assert lock["sources"][source]["sha512"] in cursors, f"simp1e-cursors recipe must pin {source}"

@@ -125,7 +125,10 @@
     }
   },
   "xdg-desktop-portal-gtk4": {
-    "version": "1.6.6"
+    "version": "1.6.6",
+    "patches": {
+      "x11-window-id-width.patch": "4577c5c101a37aa57d36882496f8d017057761f3b584ccb05b4afa7839674d3eef8c8883d98cb7ea60bf32a621c7122b464cde66f0fe808a147250a17d636e02"
+    }
   },
   "gpu-screen-recorder": {
     "version": "6.1.7",

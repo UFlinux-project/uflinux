@@ -1,0 +1,18 @@
+Convert portal X11 IDs to GDK's platform-sized XWindow before lookup.
+An out-of-range ID follows the same path as an unknown parent.
+
+--- a/src/gui/windowing/x11.rs
++++ b/src/gui/windowing/x11.rs
+@@ -24,7 +24,11 @@
+         .expect("GTK guarantees that an X11Surface is always associated with an X11Display");
+ 
+     // Safely look up the GDK surface representation from the raw parent XID
+-    let Some(parent_surface) = X11Surface::lookup_for_display(&display, parent_xid) else {
++    let Some(parent_surface) = parent_xid
++        .try_into()
++        .ok()
++        .and_then(|window| X11Surface::lookup_for_display(&display, window))
++    else {
+         tracing::error!("Failed to resolve GDK surface for parent XID: {parent_xid}");
+         return;
+     };
