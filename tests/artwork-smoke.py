@@ -40,27 +40,38 @@ with tempfile.TemporaryDirectory() as config:
     (directory / 'settings.ini').write_text(
         '[Settings]\ngtk-theme-name=Adwaita\ngtk-icon-theme-name=hicolor\n'
         'gtk-cursor-theme-name=Adwaita\n')
+    # GTK3 reads org.gnome.desktop.interface itself, so its personal values
+    # travel through GSettings. GTK4 has no GSettings backend: on Wayland it
+    # takes the same keys from the settings portal, which outranks any file,
+    # and only consults the key files when the portal is absent. GDK_DEBUG
+    # pins that fallback so the probe does not depend on portal activation
+    # timing, and the personal INI above is what GTK4 then has to honour.
+    environment = dict(os.environ, GSETTINGS_BACKEND='memory', XDG_CONFIG_HOME=config)
     for version in ('3.0', '4.0'):
+        # GDK_DEBUG is ignored by GTK3, which only consults the portal when
+        # sandboxed or when GTK_USE_PORTAL is set.
+        environment['GDK_DEBUG'] = 'default-settings' if version == '4.0' else ''
         subprocess.run([sys.executable, '-c', """
 import sys
 import gi
 gi.require_version('Gtk', sys.argv[1])
 from gi.repository import Gio, Gtk
 preferences = Gio.Settings.new('org.gnome.desktop.interface')
-assert preferences.get_string('gtk-theme') == 'adw-gtk3-dark'
-assert preferences.get_string('icon-theme') == 'Papirus-Dark'
-assert preferences.get_string('cursor-theme') == 'simp1e-cursors-adw-dark'
-assert preferences.get_string('color-scheme') == 'prefer-dark'
+for key, expected in (('gtk-theme', 'adw-gtk3-dark'), ('icon-theme', 'Papirus-Dark'),
+                      ('cursor-theme', 'simp1e-cursors-adw-dark'), ('color-scheme', 'prefer-dark')):
+    actual = preferences.get_string(key)
+    assert actual == expected, f'System GSettings {key}: expected {expected!r}, got {actual!r}'
 if sys.argv[1] == '3.0':
     assert preferences.set_string('gtk-theme', 'Adwaita')
     assert preferences.set_string('icon-theme', 'hicolor')
     assert preferences.set_string('cursor-theme', 'Adwaita')
 Gtk.init([]) if sys.argv[1] == '3.0' else Gtk.init()
 settings = Gtk.Settings.get_default()
-assert settings.get_property('gtk-theme-name') == 'Adwaita', 'Personal GTK theme was overridden'
-assert settings.get_property('gtk-icon-theme-name') == 'hicolor', 'Personal icon theme was overridden'
-assert settings.get_property('gtk-cursor-theme-name') == 'Adwaita', 'Personal cursor theme was overridden'
-""", version], check=True, env=dict(os.environ, GSETTINGS_BACKEND='memory', XDG_CONFIG_HOME=config))
+for prop, expected in (('gtk-theme-name', 'Adwaita'), ('gtk-icon-theme-name', 'hicolor'),
+                       ('gtk-cursor-theme-name', 'Adwaita')):
+    actual = settings.get_property(prop)
+    assert actual == expected, f'GTK{sys.argv[1]} {prop}: personal value ignored, got {actual!r}'
+""", version], check=True, env=environment)
 for version in ('gtk-3.0', 'gtk-4.0'):
     assert (Path('/usr/share/themes/adw-gtk3-dark') / version / 'gtk.css').is_file()
 # The cursor theme is installed by the vendored simp1e-cursors package, and the
