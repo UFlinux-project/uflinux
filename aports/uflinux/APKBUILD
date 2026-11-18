@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=12
+pkgrel=14
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -154,7 +154,7 @@ release() {
 defaults() {
 	pkgdesc="UFLinux labwc desktop defaults"
 	license="GPL-3.0-only AND CC-BY-SA-3.0 AND CC-BY-SA-4.0 AND CC0-1.0"
-	depends="adw-gtk3 papirus-icon-theme gsettings-desktop-schemas uflinux-initramfs=$pkgver-r$pkgrel"
+	depends="adw-gtk3 papirus-icon-theme simp1e-cursors-adw-dark gsettings-desktop-schemas uflinux-initramfs=$pkgver-r$pkgrel"
 	replaces="plymouth greetd greetd-agreety-config connman connman-openrc iwd busybox-openrc"
 	replaces_priority=100
 	amove usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init usr/libexec/uflinux-image-user
@@ -176,13 +176,13 @@ desktop() {
 	pkgdesc="UFLinux minimal desktop dependencies"
 	depends="uflinux-release=$pkgver-r$pkgrel uflinux-defaults=$pkgver-r$pkgrel uflinux-bootsplash-openrc=$pkgver-r$pkgrel
 		xdg-user-dirs labwc uflinux-desktop uflinux-settings uflinux-screencapture gpu-screen-recorder
-		xdg-desktop-portal xdg-desktop-portal-wlr ptyxis loupe htop mako
+		xdg-desktop-portal xdg-desktop-portal-gtk4 xdg-desktop-portal-wlr ptyxis loupe htop mako
 		transmission-gtk celluloid gnome-disk-utility file-roller
 		eudev eudev-openrc elogind elogind-openrc dbus dbus-openrc dbus-x11 util-linux-login
 		greetd greetd-openrc uflinux-regreet=0.2.0-r1 cage polkit-elogind
 		connman=2.0-r4 connman-openrc=2.0-r4 connman-vpn=2.0-r4 connman-vpn-openrc=2.0-r4
 		bluez bluez-openrc iwd iwd-openrc busybox-openrc tzdata wireguard-tools
-		pipewire pipewire-pulse wireplumber upower font-ubuntu-nerd font-ubuntu-mono-nerd font-noto font-noto-cjk papirus-icon-theme adwaita-icon-theme
+		pipewire pipewire-pulse wireplumber upower font-ubuntu-nerd font-ubuntu-mono-nerd font-noto font-noto-cjk papirus-icon-theme adwaita-icon-theme simp1e-cursors-adw-dark
 		mesa-dri-gallium mesa-va-gallium libva-utils doas sudo"
 	# Hardware video encoding for gpu-screen-recorder needs a VA-API driver for
 	# the GPU; without one, recording fails with "no video codec available".
@@ -282,15 +282,15 @@ aef715c855631a661e0683fcd6a92a411c3407da3f8bfce0b23dfd2c7ff257767dd935be274f99e9
 e72cfac44fcca417aff6eaf6d9e222620fdba3b0f45dd8dd84feb9e4c91597b9a95804d5b3feb4e53304c4cfb2bc2113126e2c8897be7a67e34c6ef3d474d6fa  labwc-rc.xml
 4d5e99153a366ec53abf1a201ec8f0d174c4235581c7178038dcaf31b540ff53b794a4ba1bb3a6090c63f96173323b42ba4868427a896bc64d7a24ef80261e45  labwc-menu.xml
 f25b2a1b852ea3519078d149f2ab86eedaddb811a2f4c6437a4e572072ddf7b758fa8b2570c9ba6f266ed2ac585a5e3f11e056a8e6e77df3de89c8814f9acb7e  labwc-autostart
-f635e02bd8f0b6b859571a578336b978585dc93baae7a6a9d4ee74aa038d29c813706cd72ae5c8a90391b0f05d37b33bcfb8c146c969ffbd6da5680dcd6dd9ed  labwc-environment
+efe45afdeec66523694e7ee75a5c195b27b9e3def66793cd116f92f96d86f583302201a2a3b1ca45aff0ab3858a81cee06a04f26823fc396bea5071391d16ac0  labwc-environment
 25c5a6c4b180a5df555a9bc9282a34ebdb2c8082d9d5ead4f7eb6a64e543cb8650222f149ac558348c45f53b115e7e289b3c70432a73661977eb0eb023976a92  mako.conf
-8056c90ec399dad84a3895a1dbf22f0f09fe354b8ef4779ee721da160933e50cbaef637ce0c83cae692f7691e633369768960200b3fb8826b45ea688dcfeec7f  gtk-settings.ini
-d0ebab6764ec1bbab86a246bc06ec393a2cabd44ac8dc641dd7838c5d09810bf9727b06b94a228b89fa0cfd3fc7f47c4361c81d1cf0566299e577d181ba36193  90-uflinux.gschema.override
+f426758a179e1204966e58efd2a4fa321bd131121fd72b79acd72ddeef293de64184ed0297b0ecf127a3159877676f8bee663b94bc526e63505058ba7c29e70c  gtk-settings.ini
+94b123a679be2db186c02a5a317a159eacc05216bc077727971a3e5a25d35f8ab7bcc47fcf78cfac0ccef20a479e7e44e40c3a80e50b2c03a2509ca236263429  90-uflinux.gschema.override
 1209352f7b7d7d06bb842aafd88dfb4bfe0fabee3c734bc58308c482683767644d1c941da8d8a5e4c9dfc6f84415821c223d44b372e18da35459499e22567308  45-uflinux-fonts.conf
 e66c6e8e3c9381090221eb26517651c62dae180f1df7afac010d9e900da1e552fa22aa7b759724ad1a12592c50a44c119f0ed2103baacc3befa381fdeaa5096c  firefox-defaults.js
-36e1638b8b0300bd9dbc0df89e8a47fb5681c61efd026c82df901a3882a5bf679d8a9a985ffc0ac3680413287227262c2988a5196bca17ac6b43d56db09d369f  labwc-portals.conf
+ace68157b466fde36171976f455c87bbb5a4ca4f6e0a388fe890f26727b30944596505473030301e491ad8457ba40eddfed9f7df8333b7c05e9642ce4a26a30c  labwc-portals.conf
 9eaee64c71dd41d18127cee42dae69d572997b47dfd773f8a84b3717738147fc527c2911e7f0fef5ec60cb636507992fd7d46bdc8e570fc605272e9ea3cd9704  xdg-desktop-portal-wlr-labwc
-6c2cfebbd30b73c4172ec34efea6cf398f445e8e7b2f4a8e667163ca3b8a2fb2edefef2e014f557338d4f1b20b7af39e32f29a8a5f6bd12fae881ffe4e2a28c9  regreet.toml
+69dacc844d96be67a357d0d314674f62fc4733ce039a84dfaa9adda0d040460585ae7c94a2e2caba7419460cd2dc9271d6809c20696a1c06fd2900ddb4804b6e  regreet.toml
 f74547b20fab4d4851c4759e34a27fb24ffb075c7f8d1dd8fbbb646ef02302ce6b98023e7e530ad922813bcbfcb8a5602f625841d3474e2920a20b8a7000015e  regreet.css
 54f1d10fa9d07c414bd69c368a025543e762cd6cafc65d1e74dee79addb964e8d7eaf87e236a7010cd35ac7af6e38e015e7ac9bfab4506f3effa3600f79d527c  greetd-installed.toml
 89eda399321a8a434712ba3c41528a028f0b34dd932889563a8e0b370932cd126ffbbba115a8cc131ea88db3688bd5ef938c82e199fb9795bd9c930093388d79  greetd-live.toml

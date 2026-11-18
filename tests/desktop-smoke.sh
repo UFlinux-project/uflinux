@@ -102,7 +102,7 @@ export LABWC_PID=$compositor
 # shell's. Without this a desktop that has to activate itself, because the
 # resident one is gone or not registered yet, opens with no display and the
 # client ends up running a whole second shell in the foreground.
-dbus-update-activation-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP XDG_SESSION_TYPE LABWC_PID
+dbus-update-activation-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP XDG_SESSION_TYPE LABWC_PID GSK_RENDERER XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME
 wayland-info > "$results/wayland.txt"
 grep -q zwlr_foreign_toplevel_manager_v1 "$results/wayland.txt"
 python3 /project/tests/artwork-smoke.py > "$results/artwork.txt"
@@ -164,6 +164,21 @@ for _attempt in $(seq 1 10); do
 	sleep 1
 done
 grep -q '50%' "$results/volume.txt"
+if [ "${UFLINUX_TEST_PORTALS:-}" = 1 ]; then
+    gdbus call --session --dest org.freedesktop.portal.Desktop \
+        --object-path /org/freedesktop/portal/desktop --timeout 45 \
+        --method org.freedesktop.portal.Settings.Read org.freedesktop.appearance color-scheme \
+        > "$results/portal-settings.txt"
+    gdbus call --session --dest org.freedesktop.portal.Desktop \
+        --object-path /org/freedesktop/portal/desktop --timeout 45 \
+        --method org.freedesktop.DBus.Properties.Get org.freedesktop.portal.ScreenCast version \
+        > "$results/portal-screencast.txt"
+    for backend in gtk4 wlr; do
+        gdbus call --session --dest org.freedesktop.DBus \
+            --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner \
+            "org.freedesktop.impl.portal.desktop.$backend" | grep -q true
+    done
+fi
 mkdir -p /tmp/uflinux-settings-smoke-results
 /usr/libexec/uflinux-settingsd > /tmp/uflinux-settings-smoke-results/service.log 2>&1 &
 settings_daemon=$!; pids="$pids $settings_daemon"

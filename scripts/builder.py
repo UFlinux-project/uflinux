@@ -352,6 +352,7 @@ PACKAGE_NAMES = {
     "connman": {"connman", "connman-dbg", "connman-dev", "connman-doc", "connman-openrc",
                 "connman-vpn", "connman-vpn-openrc"},
     "uflinux-regreet": {"uflinux-regreet"},
+    "xdg-desktop-portal-gtk4": {"xdg-desktop-portal-gtk4"},
     "gpu-screen-recorder": {"gpu-screen-recorder", "gpu-screen-recorder-dbg",
                             "gpu-screen-recorder-dev", "gpu-screen-recorder-doc"},
     "uflinux-settings": {"uflinux-settings", "uflinux-settings-daemon", "uflinux-settings-dbg",
@@ -359,7 +360,19 @@ PACKAGE_NAMES = {
     "uflinux": {"uflinux", "uflinux-defaults", "uflinux-desktop-meta", "uflinux-installer",
                 "uflinux-live", "uflinux-live-openrc", "uflinux-release", "uflinux-bootsplash-openrc",
                 "uflinux-initramfs", "uflinux-device"},
+    "simp1e-cursors": {"simp1e-cursors", "simp1e-cursors-adw-dark"},
 }
+CARGO_ORIGINS = {"uflinux-regreet", "uflinux-settings", "xdg-desktop-portal-gtk4"}
+
+
+def package_version(origin, distribution_version):
+    if origin == "uflinux":
+        return distribution_version
+    if origin == "uflinux-settings":
+        return LOCK["settings"]["version"]
+    return LOCK[origin]["version"]
+
+
 # Custom packages that are published to the signed repository but are not part of
 # the live ISO, so they cannot appear in the ISO's SPDX inventory. A device disk
 # image installs them from the published repository instead (device_packages).
@@ -792,7 +805,7 @@ class Builder:
         apkbuild.write_text(re.sub(r"^pkgver=.*$", "pkgver=" + self.args.version, apkbuild.read_text(), flags=re.M))
         # Only fetch the selected origin's sources in a package shard.
         selected = (self.args.package,) if getattr(self.args, "package", None) else tuple(PACKAGE_NAMES)
-        for origin in ("connman", "uflinux-regreet", "gpu-screen-recorder"):
+        for origin in ("connman", "uflinux-regreet", "gpu-screen-recorder", "xdg-desktop-portal-gtk4"):
             if origin in selected:
                 archive = download(LOCK["sources"][origin], self.cache / "downloads")
                 suffix = "tar.xz" if origin == "connman" else "tar.gz"
@@ -802,6 +815,13 @@ class Builder:
             shutil.copy2(artwork, self.root / "var/cache/distfiles/gnome-backgrounds-3.38.0.tar.xz")
             theme = download(LOCK["sources"]["labwc-themes"], self.cache / "downloads")
             shutil.copy2(theme, self.root / "var/cache/distfiles/labwc-themes-6a2e3634.tar.gz")
+        if "simp1e-cursors" in selected:
+            # The recipe has two archives, so the generic naming rule above does
+            # not apply and both distfiles names are written out literally.
+            for origin, target in (("simp1e-cursors", "simp1e-cursors-f8f8f3c09dd0aa31cc9bc5499c683aad025984be.tar.gz"),
+                                   ("cursor-generator", "cursor-generator-dd4a730c4a45c73c580220658bd1f21f141f8a55.tar.gz")):
+                archive = download(LOCK["sources"][origin], self.cache / "downloads")
+                shutil.copy2(archive, self.root / "var/cache/distfiles" / target)
         if "uflinux-settings" in selected:
             import importlib.util
             spec = importlib.util.spec_from_file_location("settings_source", PROJECT / "scripts/settings-source.py")
@@ -812,20 +832,41 @@ class Builder:
                 raise RuntimeError("Settings version differs from the package version")
             settings_digest = hashlib.sha512(settings_source).hexdigest()
             recipe = source / "uflinux-settings/APKBUILD"
-            recipe.write_text(re.sub(r'^sha512sums="[^"]*"',
-                                     f'sha512sums="\n{settings_digest}  uflinux-settings-{settings_version}.tar\n"',
+            checksums = f"{settings_digest}  uflinux-settings-{settings_version}.tar\n"
+            if getattr(self.args, "settings_pgo", False):
+                llvm_name = "llvm-project-22.1.3.src.tar.xz"
+                llvm_digest = ("3557a955d55471671ae2f7b9c809affd59a29a6fb1e70a2a5d040dc1c6376246de"
+                               "b0635be8ca36cae09112981760e9afb128c822e5554bd722589fb8dee3f0df")
+                llvm_archive = download_pinned(
+                    "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.3/" + llvm_name,
+                    llvm_digest, "sha512", self.cache / "downloads" / llvm_name)
+                shutil.copy2(llvm_archive, self.root / "var/cache/distfiles" / llvm_name)
+                shutil.copy2(llvm_archive, recipe.parent / llvm_name)
+                checksums += f"{llvm_digest}  {llvm_name}\n"
+            recipe.write_text(re.sub(r'^sha512sums="[^"]*"', f'sha512sums="\n{checksums}"',
                                      recipe.read_text(), flags=re.M))
             (self.root / "var/cache/distfiles" / f"uflinux-settings-{settings_version}.tar").write_bytes(settings_source)
             (source / "uflinux-settings" / f"uflinux-settings-{settings_version}.tar").write_bytes(settings_source)
             (self.cache / "downloads" / (settings_digest + ".tar")).write_bytes(settings_source)
         env = {"CARGO_HOME": "/cache/cargo", "CARGO_TARGET_DIR": "/cache/target",
                "CARGO_BUILD_JOBS": os.environ.get("CARGO_BUILD_JOBS", "1")}
+        if getattr(self.args, "settings_pgo", False):
+            env["UFLINUX_SETTINGS_PGO"] = "1"
+            profiles = "/cache/target/settings-training"
+            profile_dir = self.cache / self.args.arch / "target/settings-training"
+            if profile_dir.exists():
+                remove_tree(profile_dir)
+            self.chroot("install", "-d", "-o", "builder", "-g", "builder", profiles)
+            if self.args.settings_pgo_profiles:
+                with tarfile.open(self.args.settings_pgo_profiles, "r:gz") as archive:
+                    archive.extractall(profile_dir, filter="data")
+                self.chroot("chown", "-R", "builder:builder", profiles)
+                env["UFLINUX_SETTINGS_PGO_REPLAY"] = "1"
         self.build_origins(selected, env)
         from sbom import apk_metadata
         versions = {}
-        for origin, version in (("uflinux-regreet", LOCK["uflinux-regreet"]["version"]), ("connman",LOCK["connman"]["version"]), ("gpu-screen-recorder", LOCK["gpu-screen-recorder"]["version"]), ("uflinux-settings", LOCK["settings"]["version"]), ("uflinux", self.args.version)):
-            if origin not in selected:
-                continue
+        for origin in selected:
+            version = package_version(origin, self.args.version)
             recipe = (source / origin / "APKBUILD").read_text()
             revision = re.search(r"^pkgrel=([0-9]+)$", recipe, re.M).group(1)
             versions[origin] = version + "-r" + revision
@@ -846,6 +887,10 @@ class Builder:
         inputs.mkdir(parents=True, exist_ok=True)
         archive_tree(self.cache / self.args.arch / "apk", inputs / "build-apks.tar.gz", self.epoch)
         archive_tree(self.cache / "downloads", inputs / "sources.tar.gz", self.epoch)
+        training_archive = inputs / "settings-pgo-profiles.tar.gz"
+        training_archive.unlink(missing_ok=True)
+        if getattr(self.args, "settings_pgo", False):
+            archive_tree(profile_dir, training_archive, self.epoch)
         cargo = self.cache / self.args.arch / "cargo"
         names = [str(p.relative_to(cargo)) for p in (cargo / "registry/cache", cargo / "registry/index", cargo / "git/db") if p.exists()]
         if names:
@@ -953,7 +998,7 @@ class Builder:
         # A development key may change while APK control hashes stay the same.
         # Always fetch custom packages from the freshly signed local repository.
         for path in (self.cache / self.args.arch / "image-apk").glob("*.apk"):
-            if path.name.startswith(("uflinux-", "connman-", "gpu-screen-recorder-")):
+            if path.name.startswith(("uflinux-", "connman-", "gpu-screen-recorder-", "xdg-desktop-portal-gtk4-", "simp1e-cursors-")):
                 path.unlink()
         if (self.root / "image-work").exists():
             shutil.rmtree(self.root / "image-work")
@@ -1213,19 +1258,29 @@ class Builder:
             pass
         else:
             raise RuntimeError("apk accepted a damaged signed archive")
-        settings = self.root / "etc/xdg/labwc/rc.xml"
-        before = settings.read_text()
-        settings.write_text(before + "\n<!-- UFLinux upgrade preservation check -->\n")
-        self.chroot("apk", "fix", "--reinstall", "--repository", "/repo", "uflinux-defaults")
-        if "UFLinux upgrade preservation check" not in settings.read_text():
-            raise RuntimeError("apk replaced modified system defaults")
-        settings.write_text(before)
+        defaults = {
+            "etc/xdg/labwc/rc.xml": "\n<!-- UFLinux upgrade preservation check -->\n",
+            "etc/xdg/xdg-desktop-portal/labwc-portals.conf": "\n# UFLinux upgrade preservation check\n",
+        }
+        original_defaults = {name: (self.root / name).read_text() for name in defaults}
+        try:
+            for name, marker in defaults.items():
+                (self.root / name).write_text(original_defaults[name] + marker)
+            self.chroot("apk", "fix", "--reinstall", "--repository", "/repo", "uflinux-defaults")
+            for name, marker in defaults.items():
+                if not (self.root / name).read_text().endswith(marker):
+                    raise RuntimeError("apk replaced modified system defaults: " + name)
+        finally:
+            for name, original in original_defaults.items():
+                (self.root / name).write_text(original)
         self.chroot("sh", "-ec", "id smoke >/dev/null 2>&1 || adduser -D -u 2000 smoke; addgroup smoke netdev")
         report = self.out / "checks" / self.args.arch
         report.mkdir(parents=True, exist_ok=True)
         try:
             with self.verification_services(report):
-                self.chroot("su", "-s", "/bin/sh", "smoke", "-c", "UFLINUX_TEST_CONNMAN_FIXTURE=1 sh -x /project/tests/desktop-smoke.sh")
+                smoke_env = "UFLINUX_TEST_PORTALS=1 " if self.args.arch == "x86_64" else ""
+                self.chroot("su", "-s", "/bin/sh", "smoke", "-c",
+                            smoke_env + "UFLINUX_TEST_CONNMAN_FIXTURE=1 sh -x /project/tests/desktop-smoke.sh")
         finally:
             results = self.root / "tmp/uflinux-smoke-results"
             if results.exists():
@@ -1326,6 +1381,8 @@ class Builder:
                     "stage": stage, "package": getattr(self.args, "package", None), "source_date_epoch": int(self.epoch), "sources": LOCK,
                     "repository_url": self.url, "signing": "release" if self.args.release else "development",
                     "files": files, "host": platform.platform(), "source_commit": os.environ.get("GITHUB_SHA", "local")}
+        if stage == "compile" and getattr(self.args, "settings_pgo", False):
+            metadata["settings_pgo"] = True
         if stage == "image":
             iso = self.out / "images" / self.args.arch / f"uflinux-{self.args.version}-{self.args.arch}.iso"
             metadata["iso_sha256"] = sha(iso)
@@ -1347,7 +1404,14 @@ def main(argv=None):
     parser.add_argument("--repository-url", default=os.environ.get("APK_REPOSITORY_URL"))
     parser.add_argument("--stage", choices=["bootstrap", "packages", "sign", "image", "device", "verify", "all"], default="all")
     parser.add_argument("--release", action="store_true")
+    parser.add_argument("--settings-pgo", action="store_true", help="Build the native Settings shard with PGO and BOLT")
+    parser.add_argument("--settings-pgo-profiles", type=Path, help="Replay archived Settings training profiles")
     args = parser.parse_args(argv)
+    if args.settings_pgo and (args.stage != "packages" or args.package != "uflinux-settings"
+                              or args.arch not in {"x86_64", "aarch64"} or platform.machine() != args.arch):
+        parser.error("--settings-pgo requires the Settings package stage on native x86_64 or aarch64")
+    if args.settings_pgo_profiles and not args.settings_pgo:
+        parser.error("--settings-pgo-profiles requires --settings-pgo")
     if args.package and (args.stage not in {"bootstrap", "packages"} or args.release):
         parser.error("--package requires --stage packages or bootstrap, without --release")
     if args.stage == "device" and args.device is None:

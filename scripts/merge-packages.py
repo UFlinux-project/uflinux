@@ -7,7 +7,7 @@ import re
 import shutil
 import tempfile
 
-from builder import ARCHES, BUILD_KEY, LOCK, PACKAGE_NAMES, PROJECT, link_or_copy, sha, unsigned_digest
+from builder import ARCHES, BUILD_KEY, CARGO_ORIGINS, LOCK, PACKAGE_NAMES, PROJECT, link_or_copy, package_version, sha, unsigned_digest
 from sbom import apk_metadata
 
 
@@ -30,9 +30,7 @@ def collect(out, arch, version):
         identity = current_identity
         recipe = (PROJECT / 'aports' / origin / 'APKBUILD').read_text()
         revision = re.search(r'^pkgrel=([0-9]+)$', recipe, re.M)[1]
-        upstream = {'uflinux-regreet': LOCK['uflinux-regreet']['version'], 'connman': LOCK['connman']['version'],
-                    'gpu-screen-recorder': LOCK['gpu-screen-recorder']['version'],
-                    'uflinux-settings': LOCK['settings']['version'], 'uflinux': version}[origin]
+        upstream = package_version(origin, version)
         names, payloads = set(), {}
         key = (source / BUILD_KEY).read_text()
         for package in sorted(source.glob('*.apk')):
@@ -52,8 +50,12 @@ def collect(out, arch, version):
             raise ValueError('Incomplete or unexpected package set for ' + origin)
         inputs = shard / 'inputs' / arch
         required = {'build-apks.tar.gz', 'sources.tar.gz'}
-        if origin in {'uflinux-regreet', 'uflinux-settings'}:
+        if origin in CARGO_ORIGINS:
             required.add('cargo-sources.tar.gz')
+        if record.get('settings_pgo'):
+            if origin != 'uflinux-settings' or arch not in {'x86_64', 'aarch64'}:
+                raise ValueError('Unexpected Settings optimization shard')
+            required.add('settings-pgo-profiles.tar.gz')
         if not required.issubset({p.name for p in inputs.glob('*.tar.gz')}):
             raise ValueError('Missing rebuild inputs for ' + origin)
         if arch == 'x86_64':

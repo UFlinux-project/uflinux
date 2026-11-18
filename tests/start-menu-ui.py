@@ -176,6 +176,8 @@ try:
     wait(lambda: find('UFLinux Fixture Added'), 'New desktop file was not discovered while open')
     search('UFLinux Fixture Broken')
     wait(lambda: find('UFLinux Fixture Broken'), 'Broken launcher fixture is not listed')
+    # Focus the results list as in the successful keyboard launch above.
+    command('wtype', '-k', 'Down')
     command('wtype', '-k', 'Return')
     wait(lambda: any('Could not launch application' in (name_of(a) or '') for a in tree()), 'Launch error was not shown inline')
     assert menu(), 'Failed launch dismissed the menu'

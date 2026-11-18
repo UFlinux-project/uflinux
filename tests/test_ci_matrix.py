@@ -2,7 +2,9 @@
 import importlib.util
 from pathlib import Path
 import unittest
+import sys
 path=Path(__file__).resolve().parents[1]/'scripts/ci-matrix.py'
+sys.path.insert(0, str(path.parent))
 spec=importlib.util.spec_from_file_location('ci_matrix',path)
 ci=importlib.util.module_from_spec(spec);spec.loader.exec_module(ci)
 class MatrixTests(unittest.TestCase):
@@ -31,6 +33,18 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(result['release'],'true')
         for tag in ('vlatest','v0.1.0;id','v0.1.0\nmalformed'):
             with self.assertRaises(ValueError):ci.configuration('push','refs/tags/'+tag)
+
+    def test_settings_pgo_is_limited_to_native_release_shards(self):
+        for event, ref, full, expected in (
+            ('push', 'refs/tags/v0.1.0', False, {'x86_64', 'aarch64'}),
+            ('push', 'refs/heads/main', False, set()),
+            ('workflow_dispatch', 'refs/tags/v0.1.0', True, set()),
+        ):
+            optimized = ci.configuration(event, ref, full)['packages']['include']
+            self.assertEqual(
+                {(job['arch'], job['package']) for job in optimized if job['settings_pgo']},
+                {(arch, 'uflinux-settings') for arch in expected},
+            )
 
     def test_full_matrix_runs_still_boot_only_the_x86_64_images(self):
         for full in (False, True):
@@ -64,13 +78,13 @@ class MatrixTests(unittest.TestCase):
         for job in jobs:
             self.assertEqual(job['runner'],ci.arches[job['arch']]['runner'])
 
-    def test_each_architecture_has_four_independent_jobs(self):
-        for event,ref,full,count in [('pull_request','refs/heads/main',False,5),
-                                     ('workflow_dispatch','refs/heads/main',True,30)]:
+    def test_each_architecture_has_seven_independent_jobs(self):
+        for event,ref,full,count in [('pull_request','refs/heads/main',False,7),
+                                     ('workflow_dispatch','refs/heads/main',True,42)]:
             result=ci.configuration(event,ref,full)
             jobs=result['packages']['include']
             self.assertEqual(len(jobs),count)
             for architecture in result['matrix']['include']:
                 selected=[job for job in jobs if job['arch']==architecture['arch']]
-                self.assertEqual({job['package'] for job in selected},{'connman','gpu-screen-recorder','uflinux-regreet','uflinux-settings','uflinux'})
+                self.assertEqual({job['package'] for job in selected},{'connman','gpu-screen-recorder','simp1e-cursors','uflinux-regreet','uflinux-settings','uflinux','xdg-desktop-portal-gtk4'})
                 self.assertTrue(all(job['runner']==architecture['runner'] for job in selected))

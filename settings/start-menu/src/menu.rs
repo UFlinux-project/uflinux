@@ -940,7 +940,7 @@ impl Menu {
             return;
         };
         enum Launch {
-            App(gio::DesktopAppInfo),
+            App(gio_unix::DesktopAppInfo),
             File(glib::GString),
         }
         let (launch, failure) = match &*object.borrow::<Row>() {
@@ -950,7 +950,7 @@ impl Menu {
                     return;
                 }
                 let Some(info) =
-                    gio::DesktopAppInfo::new(&entry.id).filter(|app| app.should_show())
+                    gio_unix::DesktopAppInfo::new(&entry.id).filter(|app| app.should_show())
                 else {
                     self.failure(&tr("This application is no longer available"));
                     self.reload();

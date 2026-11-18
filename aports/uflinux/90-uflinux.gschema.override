@@ -1,6 +1,7 @@
 [org.gnome.desktop.interface]
 gtk-theme='adw-gtk3-dark'
 icon-theme='Papirus-Dark'
+cursor-theme='simp1e-cursors-adw-dark'
 font-name='Ubuntu Nerd Font 10'
 color-scheme='prefer-dark'
 monospace-font-name='UbuntuMono Nerd Font Mono 10'

@@ -2,3 +2,6 @@ XDG_CURRENT_DESKTOP=labwc
 XDG_SESSION_DESKTOP=labwc
 XDG_SESSION_TYPE=wayland
 QT_QPA_PLATFORM=wayland;xcb
+# labwc has no cursor theme option in rc.xml; it reads the theme from this
+# variable, as do the XWayland clients it starts.
+XCURSOR_THEME=simp1e-cursors-adw-dark

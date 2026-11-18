@@ -10,11 +10,21 @@ GTK3, GTK4, labwc, ReGreet and Mako select Papirus-Dark from Alpine's signed
 application icons. Adwaita remains available for fallback icons. Personal
 preferences can override the packaged defaults.
 
+The pointer uses the Adwaita dark scheme of the `simp1e-cursors` theme, built
+from the pinned upstream source in `aports/simp1e-cursors`. Only the base theme
+and that variant are generated, so the recipe is a trimmed copy of Alpine's
+`testing/simp1e-cursors`: the package is not in the pinned release's main and
+community repositories, and Alpine's 49 scheme subpackages would be wasted
+space. The variant ships as its own `simp1e-cursors-adw-dark` package. GTK and
+GSettings pick it up from the drop-ins below, ReGreet from its `cursor_theme_name`
+option, and labwc (which has no cursor option in `rc.xml`) from `XCURSOR_THEME`
+in `/etc/xdg/labwc/environment`.
+
 GTK3 and GTK4 apps use `adw-gtk3-dark` from Alpine's signed `adw-gtk3` package.
 Both toolkit versions receive the theme name and dark preference through their
 XDG `settings.ini` files and matching GSettings schema defaults. GTK3 on Wayland
 reads the desktop schemas when installed, taking precedence over `settings.ini`;
-the packaged schema override keeps the theme, icons and font consistent and
+the packaged schema override keeps the theme, icons, cursor and font consistent and
 selects the dark color scheme. User GSettings preferences for GTK3 and personal
 `settings.ini` files for GTK4 still take precedence. This is a CSS theme;
 UFLinux Settings remains a plain GTK4 app without a libadwaita dependency.

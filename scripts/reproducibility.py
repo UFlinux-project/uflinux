@@ -22,6 +22,13 @@ out = package_output(args.outdir, args.arch, args.package)
 baseline = {p.name: unsigned_digest(p) for p in (out / "packages" / args.arch).glob("*.apk")}
 if not baseline:
     raise RuntimeError("The baseline packages stage must complete first")
+training = out / "inputs" / args.arch / "settings-pgo-profiles.tar.gz"
+compile_record = json.loads((out / "metadata" / args.arch / "compile.json").read_text())
+optimization_args = []
+if compile_record.get("settings_pgo"):
+    if not training.is_file():
+        raise RuntimeError("Settings optimization profiles are missing")
+    optimization_args = ["--settings-pgo", "--settings-pgo-profiles", str(training)]
 suffix = args.package or "all"
 cache = PROJECT / ".cache/reproducibility" / suffix
 if cache.exists():
@@ -43,7 +50,7 @@ try:
     subprocess.run([sys.executable, str(PROJECT / "scripts/builder.py"), "--arch", args.arch,
                     "--version", args.version, "--outdir", str(repeat), "--cache", str(cache),
                     "--workdir", str(work), "--stage", "packages",
-                    *(["--package", args.package] if args.package else [])], check=True)
+                    *(["--package", args.package] if args.package else []), *optimization_args], check=True)
     rebuilt = {p.name: unsigned_digest(p) for p in (package_output(repeat, args.arch, args.package) / "packages" / args.arch).glob("*.apk")}
     report = {"arch": args.arch, "version": args.version, "fresh_compiler_target": True,
               "signature_streams_excluded": True, "baseline": baseline, "rebuilt": rebuilt,

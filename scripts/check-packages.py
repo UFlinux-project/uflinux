@@ -27,7 +27,7 @@ required.update({"linux-lts", "linux-firmware", "xfsprogs", "alpine-conf", "rust
                  "gtk4.0-dev", "gtk4-layer-shell-dev", "pulseaudio-dev", "openssl-dev", "abuild"})
 required.update({"polkit-dev", "eudev-dev", "vulkan-loader-dev", "mesa-dev", "pkgconf",
                  "ddcutil", "tzdata", "vulkan-loader", "mesa-vulkan-ati"})
-required.update({"rsvg-convert"})
+required.update({"rsvg-convert", "glycin-thumbnailer", "libx11-dev", "make"})
 required.update({"tlp", "tlp-openrc", "tlp-udev"})
 required.update({"py3-atspi", "wtype", "gcc", "musl-dev", "wayland-dev", "libxkbcommon-dev", "desktop-file-utils", "wlr-randr"})
 required.update({"autoconf", "automake", "dbus-dev", "glib-dev", "libmnl-dev", "libnftnl-dev", "libtool", "readline-dev", "linux-headers"})

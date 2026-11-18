@@ -30,9 +30,21 @@
       "url": "https://codeload.github.com/labwc/labwc-themes/tar.gz/6a2e3634eef03e7f124359ad28ed5da2d931f96d",
       "sha512": "ff78da5b5709a69cebbc11586d3a31d65229b6545d8d600c28fc93fc4b08332a8a9d9c21594e3680ee17f03a8e3fe5fc9b2cb8b3223e5d687aa680a2355b9747"
     },
+    "simp1e-cursors": {
+      "url": "https://gitlab.com/cursors/simp1e/-/archive/f8f8f3c09dd0aa31cc9bc5499c683aad025984be/simp1e-f8f8f3c09dd0aa31cc9bc5499c683aad025984be.tar.gz",
+      "sha512": "19f873daab274d803123c5e78bc055dfa899707bec8148422832c46254f95931599586562e23aff360f2d4bb1cb3705d1ed6c5e0a7bc89a24c056769c098ed76"
+    },
+    "cursor-generator": {
+      "url": "https://gitlab.com/cursors/cursor-generator/-/archive/dd4a730c4a45c73c580220658bd1f21f141f8a55/cursor-generator-dd4a730c4a45c73c580220658bd1f21f141f8a55.tar.gz",
+      "sha512": "28bfd220b9b7ffa910068097169e3f050dab0904c5fe4efe6b3f56df568a6303fcdcf9f331a3c2ab1b38e365b4b8ad89c7f1033573f74bdc5c2b8bc1ad9d4c0e"
+    },
     "uflinux-regreet": {
       "url": "https://codeload.github.com/rharish101/ReGreet/tar.gz/refs/tags/0.2.0",
       "sha512": "2bf74896c1757801d04145690a3d11d473cc1f5e6e3c9709bb26e57c0a7a3702d8062ca0c26c67bc1087197fc57a00f899144484bfc0e8a556c10a9d020f6bb8"
+    },
+    "xdg-desktop-portal-gtk4": {
+      "url": "https://codeload.github.com/JohnRTitor/xdg-desktop-portal-gtk4/tar.gz/3eed6c0a02100f86cab0ec989f7ef5d0e3eb971d",
+      "sha512": "619b9762b38ce8049c0e193858cdd35dfa36b5756a615bf232c785f51392f7d83e3fb326bd19751bba14bb7cda14c058f20f6f7ea831c7ccc55114aef4e9ae88"
     }
   },
   "rootfs": {
@@ -112,6 +124,9 @@
       "fixed-session.patch": "be7418c7c810f9100f27ed9a05b244cb705f21d5d501066540a56ea5aa4c0307acc05dccb6ec5ec28f6870a0e3760b8b2039574d3d30421a46df5f91b93978d0"
     }
   },
+  "xdg-desktop-portal-gtk4": {
+    "version": "1.6.6"
+  },
   "gpu-screen-recorder": {
     "version": "6.1.7",
     "patches": {
@@ -125,5 +140,8 @@
       "0008-Add-webp-screenshot-support.patch": "bce60884c450802c1e34cc740342fc156090068c6afb59991da1164733a862377ae6b5085c5f45c31208eac392527e99c2af87d0b2cb163be3ab2029841b60ee",
       "0009-Docs-document-v4l2-encoder-and-webp-screenshots.patch": "61a9ec74fcc76e7d5ab2b942904b7b668c269739d46a2784ad94b439a4ebf0ee90ddea2f3d7eea454c4de3adddb91cd9f24a6ca3a188655da901132d154bf80f"
     }
+  },
+  "simp1e-cursors": {
+    "version": "0_git20250312"
   }
 }

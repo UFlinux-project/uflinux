@@ -318,7 +318,7 @@ fn notify(title: &str, body: &str) {
 /// recorder finishes the file on its own and outlives this process.
 fn watch_shutdown_signals() {
     for signal in [libc::SIGINT, libc::SIGTERM] {
-        glib::unix_signal_add_local_once(signal, || {
+        glib_unix::unix_signal_add_local_once(signal, || {
             RECORDER.with(|slot| {
                 if let Some(recorder) = slot.borrow_mut().take() {
                     recorder.terminate();

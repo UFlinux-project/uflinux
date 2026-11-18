@@ -2,10 +2,11 @@
 name = "uflinux-installer"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-gtk = { package = "gtk4", version = "=0.10.1", features = ["v4_12"] }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
 glib.workspace = true
 gio.workspace = true
 serde.workspace = true

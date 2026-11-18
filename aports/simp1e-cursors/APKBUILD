@@ -1,0 +1,57 @@
+# Maintainer: Dominik Hejl <admin@xdkil.cz>
+#
+# Trimmed copy of Alpine's testing/simp1e-cursors recipe. Upstream builds one
+# subpackage per colour scheme, which would mean 49 packages for the ISO, and
+# the package only exists in Alpine's testing repository while uflinux uses the
+# pinned release's main and community repositories. Only the two schemes uflinux
+# ships are generated here: the base theme and the Adwaita dark variant that is
+# the desktop default.
+pkgname=simp1e-cursors
+pkgver=0_git20250312
+pkgrel=0
+pkgdesc="An aesthetic cursor theme for your Linux desktop"
+url="https://gitlab.com/cursors/simp1e"
+arch="noarch"
+license="GPL-3.0-only"
+makedepends="bash python3 py3-pillow rsvg-convert xcursorgen"
+options="!check" # no tests
+_gitrev=f8f8f3c09dd0aa31cc9bc5499c683aad025984be
+_buildscript=dd4a730c4a45c73c580220658bd1f21f141f8a55
+source="$pkgname-$_gitrev.tar.gz::https://gitlab.com/cursors/simp1e/-/archive/$_gitrev/simp1e-$_gitrev.tar.gz
+	cursor-generator-$_buildscript.tar.gz::https://gitlab.com/cursors/cursor-generator/-/archive/$_buildscript/cursor-generator-$_buildscript.tar.gz
+	"
+builddir="$srcdir"/simp1e-$_gitrev
+# The Adwaita dark variant is the desktop default, so it is split out: a system
+# can keep the base theme without pulling in the uflinux default.
+subpackages="$pkgname-adw-dark:adw_dark"
+
+prepare() {
+	default_prepare
+	mv "$srcdir"/cursor-generator-$_buildscript/* "$builddir"/cursor-generator
+}
+
+build() {
+	# The generator's inclusion list filters both the colour schemes and the
+	# templates, so cursors.svg is listed to keep the left-handed variant out.
+	./build.sh --include=Simp1e.txt,Simp1e-Adw-Dark.txt,cursors.svg
+}
+
+package() {
+	mkdir -p "$pkgdir"/usr/share/icons
+	mv built_themes/* "$pkgdir"/usr/share/icons/
+	mv "$pkgdir"/usr/share/icons/Simp1e "$pkgdir"/usr/share/icons/"$pkgname"
+
+	install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+adw_dark() {
+	pkgdesc="$pkgdesc (Adw Dark scheme)"
+	mkdir -p "$subpkgdir"/usr/share/icons
+	mv "$pkgdir"/usr/share/icons/"Simp1e Adw Dark" "$subpkgdir"/usr/share/icons/"$subpkgname"
+}
+
+sha512sums="
+19f873daab274d803123c5e78bc055dfa899707bec8148422832c46254f95931599586562e23aff360f2d4bb1cb3705d1ed6c5e0a7bc89a24c056769c098ed76  simp1e-cursors-f8f8f3c09dd0aa31cc9bc5499c683aad025984be.tar.gz
+28bfd220b9b7ffa910068097169e3f050dab0904c5fe4efe6b3f56df568a6303fcdcf9f331a3c2ab1b38e365b4b8ad89c7f1033573f74bdc5c2b8bc1ad9d4c0e  cursor-generator-dd4a730c4a45c73c580220658bd1f21f141f8a55.tar.gz
+"

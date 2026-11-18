@@ -1,4 +1,5 @@
 """Static wiring checks for the Print Screen capture tool and its portal defaults."""
+from configparser import ConfigParser
 from pathlib import Path
 import unittest
 
@@ -41,20 +42,22 @@ class PortalTests(unittest.TestCase):
         # xdg-desktop-portal-wlr package owns /etc/xdg/xdg-desktop-portal-wlr/config.
         self.assertIn('install -Dm644 "$srcdir/xdg-desktop-portal-wlr-labwc" "$pkgdir/etc/xdg/xdg-desktop-portal-wlr/labwc"', self.apkbuild)
 
-    def test_screen_cast_is_pinned_to_the_wlr_backend(self):
+    def test_gtk4_is_default_and_screen_cast_uses_wlr(self):
         # XDG_CURRENT_DESKTOP is labwc, and the file name must match it in lower case.
         conf = read(UFLINUX / 'labwc-portals.conf')
-        self.assertIn('[preferred]', conf)
-        self.assertIn('org.freedesktop.impl.portal.ScreenCast=wlr', conf)
+        config = ConfigParser()
+        config.read_string(conf)
+        self.assertEqual(config['preferred']['default'], 'gtk4')
+        self.assertEqual(config['preferred']['org.freedesktop.impl.portal.ScreenCast'], 'wlr')
 
     def test_portal_frame_rate_is_capped(self):
         self.assertIn('max_fps=60', read(UFLINUX / 'xdg-desktop-portal-wlr-labwc'))
 
     def test_desktop_meta_pulls_in_the_capture_stack(self):
         desktop = self.apkbuild.split('desktop() {')[1]
-        for package in ('uflinux-screencapture', 'gpu-screen-recorder', 'xdg-desktop-portal', 'xdg-desktop-portal-wlr'):
+        for package in ('uflinux-screencapture', 'gpu-screen-recorder', 'xdg-desktop-portal', 'xdg-desktop-portal-gtk4', 'xdg-desktop-portal-wlr'):
             with self.subTest(package=package):
-                self.assertIn(package, desktop)
+                self.assertIn(package, desktop.split())
 
     def test_desktop_meta_ships_vaapi_drivers(self):
         # Without a VA-API driver the recorder exits with "no video codec

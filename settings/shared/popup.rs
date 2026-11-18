@@ -107,5 +107,5 @@ pub fn set_input_region(surface: &gtk::gdk::Surface, width: i32, height: i32, st
             PANEL_HEIGHT.min(height),
         ));
     }
-    surface.set_input_region(&region);
+    surface.set_input_region(Some(&region));
 }

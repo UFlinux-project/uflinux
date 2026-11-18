@@ -24,9 +24,7 @@ class ShardTests(unittest.TestCase):
             root = out / 'package-shards/x86_64' / origin
             packages = root / 'packages/x86_64'
             packages.mkdir(parents=True)
-            upstream = {'uflinux-regreet': builder.LOCK['uflinux-regreet']['version'], 'connman': builder.LOCK['connman']['version'],
-                        'gpu-screen-recorder': builder.LOCK['gpu-screen-recorder']['version'],
-                        'uflinux-settings': builder.LOCK['settings']['version'], 'uflinux': '0.1.0'}[origin]
+            upstream = builder.package_version(origin, '0.1.0')
             recipe = (builder.PROJECT / 'aports' / origin / 'APKBUILD').read_text()
             revision = re.search(r'^pkgrel=([0-9]+)$', recipe, re.M)[1]
             version = upstream + '-r' + revision
@@ -74,7 +72,7 @@ class ShardTests(unittest.TestCase):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 out = Path(temporary)
                 self.fixture(out)
-                shard = out / 'package-shards/x86_64/uflinux-settings'
+                shard = out / 'package-shards/x86_64/xdg-desktop-portal-gtk4'
                 if mode == 'missing-shard':
                     shard.rename(shard.with_name('unexpected-origin'))
                 elif mode == 'missing-apk':
@@ -113,14 +111,14 @@ class InputArchiveTests(unittest.TestCase):
                 target.mkdir(parents=True)
                 for name in ('build-apks.tar.gz','sources.tar.gz'):
                     (target/name).write_bytes(b'input')
-                if origin in {'uflinux-regreet','uflinux-settings'}:
+                if origin in builder.CARGO_ORIGINS:
                     (target/'cargo-sources.tar.gz').write_bytes(b'cargo')
             (directory/'image-apks.tar.gz').write_bytes(b'image')
             command=[sys.executable,str(builder.PROJECT/'scripts/release-inputs.py'),'--arch','x86_64','--version','0.1.0']
             subprocess.run(command,cwd=root,check=True,capture_output=True)
             entries=(root/'out/SHA256SUMS-x86_64-inputs').read_text().splitlines()
-            self.assertEqual(len(entries),13)
-            self.assertEqual(len(list((root/'out').glob('uflinux-*.tar.gz'))),13)
+            self.assertEqual(len(entries),18)
+            self.assertEqual(len(list((root/'out').glob('uflinux-*.tar.gz'))),18)
             (directory/'uflinux-settings/cargo-sources.tar.gz').unlink()
             rejected=subprocess.run(command,cwd=root,capture_output=True)
             self.assertNotEqual(rejected.returncode,0)

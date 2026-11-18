@@ -151,7 +151,7 @@ pub fn run() -> Result<()> {
             glib::ControlFlow::Continue
         });
         let mainloop=glib::MainLoop::new(None,false);
-        for signal in [libc::SIGTERM,libc::SIGINT]{let quit=mainloop.clone();glib::source::unix_signal_add_local(signal,move||{quit.quit();glib::ControlFlow::Break});}
+        for signal in [libc::SIGTERM,libc::SIGINT]{let quit=mainloop.clone();glib_unix::unix_signal_add_local(signal,move||{quit.quit();glib::ControlFlow::Break});}
         Ok::<_,String>((app,power_monitors,_device_monitor,mainloop))
     })?;
     mainloop.run();

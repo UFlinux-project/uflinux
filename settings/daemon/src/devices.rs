@@ -94,7 +94,7 @@ impl Monitor {
         }
         let active = Rc::new(Cell::new(true));
         let alive = active.clone();
-        let source = glib::source::unix_fd_add_local(
+        let source = glib_unix::unix_fd_add_local(
             fd,
             IOCondition::IN | IOCondition::HUP | IOCondition::ERR,
             move |_, condition| {

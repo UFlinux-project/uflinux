@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-settings
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 pkgdesc="UFLinux Settings, quick controls and resident Start menu"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
@@ -15,6 +15,11 @@ subpackages="$pkgname-dbg $pkgname-doc $pkgname-daemon:daemon $pkgname-system:sy
 options="net"
 # Generated from the repository by scripts/settings-source.py, independently verified.
 source="$pkgname-$pkgver.tar"
+if [ "${UFLINUX_SETTINGS_PGO:-}" = 1 ]; then
+	makedepends="$makedepends llvm22 llvm22-dev llvm22-static llvm22-gtest clang22
+		cmake samurai zlib-dev zstd-dev libxml2-dev labwc font-dejavu wtype dbus coreutils"
+	source="$source llvm-project-22.1.3.src.tar.xz"
+fi
 export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_TEST_DEBUG=0
 # abuild exports release-profile overrides; enforce the distro's chosen settings.
@@ -26,6 +31,11 @@ export CARGO_PROFILE_RELEASE_PANIC=abort
 prepare() {
 	default_prepare
 	cargo fetch --locked --target="$CTARGET"
+	if [ "${UFLINUX_SETTINGS_PGO:-}" = 1 ]; then
+		CARGO_PROFILE_RELEASE_OPT_LEVEL=2 CARGO_PROFILE_RELEASE_LTO=false \
+			cargo install cargo-pgo --locked --version 0.3.0 --root "$srcdir/pgo-tools"
+		sh "$builddir/scripts/build-bolt.sh" "$srcdir"
+	fi
 	# Source bundles normalize timestamps. Never reuse stale workspace binaries.
 	cargo clean -p uflinux-desktop -p uflinux-installer -p settings-core -p uflinux-settings -p uflinux-settings-daemon -p uflinux-settings-system -p uflinux-screencapture
 	cargo clean --release -p uflinux-desktop -p uflinux-installer -p settings-core -p uflinux-settings -p uflinux-settings-daemon -p uflinux-settings-system -p uflinux-screencapture
@@ -33,6 +43,12 @@ prepare() {
 build() {
 	# abuild enables Rust debug info when a -dbg subpackage exists.
 	unset CARGO_PROFILE_RELEASE_DEBUG
+	if [ "${UFLINUX_SETTINGS_PGO:-}" = 1 ]; then
+		PATH="$srcdir/pgo-tools/bin:/usr/lib/llvm22/bin:$PATH" \
+		RUSTFLAGS="$RUSTFLAGS --remap-path-prefix=$builddir=/usr/src/uflinux-settings" \
+			sh scripts/pgo-build.sh "$CTARGET"
+		return
+	fi
 	RUSTFLAGS="$RUSTFLAGS --remap-path-prefix=$builddir=/usr/src/uflinux-settings" \
 		cargo auditable build --workspace --release --frozen
 }

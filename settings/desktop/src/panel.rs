@@ -783,7 +783,7 @@ impl Panel {
                             .and_then(|g| g.activate());
                         match action {
                             Some(Activation::Launch(id)) => {
-                                if let Some(info) = gio::DesktopAppInfo::new(&id) {
+                                if let Some(info) = gio_unix::DesktopAppInfo::new(&id) {
                                     let _ = info.launch(&[], None::<&gio::AppLaunchContext>);
                                 }
                             }
@@ -914,7 +914,7 @@ impl Panel {
                 if let Some(app) = weak.upgrade().and_then(|panel| panel.app.upgrade()) {
                     app.hide();
                 }
-                if let Some(info) = gio::DesktopAppInfo::new(&id) {
+                if let Some(info) = gio_unix::DesktopAppInfo::new(&id) {
                     let _ = info.launch(&[], None::<&gio::AppLaunchContext>);
                 }
                 popup.popdown();

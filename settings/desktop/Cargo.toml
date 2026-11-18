@@ -2,6 +2,7 @@
 name = "uflinux-desktop"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -11,9 +12,10 @@ serde.workspace = true
 serde_json.workspace = true
 glib.workspace = true
 gio = { workspace = true, features = ["v2_80"] }
-gtk = { package = "gtk4", version = "=0.10.1", features = ["v4_12"] }
-gtk4-layer-shell = "=0.6.3"
-gdk-pixbuf = "=0.21.2"
+gio-unix.workspace = true
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+gtk4-layer-shell = "0.8"
+gdk-pixbuf = "0.22"
 async-channel.workspace = true
 futures-util = "=0.3.34"
 libc.workspace = true

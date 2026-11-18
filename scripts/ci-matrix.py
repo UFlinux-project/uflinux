@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from builder import PACKAGE_NAMES
+
 root = Path(__file__).resolve().parents[1]
 arches = json.loads((root / "config/architectures.json").read_text())
 devices = json.loads((root / "config/devices.json").read_text())
@@ -19,8 +21,9 @@ def configuration(event, ref, full=False, device_builds=False):
     # dispatch cover every architecture.
     selected = list(arches) if release or full else ["x86_64"]
     matrix = {"include": [{"arch": arch, "runner": arches[arch]["runner"]} for arch in selected]}
-    packages = {"include": [{"arch": arch, "runner": arches[arch]["runner"], "package": package}
-                             for arch in selected for package in ("connman", "gpu-screen-recorder", "uflinux-regreet", "uflinux-settings", "uflinux")]}
+    packages = {"include": [{"arch": arch, "runner": arches[arch]["runner"], "package": package,
+                             "settings_pgo": release and package == "uflinux-settings" and arch in {"x86_64", "aarch64"}}
+                             for arch in selected for package in PACKAGE_NAMES]}
     # Only the x86_64 ISO is boot-tested, in both firmware modes, whatever the
     # build matrix covers. Other architectures are built but never started.
     vm = {"include": [{"arch": "x86_64", "mode": mode} for mode in ("bios", "uefi")]}
@@ -40,7 +43,7 @@ def main():
     # Cache dependencies across changes to our deterministic source bundle. Cargo's
     # fingerprints and package-scoped clean in prepare() still rebuild project code.
     dependencies = hashlib.sha256(json.dumps({k: lock[k] for k in ("alpine", "rootfs", "sources")}, sort_keys=True).encode())
-    for name in ("settings/Cargo.lock", "settings/Cargo.toml", "aports/connman/APKBUILD", "aports/gpu-screen-recorder/APKBUILD", "aports/uflinux-regreet/APKBUILD", "aports/uflinux-settings/APKBUILD"):
+    for name in ("settings/Cargo.lock", "settings/Cargo.toml", "aports/connman/APKBUILD", "aports/gpu-screen-recorder/APKBUILD", "aports/uflinux-regreet/APKBUILD", "aports/uflinux-settings/APKBUILD", "aports/xdg-desktop-portal-gtk4/APKBUILD", "aports/simp1e-cursors/APKBUILD"):
         dependencies.update((root / name).read_bytes().split(b'sha512sums=')[0])
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         for key, value in {**configuration(os.environ.get("EVENT", ""),os.environ.get("REF", ""),

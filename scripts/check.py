@@ -111,8 +111,20 @@ recorder = (ROOT / "aports/gpu-screen-recorder/APKBUILD").read_text()
 assert lock["sources"]["gpu-screen-recorder"]["sha512"] in recorder
 for name, digest in lock["gpu-screen-recorder"]["patches"].items():
     assert hashlib.sha512((ROOT / "aports/gpu-screen-recorder" / name).read_bytes()).hexdigest() == digest
+portal = (ROOT / "aports/xdg-desktop-portal-gtk4/APKBUILD").read_text()
+portal_source = lock["sources"]["xdg-desktop-portal-gtk4"]
+assert portal_source["sha512"] in portal
+assert f'_commit={portal_source["url"].rsplit("/", 1)[1]}' in portal
+assert f'pkgver={lock["xdg-desktop-portal-gtk4"]["version"]}\n' in portal
+cursors = (ROOT / "aports/simp1e-cursors/APKBUILD").read_text()
+for source in ("simp1e-cursors", "cursor-generator"):
+    assert lock["sources"][source]["sha512"] in cursors, f"simp1e-cursors recipe must pin {source}"
+assert f'pkgver={lock["simp1e-cursors"]["version"]}\n' in cursors
+# The vendored recipe only builds the desktop default and its base theme.
+assert "--include=Simp1e.txt,Simp1e-Adw-Dark.txt,cursors.svg" in cursors
+assert 'subpackages="$pkgname-adw-dark:adw_dark"' in cursors
 assert "libadwaita" not in (ROOT / "settings/Cargo.lock").read_text()
-for origin in ("connman", "gpu-screen-recorder", "uflinux-regreet", "uflinux-settings"):
+for origin in ("connman", "gpu-screen-recorder", "uflinux-regreet", "uflinux-settings", "xdg-desktop-portal-gtk4"):
     recipe_arches = re.search(r'^arch="([^"]+)"$', (ROOT / "aports" / origin / "APKBUILD").read_text(), re.M)
     assert recipe_arches and set(recipe_arches.group(1).split()) == set(arches), f"{origin} architecture list differs from build matrix"
 for name, digest in lock["image"]["patches"].items():

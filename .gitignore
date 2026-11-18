@@ -29,6 +29,7 @@
 !/settings/data/org.uflinux.ScreenCapture.desktop
 !/settings/data/uflinux-wireguard.conf
 !/settings/shared/
+!/settings/scripts/
 __pycache__/
 *.pyc
 uflinux.ec

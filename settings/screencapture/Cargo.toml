@@ -2,15 +2,17 @@
 name = "uflinux-screencapture"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
 settings-core.workspace = true
 glib.workspace = true
+glib-unix.workspace = true
 gio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 libc.workspace = true
-gtk = { package = "gtk4", version = "=0.10.1", features = ["v4_12"] }
-gtk4-layer-shell = "=0.6.3"
-gdk-pixbuf = "=0.21.2"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+gtk4-layer-shell = "0.8"
+gdk-pixbuf = "0.22"

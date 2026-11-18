@@ -15,7 +15,7 @@ python3 scripts/preflight.py --arch ppc64le
 ```
 
 `config/sources.lock.json` pins minirootfs hashes, commit archive hashes for the
-vendored sources (aports, ConnMan, gnome-backgrounds, gpu-screen-recorder, the
+vendored sources (aports, ConnMan, gnome-backgrounds, gpu-screen-recorder, the GTK4 portal backend, the
 labwc themes and ReGreet), feature choices, and the default source epoch.
 Downloaded files are checked again on every reuse. Alpine's official package
 repositories remain on the named
@@ -51,9 +51,9 @@ After each compile the Cargo and compiler caches are made world-readable: abuild
 leaves them owned by uid 1000 with mode 640, and the host user that archives or
 restores a cache directory cannot read those files otherwise.
 
-GitHub compiles five independent origins per architecture: `connman`,
-`gpu-screen-recorder`, `uflinux-regreet`, `uflinux-settings` and `uflinux`. PR/main builds schedule
-five compile jobs (x86_64 only); a release tag or a full-matrix manual run schedules 30, one
+GitHub compiles seven independent origins per architecture: `connman`,
+`gpu-screen-recorder`, `simp1e-cursors`, `uflinux-regreet`, `uflinux-settings`, `xdg-desktop-portal-gtk4` and `uflinux`. PR/main builds schedule
+seven compile jobs (x86_64 only). A release tag or a full-matrix manual run schedules 42, one
 per architecture and origin, with at most eight compile jobs running together.
 Each origin has its own VM, development signing key, timeout and cache. Heavy Rust
 builds and their native clean-rebuild comparisons run independently. Signing and
@@ -68,7 +68,7 @@ sudo --preserve-env=APK_REPOSITORY_URL python3 scripts/reproducibility.py \
   --arch x86_64 --version 0.1.0 --package uflinux-settings
 ```
 
-Repeat independently for the other four origins. `--package` automatically uses
+Repeat independently for the other five origins. `--package` automatically uses
 `.state/ORIGIN` and `.cache/build/ORIGIN`, writing below
 `out/package-shards/ARCH/ORIGIN`. Explicit work/cache directory overrides must
 remain distinct for concurrent builds. Shards support only `packages`/`bootstrap`
@@ -90,8 +90,9 @@ Each native origin must have its clean-rebuild report before collection succeeds
 See [local parallel-build validation](parallel-build-validation.md) for completed
 checks and their scope.
 
-Thirty-one custom APKs are built: patched ConnMan (runtime/OpenRC/dev/docs/debug, seven),
-ReGreet (one), patched gpu-screen-recorder (runtime/dev/docs/debug, four), the Settings
+Thirty-four custom APKs are built: patched ConnMan (runtime/OpenRC/dev/docs/debug, seven),
+ReGreet (one), the GTK4 portal backend (one), the simp1e cursor theme (two: the
+Simp1e scheme and the Adwaita-dark variant), patched gpu-screen-recorder (runtime/dev/docs/debug, four), the Settings
 origin (nine: GUI, desktop shell, screencapture tool, installer UI, daemon/CLI, system
 helper, OpenRC, documentation and debug symbols) and the distribution packages (ten).
 ConnMan's pinned
@@ -182,12 +183,20 @@ and gzip without timestamps. GitHub uses the source commit time. These controls
 help reproducibility; byte-for-byte reproducibility is not claimed until two
 clean builds with identical resolved packages have been compared.
 
-The Rust origins build with `opt-level=s`, eight codegen units, abort-on-panic, and
+The ordinary Rust package builds use `opt-level=s`, eight codegen units, abort-on-panic, and
 dynamically linked Alpine libraries. The Settings origin additionally forces fat LTO in
 its APKBUILD, overriding the workspace's `lto = "thin"`; ReGreet only sets the
 optimization level. Release builds use
 Cargo's default Rust debug-info level; Alpine still splits any available debug
 symbols into the debug APKs. There is no `target-cpu=native` or host instruction-set tuning.
+
+For pushed release tags on native x86_64 and aarch64, the Settings origin builds
+all seven executables with `opt-level=3`, fat LTO, PGO and BOLT. It trains the
+instrumented binaries on private D-Bus and headless labwc and uses the same
+workloads to check the final executables. To run that package shard locally on
+the matching architecture, add `--settings-pgo` to the package-stage command.
+The compile artifact includes `settings-pgo-profiles.tar.gz`. The native x86_64
+clean rebuild replays that archive with a fresh compiler target directory.
 
 Settings, the desktop shell and the screencapture tool share `settings/Cargo.lock`. Their UIs link GTK4;
 the session service and privileged helper do not. `cargo auditable` records dependency data.

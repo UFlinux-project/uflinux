@@ -2,6 +2,7 @@
 theme_name = "adw-gtk3-dark"
 application_prefer_dark_theme = true
 icon_theme_name = "Papirus-Dark"
+cursor_theme_name = "simp1e-cursors-adw-dark"
 
 [commands]
 reboot = ["loginctl", "reboot"]

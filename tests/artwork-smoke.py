@@ -22,11 +22,13 @@ s = Gtk.Settings.get_default()
 actual = s.get_property('gtk-theme-name')
 assert actual == 'adw-gtk3-dark', f'GTK3 theme: expected adw-gtk3-dark, got {actual!r}'
 assert s.get_property('gtk-icon-theme-name') == 'Papirus-Dark'
+assert s.get_property('gtk-cursor-theme-name') == 'simp1e-cursors-adw-dark'
 assert s.get_property('gtk-application-prefer-dark-theme')
 """], check=True)
 Gtk.init()
 settings = Gtk.Settings.get_default()
 assert settings.get_property('gtk-icon-theme-name') == 'Papirus-Dark'
+assert settings.get_property('gtk-cursor-theme-name') == 'simp1e-cursors-adw-dark'
 actual = settings.get_property('gtk-theme-name')
 assert actual == 'adw-gtk3-dark', f'GTK4 theme: expected adw-gtk3-dark, got {actual!r}'
 assert settings.get_property('gtk-application-prefer-dark-theme')
@@ -36,7 +38,8 @@ with tempfile.TemporaryDirectory() as config:
     directory = Path(config) / 'gtk-4.0'
     directory.mkdir()
     (directory / 'settings.ini').write_text(
-        '[Settings]\ngtk-theme-name=Adwaita\ngtk-icon-theme-name=hicolor\n')
+        '[Settings]\ngtk-theme-name=Adwaita\ngtk-icon-theme-name=hicolor\n'
+        'gtk-cursor-theme-name=Adwaita\n')
     for version in ('3.0', '4.0'):
         subprocess.run([sys.executable, '-c', """
 import sys
@@ -46,17 +49,25 @@ from gi.repository import Gio, Gtk
 preferences = Gio.Settings.new('org.gnome.desktop.interface')
 assert preferences.get_string('gtk-theme') == 'adw-gtk3-dark'
 assert preferences.get_string('icon-theme') == 'Papirus-Dark'
+assert preferences.get_string('cursor-theme') == 'simp1e-cursors-adw-dark'
 assert preferences.get_string('color-scheme') == 'prefer-dark'
 if sys.argv[1] == '3.0':
     assert preferences.set_string('gtk-theme', 'Adwaita')
     assert preferences.set_string('icon-theme', 'hicolor')
+    assert preferences.set_string('cursor-theme', 'Adwaita')
 Gtk.init([]) if sys.argv[1] == '3.0' else Gtk.init()
 settings = Gtk.Settings.get_default()
 assert settings.get_property('gtk-theme-name') == 'Adwaita', 'Personal GTK theme was overridden'
 assert settings.get_property('gtk-icon-theme-name') == 'hicolor', 'Personal icon theme was overridden'
+assert settings.get_property('gtk-cursor-theme-name') == 'Adwaita', 'Personal cursor theme was overridden'
 """, version], check=True, env=dict(os.environ, GSETTINGS_BACKEND='memory', XDG_CONFIG_HOME=config))
 for version in ('gtk-3.0', 'gtk-4.0'):
     assert (Path('/usr/share/themes/adw-gtk3-dark') / version / 'gtk.css').is_file()
+# The cursor theme is installed by the vendored simp1e-cursors package, and the
+# names GTK and labwc request must resolve to cursor files.
+cursors = Path('/usr/share/icons/simp1e-cursors-adw-dark/cursors')
+for name in ('left_ptr', 'default', 'text', 'grabbing', 'not-allowed'):
+    assert (cursors / name).is_file(), 'Missing cursor: ' + name
 theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
 for name in ('uflinux', 'org.uflinux.Settings', 'system-file-manager', 'preferences-system'):
     assert theme.has_icon(name), 'Missing icon: ' + name
@@ -74,4 +85,4 @@ for path in (Path('/usr/share/icons/hicolor/scalable/apps/uflinux.svg'),
              Path('/usr/share/icons/hicolor/scalable/apps/org.uflinux.Settings.svg')):
     icon = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 32, 32, True)
     assert icon.get_width() == 32 and icon.get_height() == 32
-print('adw-gtk3 GTK3/GTK4 defaults and personal overrides, original artwork, Papirus-Dark lookup and bounded wallpaper previews passed')
+print('adw-gtk3 GTK3/GTK4 defaults and personal overrides, original artwork, Papirus-Dark lookup, simp1e cursor defaults and bounded wallpaper previews passed')

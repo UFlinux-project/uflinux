@@ -1,0 +1,46 @@
+# Maintainer: UFLinux contributors <noreply@example.invalid>
+pkgname=xdg-desktop-portal-gtk4
+pkgver=1.6.6
+pkgrel=0
+pkgdesc="GTK4 backend for XDG Desktop Portal"
+url="https://github.com/JohnRTitor/xdg-desktop-portal-gtk4"
+arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
+license="LGPL-2.1-only"
+depends="dbus glycin-thumbnailer xdg-desktop-portal"
+makedepends="cargo cargo-auditable gtk4.0-dev glib-dev libx11-dev make pkgconf"
+options="net"
+_commit=3eed6c0a02100f86cab0ec989f7ef5d0e3eb971d
+source="$pkgname-$pkgver.tar.gz::https://codeload.github.com/JohnRTitor/xdg-desktop-portal-gtk4/tar.gz/$_commit"
+builddir="$srcdir/$pkgname-$_commit"
+
+# Keep the compiled interfaces in sync with upstream's gtk4.portal descriptor.
+_portals="access,account,app_chooser,clipboard,dynamic_launcher,email,file_chooser,inhibit,lockdown,notification,print,settings,usb"
+export CARGO_PROFILE_RELEASE_OPT_LEVEL=s
+export CARGO_PROFILE_TEST_DEBUG=0
+
+prepare() {
+	default_prepare
+	cargo fetch --locked --target="$CTARGET"
+	cargo clean --release -p "$pkgname"
+}
+
+build() {
+	RUSTFLAGS="$RUSTFLAGS --remap-path-prefix=$builddir=/usr/src/$pkgname" \
+		cargo auditable build --release --frozen --no-default-features --features "$_portals"
+}
+
+check() {
+	cargo test --frozen --lib --no-default-features --features "$_portals"
+}
+
+package() {
+	make install PREFIX=/usr DESTDIR="$pkgdir"
+	rm "$pkgdir/usr/lib/systemd/user/$pkgname.service"
+	sed -i '/^SystemdService=/d' \
+		"$pkgdir/usr/share/dbus-1/services/org.freedesktop.impl.portal.desktop.gtk4.service"
+	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+sha512sums="
+619b9762b38ce8049c0e193858cdd35dfa36b5756a615bf232c785f51392f7d83e3fb326bd19751bba14bb7cda14c058f20f6f7ea831c7ccc55114aef4e9ae88  xdg-desktop-portal-gtk4-1.6.6.tar.gz
+"

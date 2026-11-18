@@ -477,7 +477,7 @@ impl DesktopIcons {
                 KeyboardMode::OnDemand
             };
             output.window.set_keyboard_mode(keyboard);
-            surface.set_input_region(&cairo::Region::create_rectangles(&rectangles));
+            surface.set_input_region(Some(&cairo::Region::create_rectangles(&rectangles)));
         }
     }
 
@@ -743,7 +743,7 @@ async fn thumbnail(bus: &gio::DBusConnection, job: &Thumbnail) -> Option<gdk_pix
     if format != "png" {
         return None;
     }
-    let stream = gio::UnixInputStream::take_fd(descriptors?.get(index).ok()?);
+    let stream = gio_unix::InputStream::take_fd(descriptors?.get(index).ok()?);
     gdk_pixbuf::Pixbuf::from_stream_at_scale_future(
         &stream,
         job.display_size,

@@ -29,7 +29,7 @@ fn entry(info: &gio::AppInfo) -> Option<Entry> {
     let name = info.display_name().to_string();
     let description = info.description().unwrap_or_default().to_string();
     let mut search = format!("{name} {description}");
-    if let Some(desktop) = info.downcast_ref::<gio::DesktopAppInfo>() {
+    if let Some(desktop) = info.downcast_ref::<gio_unix::DesktopAppInfo>() {
         search.push_str(&format!(
             " {} {}",
             desktop.generic_name().unwrap_or_default(),
@@ -39,7 +39,7 @@ fn entry(info: &gio::AppInfo) -> Option<Entry> {
     Some(Entry {
         id,
         path: info
-            .downcast_ref::<gio::DesktopAppInfo>()
+            .downcast_ref::<gio_unix::DesktopAppInfo>()
             .and_then(|app| app.filename()),
         name_key: fold(&name),
         search_key: fold(&search),
@@ -51,7 +51,7 @@ fn entry(info: &gio::AppInfo) -> Option<Entry> {
             .unwrap_or_else(|| "application-x-executable".into())
             .to_string(),
         startup_wm_class: info
-            .downcast_ref::<gio::DesktopAppInfo>()
+            .downcast_ref::<gio_unix::DesktopAppInfo>()
             .and_then(|desktop| desktop.startup_wm_class())
             .map(|value| value.to_string()),
     })
@@ -70,9 +70,9 @@ pub fn load() -> Catalog {
     entries.dedup_by(|a, b| a.id == b.id);
     let mut favorites = Vec::new();
     let files = gio::AppInfo::default_for_type("inode/directory", false)
-        .or_else(|| gio::DesktopAppInfo::new("thunar.desktop").map(|a| a.upcast()));
-    let terminal = gio::DesktopAppInfo::new("foot.desktop").map(|a| a.upcast());
-    let settings = gio::DesktopAppInfo::new("org.uflinux.Settings.desktop").map(|a| a.upcast());
+        .or_else(|| gio_unix::DesktopAppInfo::new("thunar.desktop").map(|a| a.upcast()));
+    let terminal = gio_unix::DesktopAppInfo::new("foot.desktop").map(|a| a.upcast());
+    let settings = gio_unix::DesktopAppInfo::new("org.uflinux.Settings.desktop").map(|a| a.upcast());
     let browser = gio::AppInfo::default_for_type("x-scheme-handler/http", false);
     for info in [files, terminal, settings, browser].into_iter().flatten() {
         if let Some(mut item) = entry(&info) {
