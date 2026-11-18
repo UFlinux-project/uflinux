@@ -48,7 +48,9 @@ package() {
 adw_dark() {
 	pkgdesc="$pkgdesc (Adw Dark scheme)"
 	mkdir -p "$subpkgdir"/usr/share/icons
-	mv "$pkgdir"/usr/share/icons/"Simp1e Adw Dark" "$subpkgdir"/usr/share/icons/"$subpkgname"
+	# The generator sanitizes the scheme name, so "Simp1e Adw Dark" is built as
+	# the hyphenated directory.
+	mv "$pkgdir"/usr/share/icons/Simp1e-Adw-Dark "$subpkgdir"/usr/share/icons/"$subpkgname"
 }
 
 sha512sums="

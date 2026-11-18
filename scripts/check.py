@@ -123,6 +123,8 @@ assert f'pkgver={lock["simp1e-cursors"]["version"]}\n' in cursors
 # The vendored recipe only builds the desktop default and its base theme.
 assert "--include=Simp1e.txt,Simp1e-Adw-Dark.txt,cursors.svg" in cursors
 assert 'subpackages="$pkgname-adw-dark:adw_dark"' in cursors
+# The generator sanitizes scheme names, so the built directory is hyphenated.
+assert 'mv "$pkgdir"/usr/share/icons/Simp1e-Adw-Dark ' in cursors
 assert "libadwaita" not in (ROOT / "settings/Cargo.lock").read_text()
 for origin in ("connman", "gpu-screen-recorder", "uflinux-regreet", "uflinux-settings", "xdg-desktop-portal-gtk4"):
     recipe_arches = re.search(r'^arch="([^"]+)"$', (ROOT / "aports" / origin / "APKBUILD").read_text(), re.M)
