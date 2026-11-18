@@ -49,3 +49,14 @@
 .uflinux-task-preview .uflinux-task-heading { opacity: 0.7; padding: 2px 6px 4px; }
 .uflinux-task-preview .uflinux-task-row { padding: 0; }
 .uflinux-panel.software-renderer .uflinux-task-preview { box-shadow: none; }
+
+.desktop-icon {
+    padding: 4px;
+    border-radius: 6px;
+    color: white;
+    text-shadow: 0 1px black;
+}
+.desktop-icon:hover,
+.desktop-icon:focus {
+    background-color: alpha(black, 0.36);
+}

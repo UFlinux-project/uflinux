@@ -5,6 +5,7 @@ use gio::prelude::*;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub id: String,
+    pub path: Option<std::path::PathBuf>,
     pub name: String,
     pub icon: String,
     pub startup_wm_class: Option<String>,
@@ -37,6 +38,9 @@ fn entry(info: &gio::AppInfo) -> Option<Entry> {
     }
     Some(Entry {
         id,
+        path: info
+            .downcast_ref::<gio::DesktopAppInfo>()
+            .and_then(|app| app.filename()),
         name_key: fold(&name),
         search_key: fold(&search),
         name,
@@ -125,6 +129,7 @@ mod tests {
     fn item(name: &str, keywords: &str) -> Entry {
         Entry {
             id: format!("{name}.desktop"),
+            path: None,
             name: name.into(),
             icon: String::new(),
             startup_wm_class: None,

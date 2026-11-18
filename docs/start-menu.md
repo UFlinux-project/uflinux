@@ -3,16 +3,17 @@
 Click the leaf on the bottom taskbar or release either Super key to toggle the
 launcher. Super combinations still work; Super+R and Super+Space also toggle the Start menu.
 The Start menu runs in the resident GTK4 `uflinux-desktop` process, with
-Papirus icons and the selected GTK theme. Login starts it hidden with its default
+Papirus-Dark icons and the selected GTK theme. Login starts it hidden with its default
 widgets, layout and application catalog prepared. It retains these between
 openings; GTK and the compositor draw buffers when the window is mapped.
 
 The left column contains Files, Terminal, Settings and the default web browser
-when installed. All Applications opens the alphabetical catalog. Search matches
-application names, generic names, descriptions and keywords, with exact names
-ranked first. Hidden desktop entries and entries unavailable in the current
-desktop are excluded. Applications launch through GIO desktop-entry handling;
-search text is never interpreted as a command.
+when installed. All Applications opens the alphabetical catalog. Typing in
+Search shows indexed applications first, then matching file and folder names
+from the file manager's configured search roots. Local application matches
+supplement the index when localized names or keywords differ, and remain
+available if the search service is absent. Applications launch through GIO
+desktop-entry handling. Files and folders open in their default applications.
 
 The right column contains the account name, Home and configured XDG folders,
 Settings and Terminal. Unavailable folders have an explanation. `xdg-user-dirs`
@@ -23,8 +24,8 @@ Log out, Restart and Shut down require confirmation with Cancel selected by defa
 Suspend is immediate. Unavailable elogind actions are disabled. Authorization
 errors appear inside the menu. Power-button policy remains in Settings.
 
-Search receives focus on opening. Arrow keys navigate applications and Enter
-launches the selection. Escape first cancels confirmation, then clears search,
+Search receives focus on opening. Arrow keys navigate results and Enter
+opens the selection. Escape first cancels confirmation, then clears search,
 returns from All Applications and finally closes the menu. Outside clicks close
 it immediately. Start and the Network, Sound and Power menus replace each other while a full Settings
 window can remain open.
@@ -50,7 +51,7 @@ catalog while hidden, and monitor removal dismisses the menu. Resident memory
 is part of the desktop's background cost; the old nonresident measurements in
 the validation record do not establish this version's memory or latency.
 
-The taskbar has separate Network, Sound and Power buttons with Papirus symbolic
+The taskbar has separate Network, Sound and Power buttons with Papirus-Dark symbolic
 icons. They track connection, output volume and battery state. Sound includes
 input/output and application controls; Power includes battery information,
 brightness and power profiles. Network and Sound are tabbed — Wi-Fi, Ethernet,

@@ -42,7 +42,7 @@ entry = Path(os.environ['XDG_DATA_HOME']) / 'applications/uflinux-catalog-fixtur
 try:
     subprocess.run([os.environ['UFLINUX_DESKTOP_BIN'], '--start-menu', '--output', 'HEADLESS-1'],
                    check=True, timeout=5)
-    search = wait(lambda: find('Search applications'), 'Start search was not available')
+    search = wait(lambda: find('Search applications and files'), 'Start search was not available')
     assert search.queryEditableText().setTextContents(name)
     entry.write_text('[Desktop Entry]\nType=Application\nName=' + name +
                      '\nExec=/bin/true\nIcon=utilities-terminal\nStartupWMClass=UF-Catalog-Fixture\n')

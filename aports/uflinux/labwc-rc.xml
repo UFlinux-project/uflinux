@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <labwc_config>
   <core><gap>0</gap><decoration>server</decoration></core>
-  <theme><name>labAdwaita-dark</name><icon>Papirus</icon><font place="ActiveWindow"><name>Ubuntu Nerd Font</name><size>10</size></font></theme>
+  <theme><name>labAdwaita-dark</name><icon>Papirus-Dark</icon><font place="ActiveWindow"><name>Ubuntu Nerd Font</name><size>10</size></font></theme>
   <windowSwitcher preview="yes" outlines="yes"><osd show="yes" style="thumbnail" output="focused"/></windowSwitcher>
   <keyboard>
     <default/>

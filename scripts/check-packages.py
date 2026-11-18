@@ -114,8 +114,9 @@ def check_apps(arch):
             ) from error
         raise
     found = set(re.findall(r"^P:(.+)$", index, re.M))
-    if "uflinux-files" not in found:
-        raise RuntimeError(f"{arch}: the apps index no longer provides uflinux-files")
+    missing = {"uflinux-files", "uflinux-files-desktop", "uflinux-files-searchd"} - found
+    if missing:
+        raise RuntimeError(f"{arch}: apps packages unavailable: {', '.join(sorted(missing))}")
     return f"{arch}: apps index provides {len(found)} packages"
 
 

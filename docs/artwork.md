@@ -1,12 +1,12 @@
 # Original UFLinux artwork
 
-This desktop restores the icon theme and default wallpaper selected by the
+This desktop draws on the icon theme and default wallpaper selected by the
 [original UFLinux configuration](https://github.com/UFlinux-project/main/blob/067f3069b20f78995920d30795d48d36c96fcdf7/config/includes.chroot_before_packages/etc/dconf/db/local.d/00_uflinux_defaults):
 Papirus and GNOME's `Dark_Ivy.jpg`. Those assets were third-party artwork used by
 the original distribution, rather than artwork authored by UFLinux.
 
-Papirus comes from Alpine's signed `papirus-icon-theme` package. GTK3, GTK4,
-and labwc select Papirus by default; the desktop shell uses the GTK theme for its
+GTK3, GTK4, labwc, ReGreet and Mako select Papirus-Dark from Alpine's signed
+`papirus-icon-theme` package. The desktop shell uses the GTK icon theme for its
 application icons. Adwaita remains available for fallback icons. Personal
 preferences can override the packaged defaults.
 
@@ -55,7 +55,7 @@ invisiblepower and Road by Joshua Welch, under CC0. The exact GNOME attribution
 and license notice, GPL text and artwork notice are installed in
 `/usr/share/licenses/uflinux-defaults/`. Settings' copy of the logo has source attribution in `settings/README.md`.
 
-The package/desktop verification suite checks Papirus and branded icon lookup,
+The package/desktop verification suite checks Papirus-Dark and branded icon lookup,
 SVG rendering, every bundled image's dimensions, bounded previews, the Start
 configuration and actual wallpaper drawing by the resident desktop. Historical ISO checksums and
 measurements in earlier validation documents describe their original artifacts;

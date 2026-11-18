@@ -105,13 +105,13 @@ def open_menu():
     assert not menu(), 'An earlier Start menu remained open'
     command('uflinux-desktop', '--start-menu', '--output', 'HEADLESS-1')
     wait(menu, 'Start menu did not appear')
-    wait(lambda: find('Search applications'), 'Search field is missing')
+    wait(lambda: find('Search applications and files'), 'Search field is missing')
     wait(lambda: not find('Loading applications…'), 'Application catalog did not load')
-    assert find('Search applications').queryText().getText(0, -1) == '', 'Search was retained after hiding'
+    assert find('Search applications and files').queryText().getText(0, -1) == '', 'Search was retained after hiding'
     assert not find('Back to favorites'), 'Application browser was retained after hiding'
     command('grim', str(results / 'start-menu-default.png'))
 def search(text):
-    field = wait(lambda: find('Search applications'), 'Search field is missing')
+    field = wait(lambda: find('Search applications and files'), 'Search field is missing')
     assert field.queryEditableText().setTextContents(text)
     time.sleep(.3)
 def close_menu():

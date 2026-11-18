@@ -53,7 +53,7 @@ def usable(menu):
                 node = queue.pop(0)
                 state = node.getState()
                 if state.contains(pyatspi.STATE_SHOWING) and state.contains(pyatspi.STATE_SENSITIVE):
-                    if menu == 'start' and node.name == 'Search applications':
+                    if menu == 'start' and node.name == 'Search applications and files':
                         return True
                     if menu != 'start' and node.getRoleName() in ('button', 'push button', 'slider', 'check box', 'switch'):
                         return True

@@ -2,6 +2,7 @@
 use crate::{
     app::App,
     catalog::{self, Catalog, Entry},
+    start_search::{Hit, Search},
     widgets::{self, tr},
 };
 use glib::variant::ToVariant;
@@ -9,13 +10,26 @@ use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use std::{
     cell::{Cell, RefCell},
-    path::PathBuf,
+    collections::HashSet,
+    path::{Path, PathBuf},
     rc::{Rc, Weak},
     time::{Duration, Instant},
 };
 
 const BAR_HEIGHT: i32 = crate::popup::PANEL_HEIGHT;
 const START_WIDTH: i32 = 56;
+
+#[derive(Clone, PartialEq, Eq)]
+enum Row {
+    App(Entry),
+    File(Hit),
+}
+
+impl Row {
+    fn group(&self) -> bool {
+        matches!(self, Self::File(_))
+    }
+}
 
 pub struct Menu {
     pub window: gtk::ApplicationWindow,
@@ -31,7 +45,10 @@ pub struct Menu {
     browse: gtk::Button,
     error: gtk::Label,
     catalog: RefCell<Catalog>,
+    indexed: Rc<Search>,
+    search_status: gtk::Label,
     all: Cell<bool>,
+    search_selection_explicit: Cell<bool>,
     loaded: Cell<bool>,
     closed: Cell<bool>,
     epoch: Cell<u64>,
@@ -113,7 +130,16 @@ impl Menu {
         heading.add_css_class("start-heading");
         left.append(&heading);
         let store = gio::ListStore::new::<glib::BoxedAnyObject>();
-        let selection = gtk::SingleSelection::new(Some(store.clone()));
+        let grouped = gtk::SortListModel::new(Some(store.clone()), None::<gtk::Sorter>);
+        let sections = gtk::CustomSorter::new(|a, b| {
+            let a = a.downcast_ref::<glib::BoxedAnyObject>().unwrap();
+            let b = b.downcast_ref::<glib::BoxedAnyObject>().unwrap();
+            a.borrow::<Row>()
+                .group()
+                .cmp(&b.borrow::<Row>().group())
+                .into()
+        });
+        let selection = gtk::SingleSelection::new(Some(grouped.clone()));
         let factory = gtk::SignalListItemFactory::new();
         factory.connect_setup(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
@@ -126,24 +152,56 @@ impl Menu {
             label.set_xalign(0.0);
             label.set_ellipsize(gtk::pango::EllipsizeMode::End);
             label.set_hexpand(true);
-            row.append(&label);
+            let detail = gtk::Label::new(None);
+            detail.set_xalign(0.0);
+            detail.set_ellipsize(gtk::pango::EllipsizeMode::Start);
+            detail.add_css_class("dim-label");
+            let labels = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            labels.set_hexpand(true);
+            labels.append(&label);
+            labels.append(&detail);
+            row.append(&labels);
             item.set_child(Some(&row));
         });
         factory.connect_bind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let object = item.item().and_downcast::<glib::BoxedAnyObject>().unwrap();
-            let entry = object.borrow::<Entry>();
+            let entry = object.borrow::<Row>();
             let row = item.child().and_downcast::<gtk::Box>().unwrap();
             let image = row.first_child().and_downcast::<gtk::Image>().unwrap();
-            let label = image.next_sibling().and_downcast::<gtk::Label>().unwrap();
-            label.set_text(&entry.name);
-            if let Ok(icon) = gio::Icon::for_string(&entry.icon) {
-                image.set_from_gicon(&icon);
-            } else {
-                image.set_icon_name(Some("application-x-executable"));
-            }
-            row.set_tooltip_text(Some(&format!("{}\n{}", entry.name, entry.description)));
-            row.update_property(&[gtk::accessible::Property::Label(&entry.name)]);
+            let labels = row.last_child().and_downcast::<gtk::Box>().unwrap();
+            let label = labels.first_child().and_downcast::<gtk::Label>().unwrap();
+            let detail = labels.last_child().and_downcast::<gtk::Label>().unwrap();
+            let (name, description) = match &*entry {
+                Row::App(app) => {
+                    if let Ok(icon) = gio::Icon::for_string(&app.icon) {
+                        image.set_from_gicon(&icon);
+                    } else {
+                        image.set_icon_name(Some("application-x-executable"));
+                    }
+                    detail.set_visible(false);
+                    (app.name.as_str(), app.description.clone())
+                }
+                Row::File(hit) => {
+                    if hit.kind == "dir" {
+                        image.set_icon_name(Some("folder"));
+                    } else if let Some(mime) = &hit.mime {
+                        image.set_from_gicon(&gio::content_type_get_icon(mime));
+                    } else {
+                        image.set_icon_name(Some("text-x-generic"));
+                    }
+                    let parent = Path::new(&hit.path)
+                        .parent()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default();
+                    detail.set_text(&parent);
+                    detail.set_visible(true);
+                    (hit.name.as_str(), parent)
+                }
+            };
+            label.set_text(name);
+            row.set_tooltip_text(Some(&format!("{name}\n{description}")));
+            row.update_property(&[gtk::accessible::Property::Label(name)]);
         });
         factory.connect_unbind(|_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
@@ -155,6 +213,27 @@ impl Menu {
             }
         });
         let view = gtk::ListView::new(Some(selection.clone()), Some(factory));
+        let headers = gtk::SignalListItemFactory::new();
+        headers.connect_setup(|_, header| {
+            let header = header.downcast_ref::<gtk::ListHeader>().unwrap();
+            let label = gtk::Label::new(None);
+            label.set_xalign(0.0);
+            label.add_css_class("start-heading");
+            header.set_child(Some(&label));
+        });
+        headers.connect_bind(|_, header| {
+            let header = header.downcast_ref::<gtk::ListHeader>().unwrap();
+            let item = header
+                .item()
+                .and_downcast::<glib::BoxedAnyObject>()
+                .unwrap();
+            let label = header.child().and_downcast::<gtk::Label>().unwrap();
+            label.set_text(&tr(if item.borrow::<Row>().group() {
+                "Files and folders"
+            } else {
+                "Applications"
+            }));
+        });
         view.set_single_click_activate(true);
         view.add_css_class("start-apps");
         view.update_property(&[gtk::accessible::Property::Label(&tr("Applications"))]);
@@ -171,15 +250,20 @@ impl Menu {
         error.set_ellipsize(gtk::pango::EllipsizeMode::End);
         error.set_visible(false);
         left.append(&error);
+        let search_status = widgets::description("");
+        search_status.set_visible(false);
+        left.append(&search_status);
         let browse = shortcut("All Applications", "go-next-symbolic");
         left.append(&browse);
         let search = gtk::SearchEntry::builder()
-            .placeholder_text(tr("Search applications…"))
+            .placeholder_text(tr("Search applications and files…"))
             .hexpand(true)
             .build();
         search.set_width_chars(6);
         search.set_max_width_chars(24);
-        search.update_property(&[gtk::accessible::Property::Label(&tr("Search applications"))]);
+        search.update_property(&[gtk::accessible::Property::Label(&tr(
+            "Search applications and files",
+        ))]);
         left.append(&search);
         card.append(&left);
         let right = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -253,7 +337,10 @@ impl Menu {
             browse,
             error,
             catalog: RefCell::new(Catalog::default()),
+            indexed: Rc::new(Search::default()),
+            search_status,
             all: Cell::new(false),
+            search_selection_explicit: Cell::new(false),
             loaded: Cell::new(false),
             closed: Cell::new(false),
             epoch: Cell::new(0),
@@ -276,10 +363,24 @@ impl Menu {
             }
         });
         let weak = Rc::downgrade(&menu);
-        menu.search.connect_search_changed(move |_| {
+        menu.indexed.on_changed(move || {
+            if let Some(menu) = weak.upgrade() {
+                menu.rebuild();
+            }
+        });
+        let weak = Rc::downgrade(&menu);
+        menu.search.connect_changed(move |_| {
             if let Some(menu) = weak.upgrade() {
                 menu.failure("");
+                menu.search_selection_explicit.set(false);
+                menu.indexed.set_text(&menu.search.text());
+                let searching = !menu.search.text().trim().is_empty();
+                grouped.set_section_sorter(searching.then_some(&sections));
+                menu.view.set_header_factory(searching.then_some(&headers));
                 menu.rebuild();
+                if menu.store.n_items() != 0 {
+                    menu.selection.set_selected(0);
+                }
             }
         });
         let weak = Rc::downgrade(&menu);
@@ -553,6 +654,7 @@ impl Menu {
                 && menu.store.n_items() > 0
             {
                 let current = menu.selection.selected().min(menu.store.n_items() - 1);
+                menu.search_selection_explicit.set(true);
                 menu.selection.set_selected(current);
                 menu.view.grab_focus();
                 return glib::Propagation::Stop;
@@ -648,6 +750,7 @@ impl Menu {
             return;
         }
         self.epoch.set(self.epoch.get() + 1);
+        self.indexed.set_text("");
         if let Some(id) = self.changed.borrow_mut().take() {
             self.app_monitor.disconnect(id);
         }
@@ -694,13 +797,64 @@ impl Menu {
     fn rebuild(&self) {
         let query = self.search.text();
         let data = self.catalog.borrow();
-        let rows = if !query.trim().is_empty() {
-            catalog::search(&data.entries, &query)
-        } else if self.all.get() {
-            data.entries.clone()
+        let searching = !query.trim().is_empty();
+        let mut rows = Vec::new();
+        let mut status = "";
+        if searching {
+            self.indexed.results(|apps, files| {
+                let mut app_ids = HashSet::new();
+                let mut paths = HashSet::new();
+                for hit in &apps.hits {
+                    let Some(entry) = data
+                        .entries
+                        .iter()
+                        .find(|entry| entry.path.as_deref() == Some(Path::new(&hit.path)))
+                    else {
+                        continue;
+                    };
+                    if app_ids.insert(entry.id.clone()) {
+                        paths.insert(hit.path.clone());
+                        rows.push(Row::App(entry.clone()));
+                    }
+                }
+                rows.extend(
+                    catalog::search(&data.entries, &query)
+                        .into_iter()
+                        .filter(|entry| app_ids.insert(entry.id.clone()))
+                        .take(20)
+                        .map(|entry| {
+                            if let Some(path) = &entry.path {
+                                paths.insert(path.to_string_lossy().into_owned());
+                            }
+                            Row::App(entry)
+                        }),
+                );
+                rows.extend(
+                    files
+                        .hits
+                        .iter()
+                        .filter(|hit| paths.insert(hit.path.clone()))
+                        .cloned()
+                        .map(Row::File),
+                );
+                status = match (apps.unavailable, files.unavailable) {
+                    (true, true) => "Indexed search unavailable",
+                    (true, false) => "Indexed application search unavailable",
+                    (false, true) => "File search unavailable",
+                    _ if apps.pending || files.pending => "Searching…",
+                    _ => "",
+                };
+            });
         } else {
-            data.favorites.clone()
-        };
+            let entries = if self.all.get() {
+                &data.entries
+            } else {
+                &data.favorites
+            };
+            rows.extend(entries.iter().cloned().map(Row::App));
+        }
+        self.search_status.set_visible(!status.is_empty());
+        self.search_status.set_text(&tr(status));
         self.heading.set_text(&tr(if !self.loaded.get() {
             "Loading applications…"
         } else if !query.trim().is_empty() {
@@ -736,17 +890,30 @@ impl Menu {
                 self.store
                     .item(index as u32)
                     .and_downcast::<glib::BoxedAnyObject>()
-                    .is_some_and(|object| *object.borrow::<Entry>() == *entry)
+                    .is_some_and(|object| *object.borrow::<Row>() == *entry)
             });
         if !unchanged {
+            let selected = self
+                .selection
+                .selected_item()
+                .and_downcast::<glib::BoxedAnyObject>()
+                .and_then(|object| rows.iter().position(|row| *object.borrow::<Row>() == *row));
             let objects: Vec<_> = rows.into_iter().map(glib::BoxedAnyObject::new).collect();
             self.store.splice(0, self.store.n_items(), &objects);
+            if !objects.is_empty() {
+                let preserve = !searching || self.search_selection_explicit.get();
+                self.selection.set_selected(if preserve {
+                    selected.unwrap_or(0) as u32
+                } else {
+                    0
+                });
+            }
         }
-        if self.loaded.get() && self.store.n_items() == 0 {
+        if self.loaded.get() && self.store.n_items() == 0 && status.is_empty() {
             self.heading.set_text(&tr(if query.is_empty() {
                 "No applications available"
             } else {
-                "No matching applications"
+                "No matching results"
             }));
         }
     }
@@ -772,15 +939,29 @@ impl Menu {
         else {
             return;
         };
-        let id = object.borrow::<Entry>().id.clone();
-        if id == "org.uflinux.Settings.desktop" {
-            self.settings("network");
-            return;
+        enum Launch {
+            App(gio::DesktopAppInfo),
+            File(glib::GString),
         }
-        let Some(info) = gio::DesktopAppInfo::new(&id).filter(|a| a.should_show()) else {
-            self.failure(&tr("This application is no longer available"));
-            self.reload();
-            return;
+        let (launch, failure) = match &*object.borrow::<Row>() {
+            Row::App(entry) => {
+                if entry.id == "org.uflinux.Settings.desktop" {
+                    self.settings("network");
+                    return;
+                }
+                let Some(info) =
+                    gio::DesktopAppInfo::new(&entry.id).filter(|app| app.should_show())
+                else {
+                    self.failure(&tr("This application is no longer available"));
+                    self.reload();
+                    return;
+                };
+                (Launch::App(info), "Could not launch application")
+            }
+            Row::File(hit) => (
+                Launch::File(gio::File::for_path(&hit.path).uri()),
+                "Could not open file",
+            ),
         };
         self.busy.set(true);
         self.view.set_sensitive(false);
@@ -789,7 +970,12 @@ impl Menu {
         let weak = Rc::downgrade(self);
         let presentation = self.presentation.get();
         glib::MainContext::default().spawn_local(async move {
-            let result = info.launch_uris_future(&[], Some(&context)).await;
+            let result = match launch {
+                Launch::App(info) => info.launch_uris_future(&[], Some(&context)).await,
+                Launch::File(uri) => {
+                    gio::AppInfo::launch_default_for_uri_future(&uri, Some(&context)).await
+                }
+            };
             if let Some(menu) = weak.upgrade() {
                 menu.busy.set(false);
                 menu.view.set_sensitive(true);
@@ -799,7 +985,7 @@ impl Menu {
                 match result {
                     Ok(()) => menu.hide(),
                     Err(e) => {
-                        menu.failure(&format!("{}: {}", tr("Could not launch application"), e));
+                        menu.failure(&format!("{}: {}", tr(failure), e));
                         if menu.window.is_visible() {
                             menu.search.grab_focus();
                         }

@@ -10,6 +10,12 @@ export XDG_RUNTIME_DIR
 chmod 700 "$XDG_RUNTIME_DIR"
 mkdir -p "$XDG_RUNTIME_DIR/config"
 : > "$XDG_RUNTIME_DIR/config/autostart"
+if [ "${UFLINUX_TEST_FILES_INTEGRATION:-0}" = 1 ] || [ "${UFLINUX_TEST_FILES_FALLBACK:-0}" = 1 ]; then
+    export HOME="$XDG_RUNTIME_DIR/home"
+    export XDG_CONFIG_HOME="$XDG_RUNTIME_DIR/preferences" XDG_DATA_HOME="$HOME/.local/share" XDG_CACHE_HOME="$XDG_RUNTIME_DIR/cache"
+    export XDG_CURRENT_DESKTOP=labwc
+    mkdir -p "$HOME/Desktop" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME/applications"
+fi
 if [ "${UFLINUX_TEST_CATALOG:-0}" = 1 ]; then
     export XDG_DATA_HOME="$XDG_RUNTIME_DIR/data"
     mkdir -p "$XDG_DATA_HOME/applications"
@@ -26,9 +32,11 @@ fi
 export WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
 export WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland GSK_RENDERER=cairo G_DEBUG=fatal-criticals
 if [ "${UFLINUX_TEST_FRAME_PROBE:-0}" = 1 ] || [ "${UFLINUX_TEST_RESIDENT_BENCH:-0}" = 1 ]; then export UFLINUX_SETTINGS_BENCH=1; fi
-compositor='' desktop='' watcher=''
+compositor='' desktop='' watcher='' provider='' fallback=''
 cleanup() {
     [ -z "$desktop" ] || kill "$desktop" 2>/dev/null || :
+    [ -z "$provider" ] || kill "$provider" 2>/dev/null || :
+    [ -z "$fallback" ] || kill "$fallback" 2>/dev/null || :
     [ -z "$watcher" ] || kill "$watcher" 2>/dev/null || :
     [ -z "$compositor" ] || kill "$compositor" 2>/dev/null || :
     wait 2>/dev/null || :
@@ -56,6 +64,27 @@ if [ "${UFLINUX_TEST_EXTERNAL_TRAY:-0}" = 1 ]; then
     done
     grep -q '^ready$' "$XDG_RUNTIME_DIR/watcher.log"
 fi
+if [ "${UFLINUX_TEST_FILES_FALLBACK:-0}" = 1 ]; then
+    "${UFLINUX_FILES_PROVIDER_BIN:?Set UFLINUX_FILES_PROVIDER_BIN}" > "$XDG_RUNTIME_DIR/provider.log" 2>&1 &
+    provider=$!
+    for _ in $(seq 1 100); do
+        if gdbus introspect --session --dest org.uflinux.FileManager.Desktop1 \
+            --object-path /org/uflinux/FileManager/Desktop >/dev/null 2>&1; then break; fi
+        kill -0 "$provider" || { cat "$XDG_RUNTIME_DIR/provider.log"; exit 1; }
+        sleep .1
+    done
+    "${UFLINUX_FILES_BIN:?Set UFLINUX_FILES_BIN to a build with desktop-icons}" --desktop-icons \
+        > "$XDG_RUNTIME_DIR/fallback.log" 2>&1 &
+    fallback=$!
+    for _ in $(seq 1 80); do
+        if gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+            --method org.freedesktop.DBus.NameHasOwner org.uflinux.FileManager.Desktop.Renderer | grep -q true; then break; fi
+        kill -0 "$fallback" || { cat "$XDG_RUNTIME_DIR/fallback.log"; exit 1; }
+        sleep .1
+    done
+    gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+        --method org.freedesktop.DBus.NameHasOwner org.uflinux.FileManager.Desktop.Renderer | grep -q true
+fi
 "$UFLINUX_DESKTOP_BIN" --daemon > "$XDG_RUNTIME_DIR/desktop.log" 2>&1 &
 desktop=$!
 for _ in $(seq 1 100); do
@@ -63,6 +92,22 @@ for _ in $(seq 1 100); do
     if gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner org.uflinux.Desktop | grep -q true; then break; fi
     sleep .1
 done
+if [ -n "$fallback" ]; then
+    for _ in $(seq 1 80); do
+        kill -0 "$fallback" 2>/dev/null || break
+        sleep .1
+    done
+    if kill -0 "$fallback" 2>/dev/null; then
+        cat "$XDG_RUNTIME_DIR/fallback.log"
+        exit 1
+    fi
+    wait "$fallback"
+    fallback=''
+    kill "$provider"
+    wait "$provider"
+    provider=''
+    echo 'The native shell took over from the Files fallback'
+fi
 timeout 5 "$UFLINUX_DESKTOP_BIN" --daemon
 "$UFLINUX_DESKTOP_BIN" --start-menu --output HEADLESS-1
 "$UFLINUX_DESKTOP_BIN" --status | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["popup"] == "start" and s["output"] == "HEADLESS-1" and isinstance(s["ready"], bool), s'
@@ -84,6 +129,13 @@ if [ "${UFLINUX_TEST_RESIDENT_BENCH:-0}" = 1 ]; then
     UFLINUX_DESKTOP_PID=$desktop UFLINUX_DESKTOP_LOG=$XDG_RUNTIME_DIR/desktop.log \
         python3 "$(dirname "$0")/start-menu-bench.py"
 fi
+if [ "${UFLINUX_TEST_FILES_INTEGRATION:-0}" = 1 ] || [ "${UFLINUX_TEST_OUTPUT_HOTPLUG:-0}" = 1 ]; then
+    sh "$(dirname "$0")/build-ui-driver.sh" "$XDG_RUNTIME_DIR/ui-driver"
+fi
+if [ "${UFLINUX_TEST_FILES_INTEGRATION:-0}" = 1 ]; then
+    UFLINUX_POINTER_DRIVER="$XDG_RUNTIME_DIR/ui-driver/pointer-driver" \
+        python3 "$(dirname "$0")/desktop-files-integration.py"
+fi
 if [ "${UFLINUX_TEST_SETTINGS:-0}" = 1 ]; then
     python3 "$(dirname "$0")/desktop-settings-protocol.py"
 fi
@@ -91,7 +143,8 @@ if [ "${UFLINUX_TEST_TRAY:-0}" = 1 ]; then
     python3 "$(dirname "$0")/desktop-tray-protocol.py"
 fi
 if [ "${UFLINUX_TEST_OUTPUT_HOTPLUG:-0}" = 1 ]; then
-    python3 "$(dirname "$0")/desktop-output-protocol.py"
+    UFLINUX_KEYBOARD_DRIVER="$XDG_RUNTIME_DIR/ui-driver/keyboard-driver" \
+        python3 "$(dirname "$0")/desktop-output-protocol.py"
 fi
 if [ "${UFLINUX_TEST_CATALOG:-0}" = 1 ]; then
     python3 "$(dirname "$0")/desktop-catalog-protocol.py"

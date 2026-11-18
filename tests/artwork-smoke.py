@@ -21,12 +21,12 @@ Gtk.init([])
 s = Gtk.Settings.get_default()
 actual = s.get_property('gtk-theme-name')
 assert actual == 'adw-gtk3-dark', f'GTK3 theme: expected adw-gtk3-dark, got {actual!r}'
-assert s.get_property('gtk-icon-theme-name') == 'Papirus'
+assert s.get_property('gtk-icon-theme-name') == 'Papirus-Dark'
 assert s.get_property('gtk-application-prefer-dark-theme')
 """], check=True)
 Gtk.init()
 settings = Gtk.Settings.get_default()
-assert settings.get_property('gtk-icon-theme-name') == 'Papirus'
+assert settings.get_property('gtk-icon-theme-name') == 'Papirus-Dark'
 actual = settings.get_property('gtk-theme-name')
 assert actual == 'adw-gtk3-dark', f'GTK4 theme: expected adw-gtk3-dark, got {actual!r}'
 assert settings.get_property('gtk-application-prefer-dark-theme')
@@ -45,7 +45,7 @@ gi.require_version('Gtk', sys.argv[1])
 from gi.repository import Gio, Gtk
 preferences = Gio.Settings.new('org.gnome.desktop.interface')
 assert preferences.get_string('gtk-theme') == 'adw-gtk3-dark'
-assert preferences.get_string('icon-theme') == 'Papirus'
+assert preferences.get_string('icon-theme') == 'Papirus-Dark'
 assert preferences.get_string('color-scheme') == 'prefer-dark'
 if sys.argv[1] == '3.0':
     assert preferences.set_string('gtk-theme', 'Adwaita')
@@ -74,4 +74,4 @@ for path in (Path('/usr/share/icons/hicolor/scalable/apps/uflinux.svg'),
              Path('/usr/share/icons/hicolor/scalable/apps/org.uflinux.Settings.svg')):
     icon = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 32, 32, True)
     assert icon.get_width() == 32 and icon.get_height() == 32
-print('adw-gtk3 GTK3/GTK4 defaults and personal overrides, original artwork, Papirus lookup and bounded wallpaper previews passed')
+print('adw-gtk3 GTK3/GTK4 defaults and personal overrides, original artwork, Papirus-Dark lookup and bounded wallpaper previews passed')

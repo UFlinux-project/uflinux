@@ -1,6 +1,7 @@
 //! Wallpaper drawn by the shell itself. The service still validates and stores
 //! the appearance, but the pixels belong to this process, so a wallpaper no
 //! longer costs the session a second compositor client and its own heap.
+use crate::desktop_icons::{DesktopIcons, Output};
 use gtk::{gdk::prelude::GdkCairoContextExt, prelude::*};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use settings_core::Appearance;
@@ -24,6 +25,7 @@ struct Surface {
     monitor: gtk::gdk::Monitor,
     window: gtk::ApplicationWindow,
     canvas: gtk::DrawingArea,
+    grid: gtk::Fixed,
     color: RefCell<String>,
     /// The wallpaper entry currently painted on this output, if any.
     entry: RefCell<Option<(String, String)>>,
@@ -38,6 +40,7 @@ pub struct Background {
     application: gtk::Application,
     surfaces: RefCell<Vec<Rc<Surface>>>,
     appearance: RefCell<Appearance>,
+    icons: Rc<DesktopIcons>,
     /// Run after a surface is created or destroyed, so the shell re-reports
     /// what is on screen. A monitor being re-created replaces its surface
     /// without a new appearance ever arriving, and whatever reads the reported
@@ -51,6 +54,7 @@ impl Background {
             application: application.clone(),
             surfaces: RefCell::new(Vec::new()),
             appearance: RefCell::new(Appearance::default()),
+            icons: Rc::new(DesktopIcons::default()),
             on_change: RefCell::new(None),
         });
         if let Some(display) = gtk::gdk::Display::default() {
@@ -63,6 +67,7 @@ impl Background {
             });
             background.sync(&monitors);
         }
+        background.icons.connect();
         background
     }
 
@@ -86,6 +91,7 @@ impl Background {
     /// after the surface was made.
     fn refresh(self: &Rc<Self>, surface: &Rc<Surface>) {
         surface.retarget(&self.appearance.borrow());
+        self.sync_icons();
         let on_change = self.on_change.borrow().clone();
         if let Some(on_change) = on_change {
             on_change();
@@ -174,11 +180,32 @@ impl Background {
         // A surface that replaced the one lost with its monitor is only visible
         // to the rest of the shell once the reported state is taken again.
         if changed {
+            self.sync_icons();
             let on_change = self.on_change.borrow().clone();
             if let Some(on_change) = on_change {
                 on_change();
             }
         }
+    }
+
+    fn sync_icons(&self) {
+        self.icons.set_outputs(
+            self.surfaces
+                .borrow()
+                .iter()
+                .filter_map(|surface| {
+                    let connector = surface.output.borrow();
+                    if connector.is_empty() {
+                        return None;
+                    }
+                    Some(Output {
+                        connector: connector.clone(),
+                        window: surface.window.clone(),
+                        grid: surface.grid.clone(),
+                    })
+                })
+                .collect(),
+        );
     }
 
     fn create(self: &Rc<Self>, monitor: &gtk::gdk::Monitor) -> Option<Rc<Surface>> {
@@ -197,12 +224,28 @@ impl Background {
             window.set_anchor(Edge::Top, true);
             window.set_anchor(Edge::Bottom, true);
             // The wallpaper covers the whole output, so it reserves nothing and
-            // never takes focus; the panel keeps the exclusive zone.
+            // lets the panel keep its exclusive zone.
             window.set_exclusive_zone(0);
             window.set_keyboard_mode(KeyboardMode::None);
         }
         let canvas = gtk::DrawingArea::new();
-        window.set_child(Some(&canvas));
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&canvas));
+        let grid = gtk::Fixed::new();
+        grid.set_direction(gtk::TextDirection::Ltr);
+        overlay.add_overlay(&grid);
+        window.set_child(Some(&overlay));
+        let icons = Rc::downgrade(&self.icons);
+        window.connect_realize(move |window| {
+            if let Some(surface) = window.surface() {
+                let icons = icons.clone();
+                surface.connect_layout(move |_, _, _| {
+                    if let Some(icons) = icons.upgrade() {
+                        icons.schedule();
+                    }
+                });
+            }
+        });
         let surface = Rc::new(Surface {
             output: RefCell::new(
                 monitor
@@ -213,6 +256,7 @@ impl Background {
             monitor: monitor.clone(),
             window,
             canvas,
+            grid,
             color: RefCell::new(String::new()),
             entry: RefCell::new(None),
             image: RefCell::new(None),

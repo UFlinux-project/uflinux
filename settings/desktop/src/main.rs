@@ -4,6 +4,7 @@ mod background;
 #[path = "../../start-menu/src/catalog.rs"]
 mod catalog;
 mod clock_watch;
+mod desktop_icons;
 mod thumbnails;
 #[path = "../../start-menu/src/menu.rs"]
 mod menu;
@@ -11,6 +12,7 @@ mod notifications;
 mod panel;
 #[path = "../../shared/popup.rs"]
 mod popup;
+mod start_search;
 mod supervisor;
 mod tray;
 mod tray_menu;

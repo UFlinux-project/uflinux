@@ -14,6 +14,16 @@ The isolated smoke test runs a headless labwc session with a private D-Bus bus:
 UFLINUX_DESKTOP_BIN=/path/to/uflinux-desktop sh tests/desktop-prototype-smoke.sh
 ```
 
+Set `UFLINUX_TEST_FILES_INTEGRATION=1` with `UFLINUX_FILES_PROVIDER_BIN` and
+`UFLINUX_SEARCHD_BIN` pointing to the built Files services. The test creates an
+isolated home and checks desktop icon launch and placement, provider restart,
+and application, file and folder results in Start. Combine it with
+`UFLINUX_TEST_OUTPUT_HOTPLUG=1` to check icon placement across output changes. Set
+`UFLINUX_TEST_FILES_FALLBACK=1` and provide `UFLINUX_FILES_BIN` built with the
+`desktop-icons` feature to verify native renderer takeover. Set
+`UFLINUX_TEST_ICON_MEMORY=1` with the Files integration test to check the
+resident shell's 12 MiB budget for 200 icons without thumbnail requests.
+
 Set `UFLINUX_TEST_TRAY=1` to exercise a StatusNotifier item and DBusMenu. The
 fixture icon is behind the taskbar overflow chevron, so the check opens the
 flyout through its accessible name first and also asserts the chevron is absent
