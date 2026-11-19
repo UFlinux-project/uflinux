@@ -203,9 +203,25 @@ def write(root, name, value, mode=0o644):
     path.chmod(mode)
 
 
+def browser_world(arch):
+    """The browser lines of etc/apk/world, which must name a package the
+    architecture's repositories actually carry: Alpine has no riscv64 firefox,
+    only firefox-esr, and ublock-origin installs into /usr/lib/firefox."""
+    if arch == "riscv64":
+        return "firefox-esr\n"
+    return "firefox\nublock-origin\n"
+
+
 def make_overlay(directory, args, repositories=None, uefi=False):
     write(directory, "etc/hostname", args.hostname + "\n")
-    write(directory, "etc/apk/world", "alpine-base\nuflinux\nxfsprogs\nlinux-firmware\n" + ("firefox\nublock-origin\n" if args.arch in {"x86", "x86_64", "aarch64", "armv7", "ppc64le", "riscv64"} else "") + ("systemd-boot\n" if uefi else "") + ("musl-locales\nmusl-locales-lang\nglib-lang\ngtk4.0-lang\nlabwc-lang\n" if getattr(args, "gui_locale", False) else ""))
+    world = "alpine-base\nuflinux\nxfsprogs\nlinux-firmware\n"
+    if args.arch in {"x86", "x86_64", "aarch64", "armv7", "ppc64le", "riscv64"}:
+        world += browser_world(args.arch)
+    if uefi:
+        world += "systemd-boot\n"
+    if getattr(args, "gui_locale", False):
+        world += "musl-locales\nmusl-locales-lang\nglib-lang\ngtk4.0-lang\nlabwc-lang\n"
+    write(directory, "etc/apk/world", world)
     write(directory, "etc/shadow", "root:!:19000:0:99999:7:::\n", 0o600)
     write(directory, "etc/network/interfaces", "auto lo\niface lo inet loopback\n")
     serial = {"aarch64": "ttyAMA0", "armv7": "ttyAMA0", "ppc64le": "hvc0"}.get(args.arch, "ttyS0")

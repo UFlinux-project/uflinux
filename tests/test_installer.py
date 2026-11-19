@@ -3,10 +3,14 @@ import importlib.util
 import json
 from pathlib import Path
 import stat
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import builder
 
 PACKAGE = Path(__file__).resolve().parents[1] / "aports/uflinux/uflinux-install"
 loader = importlib.machinery.SourceFileLoader("uflinux_installer", str(PACKAGE))
@@ -124,6 +128,25 @@ class InstallerTests(unittest.TestCase):
             self.assertNotIn("linux-firmware-none", world)
             self.assertFalse((root / "etc/runlevels/default/uflinux-live").exists())
             self.assertEqual((root / "etc/runlevels/default/greetd").readlink(), Path("/etc/init.d/greetd"))
+
+    def test_overlay_world_names_a_browser_the_architecture_has(self):
+        # Alpine has no riscv64 firefox, so an installed riscv64 system must
+        # carry firefox-esr in its world file or the first apk fix fails.
+        def world_for(arch):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with patch.object(Path, "glob", return_value=[]):
+                    installer.make_overlay(root, self.args("/mnt", arch=arch),
+                                           "https://example.org/apk\n")
+                return (root / "etc/apk/world").read_text().splitlines()
+
+        riscv = world_for("riscv64")
+        self.assertIn("firefox-esr", riscv)
+        self.assertNotIn("firefox", riscv)
+        self.assertNotIn("ublock-origin", riscv)
+        arm = world_for("aarch64")
+        self.assertIn("firefox", arm)
+        self.assertIn("ublock-origin", arm)
 
     def test_bios_syslinux_requires_only_boot_partition_marked(self):
         table = {"label": "gpt", "partitions": [

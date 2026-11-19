@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=14
+pkgrel=15
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -124,6 +124,8 @@ package() {
 	# /etc/xdg/xdg-desktop-portal-wlr/config (apk refuses to overwrite it).
 	install -Dm644 "$srcdir/xdg-desktop-portal-wlr-labwc" "$pkgdir/etc/xdg/xdg-desktop-portal-wlr/labwc"
 	install -Dm644 "$srcdir/firefox-defaults.js" "$pkgdir/usr/lib/firefox/browser/defaults/preferences/uflinux.js"
+	# riscv64 ships firefox-esr instead of firefox (Alpine has no riscv64 firefox).
+	install -Dm644 "$srcdir/firefox-defaults.js" "$pkgdir/usr/lib/firefox-esr/browser/defaults/preferences/uflinux.js"
 	install -Dm644 "$srcdir/45-uflinux-fonts.conf" "$pkgdir/etc/fonts/conf.d/45-uflinux-fonts.conf"
 	install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir/etc/xdg/gtk-3.0/settings.ini"
 	install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir/etc/xdg/gtk-4.0/settings.ini"
@@ -160,7 +162,7 @@ defaults() {
 	amove usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init usr/libexec/uflinux-image-user
 	amove etc/fonts etc/rc.conf.d etc/xdg etc/greetd etc/pam.d etc/connman etc/iwd etc/conf.d usr/bin \
 		usr/share/wayland-sessions usr/share/backgrounds usr/share/themes usr/share/dbus-1 \
-		usr/share/icons usr/share/glib-2.0/schemas usr/lib/firefox usr/share/licenses/uflinux-defaults
+		usr/share/icons usr/share/glib-2.0/schemas usr/lib/firefox usr/lib/firefox-esr usr/share/licenses/uflinux-defaults
 }
 
 initramfs() {
@@ -272,7 +274,7 @@ e7547d393b9489bfaf96ea7f1f580099e8d01487e7a59cc897001032e0f0f424b68d77d21e92ac38
 844131c113ff067ce0ce8be00ea3621a6f04185e5c78b9387dd1f31b7bdaab502442e962cd1b3358118de581461dc0ed21a4c55695f6c31e31dc37692adedf0d  uflinux-compositor
 1d974b858af0c586108515062a832ad31baed68761931396d295b7709b7c70670a99ae58b22a146a72b3323d4199d2f9b531f268a78c7a12213b292ad34a0ae4  uflinux-autostart
 0c37806c49629bb84275ed096c735d37d879483bdf4e1320fdc7ab0a0755bf376544c023227ed1d2321997c27a26128139e1865d6caac291aaf09a145a62c367  uflinux-theme-sync
-5cc1c71cc2a62ccec2d542c78316d0b65f2254b4ba2c45ab9d36b84e26952cb8f960487c2c2972d055446aba368dd5c5fa99168daed7fd5c9be0085967cb38fd  uflinux-install
+ba015f4ce5369d1fdcc9b3025ed6e76943265a0eda0b6b40fb65d22dcdeff773980db67889b9c4015c8df6406939f45fab5bbb2519b2607b0677452dac309c6c  uflinux-install
 35c122aeebee0d0b1dc0a8156d63745fce0bf66d293900a7d478e8361fe959d686b012bd7caaa0b8ac22ff254e537f009585c0983f504d9c4ed37ce952e323ca  uflinux-install-gui-backend
 7153126defd63a0b0a46cd40080194b8435f751413e9ac97eaa9fc66f81b661d7f5f5b6398931fcab52adac8e609f560dcb461700575f0c84a5d85c36f664ef8  uflinux-live.initd
 e0e40c8867a95ec24e1cabfa7f34e35b69583123f21dbb1ff6409a7a40b69bf67e6072e397a4bc25acab21b4e82f4c332452ea3b6f87e5be9ffed1fbc10e072b  uflinux-device.initd

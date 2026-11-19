@@ -138,7 +138,16 @@ class DeviceRootfsTests(unittest.TestCase):
         # dtbloader and the Nura kernel reach the image through
         # UFLINUX_NURA_PACKAGES (fetched and unpacked by the profile), never
         # through the installed package set.
+        # Alpine has no riscv64 firefox, so that architecture gets the Extended
+        # Support Release instead, without the ublock-origin xpi that only
+        # installs into /usr/lib/firefox.
+        riscv = device_packages(DEVICES["spacemit-k1"], "riscv64")
+        self.assertIn("firefox-esr", riscv)
+        self.assertNotIn("firefox", riscv)
+        self.assertNotIn("ublock-origin", riscv)
         qcom_packages = device_packages(DEVICES["qcs6490"], "aarch64")
+        self.assertIn("firefox", qcom_packages)
+        self.assertIn("ublock-origin", qcom_packages)
         self.assertNotIn("dtbloader", qcom_packages)
         self.assertNotIn("linux-postmarketos-qcom-sc7280", qcom_packages)
         # ... and no Alpine kernel either, so the unpacked Nura modules tree is

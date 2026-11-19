@@ -210,6 +210,25 @@ class DesktopDependencyTests(unittest.TestCase):
         self.assertIn("connman=2.0-r4", self.pinned)
         self.assertIn("connman-vpn=2.0-r4", self.pinned)
 
+    def test_iso_profile_picks_a_browser_every_architecture_has(self):
+        # Alpine builds firefox for every target architecture except riscv64,
+        # which only gets firefox-esr; ublock-origin installs into
+        # /usr/lib/firefox, so it must not be added on its own. The live image
+        # and the device images share scripts/builder.py's browser set.
+        profile = (Path(builder.PROJECT) / "profiles/mkimg.uflinux.sh").read_text()
+        browser_arms = {}
+        for case in re.findall(r"case \"\$ARCH\" in\n(.*?)\n\tesac\n", profile, re.S):
+            for patterns, apks in re.findall(r"\t\t([^\)]*)\) (.*?) ;;", case):
+                if "firefox" in apks:
+                    for pattern in patterns.split("|"):
+                        browser_arms[pattern] = apks
+        self.assertEqual(set(browser_arms), set(builder.ARCHES),
+                         "every architecture needs a browser in the live image")
+        for arch, apks in browser_arms.items():
+            packages = apks.replace('apks="$apks ', "").rstrip('"').split()
+            self.assertEqual(packages, builder.browser_packages(arch),
+                             f"{arch} ships the wrong browser set")
+
 
 if __name__ == "__main__":
     unittest.main()

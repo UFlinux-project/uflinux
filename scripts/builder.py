@@ -119,12 +119,26 @@ def device_nura_repository():
     return f"{nura['mirror']}/{nura['branch']}"
 
 
+def browser_packages(arch):
+    """The web browser set an architecture's image can actually install.
+
+    Alpine builds firefox for every architecture we target except riscv64,
+    where only the Extended Support Release is published. ublock-origin is a
+    noarch xpi that installs into /usr/lib/firefox/browser/extensions, so it
+    only rides along with firefox and not with firefox-esr.
+    """
+    if arch == "riscv64":
+        return ["firefox-esr"]
+    return ["firefox", "ublock-origin"]
+
+
 def device_packages(device, arch):
     """Everything the device rootfs needs beyond the live system's package set."""
     packages = ["uflinux-desktop-meta", "uflinux-device"] + list(device["packages"])
     # The same desktop the live ISO installs, minus the live-only pieces.
     packages += ["musl-locales", "musl-locales-lang", "glib-lang", "gtk4.0-lang",
-                 "labwc-lang", "firefox", "ublock-origin", "vulkan-loader", "xfsprogs"]
+                 "labwc-lang", "vulkan-loader", "xfsprogs"]
+    packages += browser_packages(arch)
     packages += ["alpine-base", "apk-tools", "zstd", "util-linux", "dosfstools", "mtools",
                  "e2fsprogs", "e2fsprogs-extra", "cloud-utils-growpart", "linux-firmware"]
     # Keep f2fs-tools available for diagnosis and offline maintenance. Mounted

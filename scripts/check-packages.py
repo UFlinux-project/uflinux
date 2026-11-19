@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from builder import device_packages
+from builder import browser_packages, device_packages
 
 root = Path(__file__).resolve().parents[1]
 lock = json.loads((root / "config/sources.lock.json").read_text())
@@ -81,12 +81,12 @@ def check(arch):
         boots.update({"mesa-vulkan-asahi", "mesa-vulkan-broadcom", "mesa-vulkan-freedreno",
                       "mesa-vulkan-imagination", "mesa-vulkan-intel", "mesa-vulkan-nouveau",
                       "mesa-vulkan-panfrost", "mesa-vulkan-virtio"})
-    missing = (required | boots) - found
+    missing = (required | boots | set(browser_packages(arch))) - found
     if missing:
         raise RuntimeError(f"{arch}: unavailable packages: {', '.join(sorted(missing))}")
     if not versions.get("tlp", "").startswith("1.10."):
         raise RuntimeError(f"{arch}: Settings expects the tested TLP 1.10 series")
-    return f"{arch}: {len(required | boots)} required Alpine packages available"
+    return f"{arch}: {len(required | boots | set(browser_packages(arch)))} required Alpine packages available"
 
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:

@@ -27,8 +27,12 @@ profile_uflinux() {
 	modloop_addons="$modloop_addons uflinux-initramfs"
 	apks="$apks uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang linux-lts linux-firmware
 		systemd-boot xfsprogs e2fsprogs dosfstools util-linux vulkan-loader mesa-vulkan-ati"
+	# Alpine builds firefox for every target architecture except riscv64, which
+	# only gets firefox-esr. ublock-origin is a noarch xpi that installs into
+	# /usr/lib/firefox/browser/extensions, so it ships with firefox only.
 	case "$ARCH" in
-		x86|x86_64|aarch64|armv7|ppc64le|riscv64) apks="$apks firefox ublock-origin" ;;
+		x86|x86_64|aarch64|armv7|ppc64le) apks="$apks firefox ublock-origin" ;;
+		riscv64) apks="$apks firefox-esr" ;;
 	esac
 	case "$ARCH" in
 		x86|x86_64|aarch64|armv7|riscv64) apks="$apks efibootmgr" ;;
