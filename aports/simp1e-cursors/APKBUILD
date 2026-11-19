@@ -8,7 +8,7 @@
 # the desktop default.
 pkgname=simp1e-cursors
 pkgver=0_git20250312
-pkgrel=0
+pkgrel=1
 pkgdesc="An aesthetic cursor theme for your Linux desktop"
 url="https://gitlab.com/cursors/simp1e"
 arch="noarch"
@@ -22,7 +22,9 @@ source="$pkgname-$_gitrev.tar.gz::https://gitlab.com/cursors/simp1e/-/archive/$_
 	"
 builddir="$srcdir"/simp1e-$_gitrev
 # The Adwaita dark variant is the desktop default, so it is split out: a system
-# can keep the base theme without pulling in the uflinux default.
+# can drop the uflinux default while keeping the base theme. The variant still
+# depends on the base scheme, which is what puts simp1e-cursors in an image that
+# selects it.
 subpackages="$pkgname-adw-dark:adw_dark"
 
 prepare() {
@@ -47,6 +49,11 @@ package() {
 
 adw_dark() {
 	pkgdesc="$pkgdesc (Adw Dark scheme)"
+	# abuild only gives a subpackage an automatic dependency on its main package
+	# for the suffixes it knows about, so a custom one has to ask for it. Without
+	# this the variant would install on its own and the base scheme would never
+	# reach an image.
+	depends="$pkgname=$pkgver-r$pkgrel"
 	mkdir -p "$subpkgdir"/usr/share/icons
 	# The generator sanitizes the scheme name, so "Simp1e Adw Dark" is built as
 	# the hyphenated directory.

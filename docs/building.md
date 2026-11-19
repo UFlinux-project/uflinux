@@ -168,6 +168,9 @@ APK. The exception is the device-only set in `ISO_EXCLUDED_PACKAGES`
 (`scripts/builder.py`): those APKs are built, signed and published so that device
 disk images can install them from the release repository, but the live system
 never pulls them in, so requiring them in the ISO would block every release.
+A subpackage split out under a custom suffix gets no automatic dependency on its
+main package, so such a recipe has to declare one; otherwise the main package is
+published but never installed, and the release is refused.
 
 Original APK license annotations are retained in SPDX `licenseComments`.
 `licenseDeclared` and `licenseConcluded` use `NOASSERTION`: Alpine annotations can

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -143,6 +144,48 @@ class PublicationTests(unittest.TestCase):
             # would hide a missing ISO package.
             for recipe in ("profiles/genapkovl-uflinux.sh", "profiles/mkimg.uflinux.sh"):
                 self.assertNotIn(name, (Path(builder.PROJECT) / recipe).read_text().split(), recipe)
+
+    def test_every_required_package_reaches_the_live_image(self):
+        # The publish gate compares the repository against the packages inside the
+        # ISO, so anything we publish and do not exempt has to be pulled in by the
+        # live profile, directly or through a dependency of a locally built
+        # package. A split-out subpackage with no automatic dependency on its main
+        # package is the classic way to break this.
+        edges = {}
+        for recipe in sorted((Path(builder.PROJECT) / "aports").glob("*/APKBUILD")):
+            text = recipe.read_text()
+            pkgname = re.search(r'^pkgname="?([^"\s]+)"?$', text, re.M).group(1)
+            split = {pkgname: None}
+            declared = re.search(r'^subpackages="([^"]*)"', text, re.M)
+            if declared:
+                for item in shlex.split(declared.group(1)):
+                    name, _, function = item.partition(":")
+                    split[name.replace("$pkgname", pkgname)] = function or None
+            for name, function in split.items():
+                if function is None:
+                    body = re.split(r"^\w+\(\) \{", text, maxsplit=1)[0]
+                else:
+                    body = text.split(function + "() {", 1)[1].split("\n}", 1)[0]
+                for block in re.findall(r'depends="([^"]*)"', body):
+                    for token in shlex.split(block.replace("$pkgname", pkgname)):
+                        if token.startswith(("!", "$")):
+                            continue
+                        edges.setdefault(name, set()).add(re.split(r"[=<>~]", token)[0])
+        seeds = set()
+        for recipe in ("profiles/genapkovl-uflinux.sh", "profiles/mkimg.uflinux.sh"):
+            text = (Path(builder.PROJECT) / recipe).read_text()
+            for listed in re.findall(r'apks="\$apks ([^"]*)"', text) + \
+                    re.findall(r"printf '%s\\n' ([^>]*world)", text):
+                seeds.update(listed.split())
+        reachable, pending = set(seeds), list(seeds)
+        while pending:
+            for dependency in edges.get(pending.pop(), ()):
+                if dependency not in reachable:
+                    reachable.add(dependency)
+                    pending.append(dependency)
+        for name in sorted(publisher.ALLOWED):
+            if name in edges and publisher.required_in_iso(name):
+                self.assertIn(name, reachable, f"{name} is published but never installed")
 
     def test_retention_keeps_current_and_two_previous_generations(self):
         releases = publisher.selection({"version": "0.4.0"}, [{"version": v} for v in ["0.3.0", "0.2.0", "0.1.0"]])

@@ -126,6 +126,11 @@ assert f'pkgver={lock["simp1e-cursors"]["version"]}\n' in cursors
 # The vendored recipe only builds the desktop default and its base theme.
 assert "--include=Simp1e.txt,Simp1e-Adw-Dark.txt,cursors.svg" in cursors
 assert 'subpackages="$pkgname-adw-dark:adw_dark"' in cursors
+# abuild only adds an automatic dependency on the main package for the suffixes
+# it knows about, so the variant has to ask for the base scheme itself. Without
+# it the base package is published but never reaches an image, and the publish
+# gate refuses the release.
+assert 'depends="$pkgname=$pkgver-r$pkgrel"' in cursors.split("adw_dark() {", 1)[1]
 # The generator sanitizes scheme names, so the built directory is hyphenated.
 assert 'mv "$pkgdir"/usr/share/icons/Simp1e-Adw-Dark ' in cursors
 assert "libadwaita" not in (ROOT / "settings/Cargo.lock").read_text()

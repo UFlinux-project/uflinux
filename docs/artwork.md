@@ -15,10 +15,11 @@ from the pinned upstream source in `aports/simp1e-cursors`. Only the base theme
 and that variant are generated, so the recipe is a trimmed copy of Alpine's
 `testing/simp1e-cursors`: the package is not in the pinned release's main and
 community repositories, and Alpine's 49 scheme subpackages would be wasted
-space. The variant ships as its own `simp1e-cursors-adw-dark` package. GTK and
-GSettings pick it up from the drop-ins below, ReGreet from its `cursor_theme_name`
-option, and labwc (which has no cursor option in `rc.xml`) from `XCURSOR_THEME`
-in `/etc/xdg/labwc/environment`.
+space. The variant ships as its own `simp1e-cursors-adw-dark` package, which
+depends on the base `simp1e-cursors` package so that selecting the variant also
+pulls the scheme it extends. GTK and GSettings pick it up from the drop-ins
+below, ReGreet from its `cursor_theme_name` option, and labwc (which has no
+cursor option in `rc.xml`) from `XCURSOR_THEME` in `/etc/xdg/labwc/environment`.
 
 GTK3 and GTK4 apps use `adw-gtk3-dark` from Alpine's signed `adw-gtk3` package.
 Both toolkit versions receive the theme name and dark preference through their
