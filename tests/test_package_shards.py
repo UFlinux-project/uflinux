@@ -1,6 +1,7 @@
 """Fail closed when independent package jobs are missing, mixed or modified."""
 import importlib.util
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -122,6 +123,44 @@ class InputArchiveTests(unittest.TestCase):
             (directory/'uflinux-settings/cargo-sources.tar.gz').unlink()
             rejected=subprocess.run(command,cwd=root,capture_output=True)
             self.assertNotEqual(rejected.returncode,0)
+
+    def test_asset_size_check_names_the_offending_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            asset = Path(temporary) / 'uflinux-0.1.0-x86_64.iso'
+            for size, expected in ((builder.RELEASE_ASSET_WARNING - 1, None),
+                                   (builder.RELEASE_ASSET_WARNING, 'warning'),
+                                   (builder.RELEASE_ASSET_LIMIT, 'error')):
+                asset.write_bytes(b'')
+                os.truncate(asset, size)
+                with self.subTest(size=size):
+                    if expected is None:
+                        self.assertEqual(builder.check_asset_size(asset, 'Release ISO'), size)
+                    elif expected == 'warning':
+                        with patch('builtins.print') as reported:
+                            self.assertEqual(builder.check_asset_size(asset, 'Release ISO'), size)
+                        self.assertIn('::warning', reported.call_args.args[0])
+                        self.assertIn(asset.name, reported.call_args.args[0])
+                    else:
+                        with self.assertRaises(ValueError) as raised:
+                            builder.check_asset_size(asset, 'Release ISO')
+                        self.assertIn(asset.name, str(raised.exception))
+                        self.assertIn(str(size), str(raised.exception))
+
+    def test_release_records_rejects_an_oversized_iso(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            iso = root / 'out/images/x86_64/uflinux-0.1.0-x86_64.iso'
+            (root / 'out/metadata').mkdir(parents=True)
+            (root / 'out/checks').mkdir()
+            (root / 'out/vm').mkdir()
+            iso.parent.mkdir(parents=True)
+            iso.write_bytes(b'')
+            os.truncate(iso, builder.RELEASE_ASSET_LIMIT)
+            result = subprocess.run([sys.executable, str(builder.PROJECT / 'scripts/release-records.py'),
+                                     '--version', '0.1.0'], cwd=root, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('uflinux-0.1.0-x86_64.iso', result.stderr)
+            self.assertFalse((root / 'out/SHA256SUMS').exists())
 
 
 class EmulatedDependencyTests(unittest.TestCase):

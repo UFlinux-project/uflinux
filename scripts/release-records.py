@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import os
 
-from builder import LOCK, sha
+from builder import LOCK, check_asset_size, sha
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--version", required=True)
@@ -25,7 +25,7 @@ if not assets:
     raise ValueError("No release ISOs found")
 if len({p.name for p in assets}) != len(assets):
     raise ValueError("Release asset basenames must be unique")
-if any(p.stat().st_size >= 2 * 1024**3 for p in assets):
-    raise ValueError("An asset exceeds GitHub Releases' per-file size limit")
+for asset in assets:
+    check_asset_size(asset, "Release ISO")
 checksums = "".join(sha(p) + "  " + p.name + "\n" for p in sorted(assets))
 (out / "SHA256SUMS").write_text(checksums)

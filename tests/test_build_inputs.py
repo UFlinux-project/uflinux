@@ -253,6 +253,18 @@ class DesktopDependencyTests(unittest.TestCase):
         self.assertIn("connman=2.0-r4", self.pinned)
         self.assertIn("connman-vpn=2.0-r4", self.pinned)
 
+    def test_live_iso_profile_keeps_the_release_asset_within_its_limit(self):
+        # The EFI image stores the kernel, initramfs and microcode a second time,
+        # so its FAT base used to waste 48 MiB of every release ISO, and the kernel
+        # packages' symbol map and build config rode along for nothing.
+        profile = (Path(builder.PROJECT) / "profiles/mkimg.uflinux.sh").read_text()
+        iso_function = profile.split("create_image_iso() {", 1)[1].split("\n}", 1)[0]
+        base = re.search(r"size=\$\(\((\d+) \* 1024 \* 1024\)\)", iso_function)
+        self.assertIsNotNone(base, "the EFI image must start from an explicit base size")
+        self.assertLessEqual(int(base.group(1)) * 1024 * 1024, 16 * 1024 * 1024,
+                             "the EFI image leaves too much FAT32 slack in the ISO")
+        self.assertIn('rm -f "$DESTDIR"/boot/System.map-* "$DESTDIR"/boot/config-*', iso_function)
+
     def test_iso_profile_picks_a_browser_every_architecture_has(self):
         # Alpine builds firefox for every target architecture except riscv64,
         # which only gets firefox-esr; ublock-origin installs into

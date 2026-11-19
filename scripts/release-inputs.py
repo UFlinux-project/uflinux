@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from builder import ARCHES, CARGO_ORIGINS, PACKAGE_NAMES, link_or_copy, sha
+from builder import ARCHES, CARGO_ORIGINS, PACKAGE_NAMES, check_asset_size, link_or_copy, sha
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--arch", choices=ARCHES, required=True)
@@ -31,8 +31,9 @@ if {str(p.relative_to(directory)) for p in inputs} != expected:
     raise RuntimeError("The complete rebuild input set is required")
 checksums = []
 for source in inputs:
-    if source.stat().st_size >= 2 * 1024**3:
-        raise ValueError("A rebuild input exceeds GitHub Releases' per-file size limit")
+    # Rebuild inputs travel as workflow artifacts, where the 2 GiB limit is
+    # GitHub's upload cap rather than a release-asset one, so no warning applies.
+    check_asset_size(source, "Rebuild input", warn=False)
     name = "-".join(source.relative_to(directory).parts)
     target = out / f"uflinux-{args.version}-{args.arch}-{name}"
     link_or_copy(source, target)

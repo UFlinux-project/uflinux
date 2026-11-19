@@ -45,6 +45,11 @@ EFI_SUFFIX = {"aarch64": "aa64", "x86_64": "x64"}
 # A device image is several gigabytes of already-compressed packages, so the
 # highest level would cost hours of CPU for a few percent of size.
 DEVICE_IMAGE_ZSTD_LEVEL = 12
+# GitHub Releases rejects an individual asset at 2 GiB, and an ISO that reaches
+# it fails the release after the repository has already been deployed. Warn
+# while a routine package update is still survivable news.
+RELEASE_ASSET_LIMIT = 2 * 1024**3
+RELEASE_ASSET_WARNING = 1900 * 1024**2
 # Stage names as they appear on the command line, mapped to Builder methods.
 STAGE_METHODS = {"packages": "package", "device": "device_image"}
 
@@ -455,6 +460,21 @@ def sha(path, algorithm="sha256"):
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def check_asset_size(path, kind, warn=True):
+    """Return a release asset's size, naming it if GitHub would reject it."""
+    path = Path(path)
+    size = path.stat().st_size
+    if size >= RELEASE_ASSET_LIMIT:
+        raise ValueError(f"{kind} {path.name} is {size} bytes, at or above GitHub "
+                         f"Releases' {RELEASE_ASSET_LIMIT}-byte per-file limit")
+    if warn and size >= RELEASE_ASSET_WARNING:
+        # A workflow command, so the next package update that pushes an ISO over
+        # the line shows up as annotation instead of a failed release.
+        print(f"::warning title=Release asset size::{path.name} is {size} bytes, "
+              f"within {RELEASE_ASSET_LIMIT - size} of the per-file limit")
+    return size
 
 
 def link_or_copy(source, destination):
@@ -1400,6 +1420,7 @@ class Builder:
         if stage == "image":
             iso = self.out / "images" / self.args.arch / f"uflinux-{self.args.version}-{self.args.arch}.iso"
             metadata["iso_sha256"] = sha(iso)
+            metadata["iso_bytes"] = iso.stat().st_size
         if stage == "device":
             metadata.update(getattr(self, "device_info", {}))
             metadata["image_format"] = "raw-gpt"

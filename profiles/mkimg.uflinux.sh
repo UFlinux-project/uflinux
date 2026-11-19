@@ -91,6 +91,11 @@ build_systemd_efi() {
 create_image_iso() {
 	local ISO="${OUTDIR}/${output_filename}" _isolinux="" _efiboot="" _f _p image sectors size
 	local flavors="${kernel_flavors-}"
+	# Kernel packages ship their symbol map and build config in /boot, so they ride
+	# into both the ISO9660 tree and the EFI image. Nothing on the live system or in
+	# the installed boot partition reads them, and a release ISO is close enough to
+	# GitHub's per-asset limit that several MiB matters.
+	rm -f "$DESTDIR"/boot/System.map-* "$DESTDIR"/boot/config-*
 	if [ -e "$DESTDIR/boot/syslinux/isolinux.bin" ]; then
 		_isolinux="-isohybrid-mbr $DESTDIR/boot/syslinux/isohdpfx.bin -eltorito-boot boot/syslinux/isolinux.bin -eltorito-catalog boot/syslinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table"
 	fi
@@ -104,8 +109,12 @@ create_image_iso() {
 				printf 'initrd /boot/initramfs-%s\noptions %s %s\n' "$_f" "${initfs_cmdline-}" "$kernel_cmdline"
 			} > "$WORKDIR/systemd-loader/loader/entries/uflinux-$_f.conf"
 		done
-		# FAT32 needs adequate cluster overhead, including for microcode images.
-		size=$((64 * 1024 * 1024))
+		# The image holds the kernel, initramfs and microcode a second time, so the
+		# payload is added below and the base only has to cover FAT32 cluster
+		# overhead plus directory entries. Measured with the x86_64 payload, a 16 MiB
+		# base leaves about 15 MiB of the file unused; the old 64 MiB base wasted
+		# 48 MiB of the release ISO on it.
+		size=$((16 * 1024 * 1024))
 		for _f in $flavors; do
 			size=$((size + $(wc -c < "$DESTDIR/boot/vmlinuz-$_f") + $(wc -c < "$DESTDIR/boot/initramfs-$_f")))
 		done

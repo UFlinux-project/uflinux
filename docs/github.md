@@ -80,7 +80,10 @@ period; package inventories and test records remain in the image and VM artifact
 The repository keeps the current generation and two previous generations of
 custom APKs. The next publication retrieves its history from the existing Pages repository.
 Upstream packages and ISOs are not hosted on Pages. Publishing refuses a Pages
-payload over 900 MiB and an individual release asset at or above 2 GiB.
+payload over 900 MiB and an individual release asset at or above 2 GiB, naming the
+offending file. An ISO at or above 1900 MiB is annotated as a warning instead, so a
+release fails on a size that was already visible in the previous run. Each image
+record also stores the ISO's exact length as `iso_bytes`.
 
 Input archives and multiarchitecture compiler caches consume significant artifact
 storage. Review your account's storage usage and retention settings. Per-run
