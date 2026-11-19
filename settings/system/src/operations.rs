@@ -118,7 +118,7 @@ pub fn run() -> Result<()> {
     // activation is unchanged and still idles out below.
     let resident = std::env::args().any(|a| a == "--resident");
     let context = glib::MainContext::default();
-    let (_connection, mainloop) = context.block_on(async {
+    let (_connection, _subscription, mainloop) = context.block_on(async {
         let connection = gio::bus_get_future(gio::BusType::System)
             .await
             .map_err(|e| e.to_string())?;
@@ -192,14 +192,14 @@ pub fn run() -> Result<()> {
         bus::request_name(&connection, SYSTEM_NAME)?;
         let restoring = Rc::new(Cell::new(false));
         let in_progress = restoring.clone();
-        connection.signal_subscribe(
+        let subscription = connection.subscribe_to_signal(
             Some("net.connman"),
             None,
             None,
             None,
             None,
             gio::DBusSignalFlags::NONE,
-            move |bus, _, _, _, _, _| {
+            move |gio::DBusSignalRef { connection: bus, .. }| {
                 if !routes::configured() || in_progress.replace(true) {
                     return;
                 }
@@ -229,7 +229,7 @@ pub fn run() -> Result<()> {
             }
             glib::ControlFlow::Continue
         });
-        Ok::<_, String>((connection, mainloop))
+        Ok::<_, String>((connection, subscription, mainloop))
     })?;
     mainloop.run();
     Ok(())

@@ -48,7 +48,7 @@ pub fn run() -> Result<()> {
     if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
         return Err("A user login session is required".into());
     }
-    let (_app,_power_monitors,_device_monitor,mainloop)=glib::MainContext::default().block_on(async {
+    let (_app,_power_monitors,_device_monitor,_subscriptions,mainloop)=glib::MainContext::default().block_on(async {
         let connection=gio::bus_get_future(gio::BusType::Session).await.map_err(|e|e.to_string())?;
         let system=gio::bus_get_future(gio::BusType::System).await.map_err(|e|e.to_string())?;
         let appearance=files::read_json(&files::config_dir().join("appearance.json"));
@@ -83,7 +83,7 @@ pub fn run() -> Result<()> {
         }).build().map_err(|e|e.to_string())?;
         bus::request_name(&connection,SESSION_NAME)?;
         let weak=Rc::downgrade(&app);
-        connection.signal_subscribe(Some("org.freedesktop.DBus"),Some("org.freedesktop.DBus"),Some("NameOwnerChanged"),None,None,gio::DBusSignalFlags::NONE,move|_,_,_,_,_,params|{
+        let owner_subscription = connection.subscribe_to_signal(Some("org.freedesktop.DBus"),Some("org.freedesktop.DBus"),Some("NameOwnerChanged"),None,None,gio::DBusSignalFlags::NONE,move |gio::DBusSignalRef { parameters: params, .. }|{
             if let Some((name,_,new))=params.get::<(String,String,String)>() {
                 if new.is_empty(){if let Some(app)=weak.upgrade(){let revert=app.pending.borrow().as_ref().is_some_and(|p|p.caller==name);if revert{let task=app.clone();glib::MainContext::default().spawn_local(async move{let _=task.revert().await;});}}}
             }
@@ -123,7 +123,7 @@ pub fn run() -> Result<()> {
             if event.power{app.refresh_power();}
         }).map_err(|error| eprintln!("uflinux-settingsd: {error}")).ok();
         let weak=Rc::downgrade(&app);
-        app.system.signal_subscribe(Some("org.freedesktop.login1"),Some("org.freedesktop.login1.Manager"),Some("PrepareForSleep"),None,None,gio::DBusSignalFlags::NONE,move|_,_,_,_,_,params|{
+        let resume_subscription = app.system.subscribe_to_signal(Some("org.freedesktop.login1"),Some("org.freedesktop.login1.Manager"),Some("PrepareForSleep"),None,None,gio::DBusSignalFlags::NONE,move |gio::DBusSignalRef { parameters: params, .. }|{
             if params.get::<(bool,)>()==Some((false,)){if let Some(app)=weak.upgrade(){app.queue_brightness(true);app.refresh_power();let task=app.clone();glib::MainContext::default().spawn_local(async move{let _=task.restore_displays().await;});}}
         });
         let initial=app.clone();glib::MainContext::default().spawn_local(async move{
@@ -152,7 +152,7 @@ pub fn run() -> Result<()> {
         });
         let mainloop=glib::MainLoop::new(None,false);
         for signal in [libc::SIGTERM,libc::SIGINT]{let quit=mainloop.clone();glib_unix::unix_signal_add_local(signal,move||{quit.quit();glib::ControlFlow::Break});}
-        Ok::<_,String>((app,power_monitors,_device_monitor,mainloop))
+        Ok::<_,String>((app,power_monitors,_device_monitor,[owner_subscription,resume_subscription],mainloop))
     })?;
     mainloop.run();
     let _ = _app;

@@ -46,6 +46,7 @@ pub struct Item {
 }
 
 pub struct Tray {
+    subscriptions: RefCell<Vec<gio::SignalSubscription>>,
     bus: gio::DBusConnection,
     items: RefCell<HashMap<String, Item>>,
     pending: RefCell<HashSet<String>>,
@@ -65,6 +66,7 @@ impl Tray {
     pub async fn start(changed: impl Fn() + 'static) -> Result<Rc<Self>, glib::Error> {
         let bus = gio::bus_get_future(gio::BusType::Session).await?;
         let tray = Rc::new(Self {
+            subscriptions: RefCell::new(Vec::new()),
             bus: bus.clone(),
             items: RefCell::new(HashMap::new()),
             pending: RefCell::new(HashSet::new()),
@@ -147,14 +149,14 @@ impl Tray {
             tray.owners.borrow_mut().push(owner);
         }
         let weak = Rc::downgrade(&tray);
-        bus.signal_subscribe(
+        let subscription = bus.subscribe_to_signal(
             Some("org.freedesktop.DBus"),
             Some("org.freedesktop.DBus"),
             Some("NameOwnerChanged"),
             Some("/org/freedesktop/DBus"),
             None,
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, params| {
+            move |gio::DBusSignalRef { parameters: params, .. }| {
                 let Some((name, old, _new)) = params.get::<(String, String, String)>() else {
                     return;
                 };
@@ -166,22 +168,25 @@ impl Tray {
                 }
             },
         );
+        tray.subscriptions.borrow_mut().push(subscription);
         for interface in ITEMS {
             let weak = Rc::downgrade(&tray);
-            bus.signal_subscribe(
+            let subscription = bus.subscribe_to_signal(
                 None,
                 Some(interface),
                 None,
                 None,
                 None,
                 gio::DBusSignalFlags::NONE,
-                move |_, sender, path, _, _, _| {
+                move |signal| {
                     if let Some(tray) = weak.upgrade() {
                         let keys: Vec<_> = tray
                             .items
                             .borrow()
                             .values()
-                            .filter(|item| item.owner == sender && item.path == path)
+                            .filter(|item| {
+                                item.owner == signal.sender_name && item.path == signal.object_path
+                            })
                             .map(|item| item.key.clone())
                             .collect();
                         for key in keys {
@@ -190,23 +195,24 @@ impl Tray {
                     }
                 },
             );
+            tray.subscriptions.borrow_mut().push(subscription);
         }
         let weak = Rc::downgrade(&tray);
-        bus.signal_subscribe(
+        let subscription = bus.subscribe_to_signal(
             None,
             Some("com.canonical.dbusmenu"),
             None,
             None,
             None,
             gio::DBusSignalFlags::NONE,
-            move |_, sender, path, _, signal, _| {
-                if signal != "LayoutUpdated" && signal != "ItemsPropertiesUpdated" {
+            move |signal| {
+                if !matches!(signal.signal_name, "LayoutUpdated" | "ItemsPropertiesUpdated") {
                     return;
                 }
                 if let Some(tray) = weak.upgrade() {
                     let mut changed = false;
                     for item in tray.items.borrow_mut().values_mut() {
-                        if item.owner == sender && item.menu == path {
+                        if item.owner == signal.sender_name && item.menu == signal.object_path {
                             item.menu_revision = item.menu_revision.wrapping_add(1);
                             changed = true;
                         }
@@ -217,6 +223,7 @@ impl Tray {
                 }
             },
         );
+        tray.subscriptions.borrow_mut().push(subscription);
         Ok(tray)
     }
     pub fn items(&self) -> Vec<Item> {
@@ -285,14 +292,14 @@ impl Tray {
         }
         let name = name.to_string();
         let weak = Rc::downgrade(self);
-        self.bus.signal_subscribe(
+        let subscription = self.bus.subscribe_to_signal(
             Some(&name),
             Some(&name),
             None,
             Some(PATH),
             None,
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, signal, params| {
+            move |gio::DBusSignalRef { signal_name: signal, parameters: params, .. }| {
                 let Some((key,)) = params.get::<(String,)>() else {
                     return;
                 };
@@ -305,6 +312,7 @@ impl Tray {
                 }
             },
         );
+        self.subscriptions.borrow_mut().push(subscription);
         let weak = Rc::downgrade(self);
         glib::MainContext::default().spawn_local(async move {
             let Some(tray) = weak.upgrade() else { return };

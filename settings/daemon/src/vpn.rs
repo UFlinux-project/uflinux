@@ -36,6 +36,7 @@ const KEYS: &[&str] = &[
 ];
 
 pub struct Client {
+    subscriptions: RefCell<Vec<gio::SignalSubscription>>,
     bus: gio::DBusConnection,
     view: RefCell<Vpn>,
     scheduled: Cell<bool>,
@@ -48,6 +49,7 @@ impl Client {
             .await
             .map_err(|e| e.to_string())?;
         let this = Rc::new(Self {
+            subscriptions: RefCell::new(Vec::new()),
             bus,
             view: RefCell::new(Vpn::default()),
             scheduled: Cell::new(false),
@@ -55,28 +57,29 @@ impl Client {
             emit,
         });
         let weak = Rc::downgrade(&this);
-        this.bus.signal_subscribe(
+        let subscription = this.bus.subscribe_to_signal(
             Some(NAME),
             None,
             None,
             None,
             None,
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, _| {
+            move |_| {
                 if let Some(this) = weak.upgrade() {
                     this.schedule();
                 }
             },
         );
+        this.subscriptions.borrow_mut().push(subscription);
         let weak = Rc::downgrade(&this);
-        this.bus.signal_subscribe(
+        let subscription = this.bus.subscribe_to_signal(
             Some("org.freedesktop.DBus"),
             Some("org.freedesktop.DBus"),
             Some("NameOwnerChanged"),
             Some("/org/freedesktop/DBus"),
             Some(NAME),
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, _| {
+            move |_| {
                 if let Some(this) = weak.upgrade() {
                     let task = this.clone();
                     glib::MainContext::default().spawn_local(async move {
@@ -85,6 +88,7 @@ impl Client {
                 }
             },
         );
+        this.subscriptions.borrow_mut().push(subscription);
         this.initialize().await;
         Ok(this)
     }

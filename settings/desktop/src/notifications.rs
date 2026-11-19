@@ -26,7 +26,7 @@ pub struct Notification {
 #[derive(Clone)]
 pub struct Center {
     connection: Rc<RefCell<Option<gio::DBusConnection>>>,
-    subscription: Rc<RefCell<Option<gio::SignalSubscriptionId>>>,
+    subscription: Rc<RefCell<Option<gio::SignalSubscription>>>,
     shared: Rc<Shared>,
 }
 
@@ -78,27 +78,27 @@ impl Center {
             if shared.generation.get() != generation {
                 return;
             }
-            let watch_connection = connection.clone();
-            let watch_shared = shared.clone();
-            let id = bus.signal_subscribe(
+            let (Some(connection_cell), Some(subscription_cell)) =
+                (connection.upgrade(), subscription.upgrade())
+            else {
+                return;
+            };
+            let watch_shared = Rc::downgrade(&shared);
+            let handle = bus.subscribe_to_signal(
                 Some(SERVICE),
                 Some("org.freedesktop.DBus.Properties"),
                 Some("PropertiesChanged"),
                 Some(PATH),
                 None,
                 gio::DBusSignalFlags::NONE,
-                move |_, _, _, _, _, _| {
-                    refresh(watch_connection.clone(), watch_shared.clone());
+                move |_| {
+                    if let Some(shared) = watch_shared.upgrade() {
+                        refresh(connection.clone(), shared);
+                    }
                 },
             );
-            let Some(strong) = connection.upgrade() else {
-                bus.signal_unsubscribe(id);
-                return;
-            };
-            *strong.borrow_mut() = Some(bus);
-            if let Some(strong) = subscription.upgrade() {
-                *strong.borrow_mut() = Some(id);
-            }
+            connection_cell.replace(Some(bus));
+            subscription_cell.replace(Some(handle));
             (shared.changed)(Ok(parse(&reply)));
         });
     }
@@ -106,11 +106,8 @@ impl Center {
     // Drop the bus connection and the property-change subscription.
     pub fn stop(&self) {
         self.shared.generation.set(self.shared.generation.get() + 1);
-        if let Some(bus) = self.connection.borrow_mut().take() {
-            if let Some(id) = self.subscription.borrow_mut().take() {
-                bus.signal_unsubscribe(id);
-            }
-        }
+        drop(self.subscription.borrow_mut().take());
+        self.connection.borrow_mut().take();
     }
 
     fn call(&self, method: &str, parameters: Variant) {

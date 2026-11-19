@@ -41,6 +41,7 @@ pub struct App {
     desktop_quicks: RefCell<std::collections::HashMap<String, DesktopQuick>>,
     desktop_monitor: RefCell<Option<(gtk::gdk::Monitor, glib::SignalHandlerId)>>,
     desktop_ddc_discovered: Cell<bool>,
+    subscriptions: RefCell<Vec<gio::SignalSubscription>>,
     /// Set by the host process that owns the authorization agent. In desktop
     /// mode that process registers the agent only once something needs it.
     pub agent_request: RefCell<Option<Rc<dyn Fn()>>>,
@@ -107,6 +108,7 @@ pub fn run() {
             desktop_quicks: RefCell::new(std::collections::HashMap::new()),
             desktop_monitor: RefCell::new(None),
             desktop_ddc_discovered: Cell::new(false),
+            subscriptions: RefCell::new(Vec::new()),
             agent_request: RefCell::new(None),
             background_request: RefCell::new(None),
         });
@@ -208,6 +210,7 @@ impl App {
             desktop_quicks: RefCell::new(std::collections::HashMap::new()),
             desktop_monitor: RefCell::new(None),
             desktop_ddc_discovered: Cell::new(false),
+            subscriptions: RefCell::new(Vec::new()),
             agent_request: RefCell::new(None),
             background_request: RefCell::new(None),
         });
@@ -297,11 +300,11 @@ impl App {
         let Some(app)=weak.upgrade()else{return;};
         match gio::bus_get_future(gio::BusType::Session).await{
             Ok(connection)=>{
-                let weak=Rc::downgrade(&app);connection.signal_subscribe(Some(SESSION_NAME),Some(SESSION_NAME),Some("Changed"),Some(SESSION_PATH),None,gio::DBusSignalFlags::NONE,move|_,_,_,_,_,parameters|{
+                let weak=Rc::downgrade(&app);let changed = connection.subscribe_to_signal(Some(SESSION_NAME),Some(SESSION_NAME),Some("Changed"),Some(SESSION_PATH),None,gio::DBusSignalFlags::NONE,move |gio::DBusSignalRef { parameters, .. }|{
                     if let Some(app)=weak.upgrade(){if let Some((raw,))=parameters.get::<(String,)>(){app.update(&raw);}}
                 });
                 let weak = Rc::downgrade(&app);
-                connection.signal_subscribe(Some("org.freedesktop.DBus"), Some("org.freedesktop.DBus"), Some("NameOwnerChanged"), Some("/org/freedesktop/DBus"), Some(SESSION_NAME), gio::DBusSignalFlags::NONE, move |_, _, _, _, _, parameters| {
+                let owner = connection.subscribe_to_signal(Some("org.freedesktop.DBus"), Some("org.freedesktop.DBus"), Some("NameOwnerChanged"), Some("/org/freedesktop/DBus"), Some(SESSION_NAME), gio::DBusSignalFlags::NONE, move |gio::DBusSignalRef { parameters, .. }| {
                     let Some((name, _, owner)) = parameters.get::<(String, String, String)>() else { return };
                     if name != SESSION_NAME { return; }
                     if let Some(app) = weak.upgrade() {
@@ -319,6 +322,7 @@ impl App {
                         }
                     }
                 });
+                app.subscriptions.replace(vec![changed, owner]);
                 // A single transient bus failure here used to leave the window
                 // on the empty startup snapshot until some later Changed
                 // signal arrived, so retry briefly before showing the banner.

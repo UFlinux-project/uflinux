@@ -119,6 +119,7 @@ pub struct Panel {
     window_ids: RefCell<HashSet<WindowId>>,
     clock_timer: RefCell<Option<glib::SourceId>>,
     clock_watch: RefCell<Option<crate::clock_watch::ClockWatch>>,
+    resume_subscription: RefCell<Option<gio::SignalSubscription>>,
     /// Favorite currently under a drag, so a drop is only accepted from
     /// another taskbar button and not from an arbitrary text drag.
     task_drag: RefCell<Option<String>>,
@@ -151,6 +152,7 @@ impl Panel {
             window_ids: RefCell::new(HashSet::new()),
             clock_timer: RefCell::new(None),
             clock_watch: RefCell::new(None),
+            resume_subscription: RefCell::new(None),
             task_drag: RefCell::new(None),
         });
         if let Some(display) = gtk::gdk::Display::default() {
@@ -209,14 +211,15 @@ impl Panel {
         let weak = Rc::downgrade(&panel);
         glib::MainContext::default().spawn_local(async move {
             if let Ok(bus) = gio::bus_get_future(gio::BusType::System).await {
-                bus.signal_subscribe(
+                let Some(panel) = weak.upgrade() else { return };
+                let subscription = bus.subscribe_to_signal(
                     Some("org.freedesktop.login1"),
                     Some("org.freedesktop.login1.Manager"),
                     Some("PrepareForSleep"),
                     Some("/org/freedesktop/login1"),
                     None,
                     gio::DBusSignalFlags::NONE,
-                    move |_, _, _, _, _, parameters| {
+                    move |gio::DBusSignalRef { parameters, .. }| {
                         if parameters.get::<(bool,)>() == Some((false,)) {
                             if let Some(panel) = weak.upgrade() {
                                 panel.schedule_clock();
@@ -224,6 +227,7 @@ impl Panel {
                         }
                     },
                 );
+                panel.resume_subscription.replace(Some(subscription));
             }
         });
         panel

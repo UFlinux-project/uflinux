@@ -152,12 +152,10 @@ struct Thumbnail {
     display_size: i32,
 }
 
-type Subscription = (gio::DBusConnection, gio::SignalSubscriptionId);
-
 #[derive(Default)]
 pub struct DesktopIcons {
     bus: RefCell<Option<gio::DBusConnection>>,
-    subscriptions: RefCell<Vec<Subscription>>,
+    subscriptions: RefCell<Vec<gio::SignalSubscription>>,
     outputs: RefCell<Vec<Output>>,
     monitor_ids: RefCell<HashMap<String, u8>>,
     grids: RefCell<Vec<Geometry>>,
@@ -211,14 +209,14 @@ impl DesktopIcons {
 
     fn subscribe(self: &Rc<Self>, bus: &gio::DBusConnection) {
         let weak = Rc::downgrade(self);
-        let changed = bus.signal_subscribe(
+        let changed = bus.subscribe_to_signal(
             Some(NAME),
             Some(NAME),
             Some("Changed"),
             Some(PATH),
             None,
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, parameters| {
+            move |gio::DBusSignalRef { parameters, .. }| {
                 #[derive(Deserialize)]
                 struct Change {
                     generation: u64,
@@ -240,14 +238,14 @@ impl DesktopIcons {
             },
         );
         let weak = Rc::downgrade(self);
-        let owner = bus.signal_subscribe(
+        let owner = bus.subscribe_to_signal(
             Some(DBUS),
             Some(DBUS),
             Some("NameOwnerChanged"),
             Some(DBUS_PATH),
             Some(NAME),
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, parameters| {
+            move |gio::DBusSignalRef { parameters, .. }| {
                 let Some(icons) = weak.upgrade() else { return };
                 let Some((_, previous, current)) = parameters.get::<(String, String, String)>()
                 else {
@@ -268,7 +266,7 @@ impl DesktopIcons {
         );
         self.subscriptions
             .borrow_mut()
-            .extend([(bus.clone(), changed), (bus.clone(), owner)]);
+            .extend([changed, owner]);
     }
 
     pub fn set_outputs(self: &Rc<Self>, outputs: Vec<Output>) {
@@ -668,9 +666,7 @@ impl Drop for DesktopIcons {
         if let Some(timer) = self.timer.get_mut().take() {
             timer.remove();
         }
-        for (bus, id) in self.subscriptions.get_mut().drain(..) {
-            bus.signal_unsubscribe(id);
-        }
+        self.subscriptions.get_mut().clear();
         if let Some(bus) = self.bus.get_mut().take() {
             bus.call(
                 Some(DBUS),

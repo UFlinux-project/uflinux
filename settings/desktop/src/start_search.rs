@@ -72,7 +72,7 @@ pub struct Search {
     query: RefCell<Query>,
     bus: RefCell<Option<gio::DBusConnection>>,
     changed: RefCell<Option<Changed>>,
-    signals: RefCell<Option<gio::SignalSubscriptionId>>,
+    signals: RefCell<Option<gio::SignalSubscription>>,
 }
 
 impl Search {
@@ -193,19 +193,15 @@ impl Search {
         let bus = gio::bus_get_future(gio::BusType::Session).await?;
         if self.bus.borrow().as_ref() != Some(&bus) {
             let weak = Rc::downgrade(self);
-            if let (Some(previous), Some(id)) =
-                (self.bus.borrow().as_ref(), self.signals.borrow_mut().take())
-            {
-                previous.signal_unsubscribe(id);
-            }
-            self.signals.replace(Some(bus.signal_subscribe(
+            drop(self.signals.borrow_mut().take());
+            self.signals.replace(Some(bus.subscribe_to_signal(
                 Some(NAME),
                 Some(NAME),
                 Some("Changed"),
                 Some(PATH),
                 None,
                 gio::DBusSignalFlags::NONE,
-                move |_, _, _, _, _, parameters| {
+                move |gio::DBusSignalRef { parameters, .. }| {
                     #[derive(Deserialize)]
                     struct Changed {
                         kind: String,
@@ -258,14 +254,6 @@ fn decode(reply: glib::Variant) -> Option<Vec<Hit>> {
             .filter(|hit| std::path::Path::new(&hit.path).is_absolute())
             .collect(),
     )
-}
-
-impl Drop for Search {
-    fn drop(&mut self) {
-        if let (Some(bus), Some(id)) = (self.bus.get_mut().take(), self.signals.get_mut().take()) {
-            bus.signal_unsubscribe(id);
-        }
-    }
 }
 
 #[cfg(test)]

@@ -20,6 +20,7 @@ const AGENT_XML: &str = r#"<node><interface name="net.connman.Agent">
 </interface></node>"#;
 
 pub struct Client {
+    subscriptions: RefCell<Vec<gio::SignalSubscription>>,
     pub bus: gio::DBusConnection,
     pub view: RefCell<Network>,
     owner: RefCell<String>,
@@ -34,6 +35,7 @@ impl Client {
             .await
             .map_err(|e| e.to_string())?;
         let this = Rc::new(Self {
+            subscriptions: RefCell::new(Vec::new()),
             bus,
             view: RefCell::new(Network::default()),
             owner: RefCell::new(String::new()),
@@ -57,28 +59,29 @@ impl Client {
             .build()
             .map_err(|e| e.to_string())?;
         let weak = Rc::downgrade(&this);
-        this.bus.signal_subscribe(
+        let subscription = this.bus.subscribe_to_signal(
             Some(NAME),
             None,
             None,
             None,
             None,
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, _| {
+            move |_| {
                 if let Some(this) = weak.upgrade() {
                     this.schedule();
                 }
             },
         );
+        this.subscriptions.borrow_mut().push(subscription);
         let weak = Rc::downgrade(&this);
-        this.bus.signal_subscribe(
+        let subscription = this.bus.subscribe_to_signal(
             Some("org.freedesktop.DBus"),
             Some("org.freedesktop.DBus"),
             Some("NameOwnerChanged"),
             Some("/org/freedesktop/DBus"),
             Some(NAME),
             gio::DBusSignalFlags::NONE,
-            move |_, _, _, _, _, _| {
+            move |_| {
                 if let Some(this) = weak.upgrade() {
                     this.cancel_auth();
                     let task = this.clone();
@@ -88,6 +91,7 @@ impl Client {
                 }
             },
         );
+        this.subscriptions.borrow_mut().push(subscription);
         this.initialize().await;
         Ok(this)
     }
