@@ -45,10 +45,15 @@ def layout():
     except (subprocess.SubprocessError,OSError,json.JSONDecodeError):
         return surfaces,None
     background=status.get('background') or {}
-    return surfaces,json.dumps(background.get('outputs',[]),sort_keys=True)
+    drawn=[entry['output'] for entry in background.get('outputs',[])]
+    # A monitor rebuilt by a hotplug announces itself before its name arrives,
+    # so a surface without one is still being adopted. A shell that is gone
+    # answers --status with the null fallback, which looks like no surfaces at
+    # all. Neither counts as settled.
+    return surfaces,(sorted(drawn) if drawn and all(drawn) else None)
 
 
-def settle(timeout=30):
+def settle(timeout=60):
     """Hand the session over only once the output list has gone quiet.
 
     The last apply rebuilds the outputs, and the add/remove pairs it produces
@@ -58,14 +63,17 @@ def settle(timeout=30):
     removed by the time it bound it."""
     deadline=time.time()+timeout
     steady=None
-    seen=0.0
+    since=0.0
     while time.time()<deadline:
         current=layout()
-        if current[1] is not None and current==steady and time.time()-seen>=1:
+        if current != steady:
+            steady=current
+            since=time.time()
+        elif current[1] is not None and time.time()-since>=1:
             return
-        steady=current
-        seen=time.time()
-        time.sleep(.1)
+        time.sleep(.25)
+    if steady is not None and steady[1] is None:
+        raise AssertionError('The shell never redrew its outputs after the hotplug cycles')
     raise AssertionError('The output layout never settled after the hotplug cycles')
 
 
