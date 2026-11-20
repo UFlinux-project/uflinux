@@ -56,12 +56,21 @@ start() {
 
 	ebegin "Preparing UFLinux device storage"
 	# F2FS growth is an offline operation. Even a read-only mount keeps cached
-	# metadata which becomes stale if resize.f2fs changes the backing device.
-	# Returning before growpart also leaves the partition table untouched.
+	# metadata which becomes stale if resize.f2fs changes the backing device,
+	# so the initramfs grew the partition and the filesystem before it mounted
+	# the root. Record that here so the check is not repeated on every boot,
+	# and touch neither the partition table nor the mount.
 	source="$(findmnt -no SOURCE /)" || source=""
 	fstype="$(findmnt -no FSTYPE /)" || fstype=""
 	if [ "$fstype" = f2fs ]; then
-		ewarn "F2FS root expansion requires an unmounted filesystem; keeping its current size"
+		einfo "F2FS root was expanded offline during boot"
+		mkdir -p "$state_dir"
+		if [ -n "$source" ] && split_root_device "$source"; then
+			printf 'disk=%s\npartition=%s\nfilesystem=f2fs\n' \
+				"$grow_disk" "$grow_part" >"$state_file"
+		else
+			printf 'disk=unknown\npartition=unknown\nfilesystem=f2fs\n' >"$state_file"
+		fi
 		eend 0
 		return 0
 	fi

@@ -7,12 +7,14 @@ patched=/tmp/uflinux-init
 if [ "$(/bin/busybox grep -c '^# shared memory area (later system will need it)' "$original")" = 1 ] &&
    [ "$(/bin/busybox grep -c '^# workaround for vmware' "$original")" = 1 ] &&
    [ "$(/bin/busybox grep -c '^[[:space:]]*if \[ "\$SINGLEMODE" = "yes" \]; then' "$original")" = 2 ] &&
-   [ "$(/bin/busybox grep -c 'cat "\$ROOT"/proc/mounts 2>/dev/null | while read -r _dev DIR _type _opts' "$original")" = 2 ]; then
+   [ "$(/bin/busybox grep -c 'cat "\$ROOT"/proc/mounts 2>/dev/null | while read -r _dev DIR _type _opts' "$original")" = 2 ] &&
+   [ "$(/bin/busybox grep -c '^[[:space:]]*if echo "\$KOPT_modules \$rootfstype" | grep -qw btrfs; then' "$original")" = 1 ]; then
 	/bin/busybox sed \
 		-e '/^# read the kernel options\./i /usr/libexec/uflinux-initramfs-splash prepare' \
 		-e '/^# workaround for vmware/i /usr/libexec/uflinux-initramfs-splash start' \
 		-e '/^[[:space:]]*if \[ "\$SINGLEMODE" = "yes" \]; then/i /usr/libexec/uflinux-initramfs-splash start' \
 		-e '/cat "\$ROOT"\/proc\/mounts 2>\/dev\/null | while read -r _dev DIR _type _opts/i /usr/libexec/uflinux-initramfs-splash handoff "$sysroot"' \
+		-e '/^[[:space:]]*if echo "\$KOPT_modules \$rootfstype" | grep -qw btrfs; then/i /usr/libexec/uflinux-initramfs-resize "$rootfstype" "$KOPT_root"' \
 		"$original" > "$patched" && exec /bin/busybox sh "$patched"
 fi
 exec /bin/busybox sh "$original"

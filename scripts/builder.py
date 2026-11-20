@@ -164,8 +164,9 @@ def device_packages(device, arch):
     packages += ["alpine-base", "apk-tools", "zstd", "util-linux", "dosfstools", "mtools",
                  "e2fsprogs", "e2fsprogs-extra", "cloud-utils-growpart"]
     packages += firmware_packages()
-    # Keep f2fs-tools available for diagnosis and offline maintenance. Mounted
-    # F2FS roots must not be expanded by the first-boot service.
+    # f2fs-tools provides resize.f2fs, which the initramfs runs offline to
+    # expand an F2FS root before mounting it (see the uflinux-f2fs-resize
+    # feature), and keeps fsck.f2fs available for diagnosis.
     if device.get("rootfs", "ext4") == "f2fs":
         packages.append("f2fs-tools")
     # Nura packages are not installed: the profile fetches and unpacks them, so

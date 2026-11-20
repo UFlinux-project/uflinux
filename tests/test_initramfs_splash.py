@@ -38,6 +38,10 @@ cat "$ROOT"/proc/mounts 2>/dev/null | while read -r _dev DIR _type _opts ; do :;
 if [ "$SINGLEMODE" = "yes" ]; then
  :
 fi
+\tif echo "$KOPT_modules $rootfstype" | grep -qw btrfs; then
+\t\t/sbin/btrfs device scan >/dev/null || \\
+\t\t\techo "Failed to scan devices for btrfs filesystem."
+\tfi
 cat "$ROOT"/proc/mounts 2>/dev/null | while read -r _dev DIR _type _opts ; do :; done
 '''
         patched = self.run_wrapper(script)
@@ -46,6 +50,12 @@ cat "$ROOT"/proc/mounts 2>/dev/null | while read -r _dev DIR _type _opts ; do :;
         self.assertEqual(patched.count('uflinux-initramfs-splash handoff'), 2)
         self.assertLess(patched.index('uflinux-initramfs-splash prepare'),
                         patched.index('uflinux-initramfs-splash start'))
+        # The F2FS resize has to run before the root is mounted, which is what
+        # the btrfs scan right above the mount marks: injecting anywhere else
+        # would resize a mounted filesystem.
+        self.assertEqual(patched.count('uflinux-initramfs-resize'), 1)
+        self.assertLess(patched.index('uflinux-initramfs-resize'),
+                        patched.index('/sbin/btrfs device scan'))
 
     def test_unknown_alpine_init_boots_without_injection(self):
         self.assertIsNone(self.run_wrapper('exit 0\n# upstream structure changed\n'))
@@ -64,6 +74,23 @@ cat "$ROOT"/proc/mounts 2>/dev/null | while read -r _dev DIR _type _opts ; do :;
         # Listing them is only half of it: mkinitfs drops missing entries
         # silently, so the profile has to fail the build instead.
         self.assertIn("$initramfs_boot_files", profile.split("for file in")[1])
+
+    def test_f2fs_resize_feature_is_wired_for_both_build_paths(self):
+        # The hook only works if mkinitfs can find the resize binaries. The
+        # device profile enables the feature for F2FS roots only, and the
+        # recipe installs the feature file so that an mkinitfs run inside the
+        # image finds it too.
+        profile = DEVICE_PROFILE.read_text()
+        self.assertIn('if [ "$rootfs" = f2fs ]', profile)
+        self.assertIn('features="$features uflinux-f2fs-resize"', profile)
+        recipe = (ROOT / "aports/uflinux/APKBUILD").read_text()
+        self.assertIn("uflinux-f2fs-resize.files", recipe)
+        self.assertIn("/etc/mkinitfs/features.d/uflinux-f2fs-resize.files", recipe)
+        feature = (ROOT / "aports/uflinux/uflinux-f2fs-resize.files").read_text()
+        paths = [line for line in feature.splitlines() if not line.startswith("#")]
+        self.assertEqual(sorted(paths), sorted([
+            "/usr/sbin/resize.f2fs", "/usr/bin/growpart",
+            "/sbin/sfdisk", "/usr/sbin/partx"]))
 
     def test_device_profile_ships_early_modules(self):
         # The initramfs only loads what /etc/modules names, and no package owns

@@ -2,9 +2,10 @@
 
 Besides the generic live ISOs, UFLinux builds **installed** GPT disk images for
 specific boards. A device image writes straight to the board's SD card or eMMC,
-boots to the login screen, and uses an installed root filesystem. XFS images
-expand on first boot; F2FS images keep their initial size and require offline
-expansion. There is no squashfs modloop, no `live` user and no live session.
+boots to the login screen, and uses an installed root filesystem. Every image
+expands to fill the storage medium on first boot: XFS images online, F2FS
+images offline in the initramfs. There is no squashfs modloop, no `live` user
+and no live session.
 
 Device images are **supplementary**: they are built on tags and attached to the
 same release as the ISOs, but a failing or missing image never blocks publication
@@ -264,21 +265,26 @@ For XFS/ext4 it runs `growpart` on the root partition once, then
 a later partition change is not undone and a reboot does not repeat the work.
 Failures are warnings, not boot failures.
 
-**F2FS roots are not automatically resized.** The service returns before
-`growpart` or any filesystem changes and does not record a successful resize.
-`resize.f2fs` rewrites on-disk metadata directly; running it on a mounted root,
-even read-only, then remounting writable can leave the kernel using stale
-metadata. The previous implementation incorrectly treated this as a supported
-online expansion path. See the [upstream resize implementation](https://kernel.googlesource.com/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools/+/refs/heads/master/fsck/resize.c).
-F2FS expansion must be performed from another system or rescue environment
-while the target filesystem is completely unmounted, with a backup first.
+**F2FS roots are expanded offline in the initramfs.** `resize.f2fs` rewrites
+on-disk metadata directly; running it on a mounted root, even read-only, then
+remounting writable can leave the kernel using stale metadata. See the
+[upstream resize implementation](https://kernel.googlesource.com/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools/+/refs/heads/master/fsck/resize.c).
+The initramfs is the only point in the boot where the root is guaranteed to be
+unmounted, so the initramfs runs `/usr/libexec/uflinux-initramfs-resize` after
+the storage devices have been located and before the root is mounted: it calls
+`growpart` on the root partition and then `resize.f2fs -F`. The work is done by
+the `uflinux-f2fs-resize` mkinitfs feature, which the device profile enables for
+F2FS roots and which carries `growpart`, `sfdisk`, `partx` and `resize.f2fs`
+into the initramfs. The hook is best-effort and never aborts the boot; a board
+written to a card of the image's own size, or a second boot after a successful
+growth, is a no-op. The first-boot service then only records
+`/var/lib/uflinux/device-resized` for an F2FS root so the check is not repeated.
 
 A reported reboot failure (`SIT is corrupted`, `Failed to initialize F2FS
 segment manager`, `Data consistency error`) indicates existing filesystem
-damage. The build correction prevents the unsafe operation; it does not repair
-an already damaged card. Preserve data before running offline `fsck.f2fs` or
-reflashing. The old service must also be replaced or disabled before booting a
-repaired card, otherwise it can repeat the unsafe resize.
+damage. The offline resize prevents the unsafe online operation; it does not
+repair an already damaged card. Preserve data before running offline `fsck.f2fs`
+or reflashing.
 
 Device images also enable `uflinux-zram`, which sizes compressed swap from the
 memory the board actually has and picks the compressor from its CPU. On these
@@ -317,8 +323,8 @@ sync
 ```
 
 The uncompressed image is 6144 MiB (5120 MiB for `vm`), so any larger card or eMMC
-works. XFS roots expand automatically; F2FS roots retain their initial size
-until expanded offline. Verify the checksum sidecar and the
+works. Every root filesystem expands on first boot: XFS online through the
+first-boot service, F2FS offline in the initramfs. Verify the checksum sidecar and the
 GitHub attestation first:
 
 ```sh

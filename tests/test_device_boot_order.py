@@ -56,15 +56,17 @@ depend
                 self.assertIn("rootflags=ro", args)
                 self.assertIn("root=UUID=test", args)
 
-    def test_f2fs_root_is_not_resized_or_marked_complete(self):
+    def test_f2fs_root_is_not_resized_but_marked_complete(self):
         # Run the real start function, with destructive commands replaced by
-        # traps. A mounted F2FS root must return before even probing growpart.
+        # traps. The initramfs already grew an F2FS root offline, so the
+        # service must only record the state file and never touch the
+        # partition table, resize the filesystem, or remount anything.
         with tempfile.TemporaryDirectory() as temporary:
             stage = Path(temporary)
             (stage / "device").write_text("qcs6490\n")
             commands = stage / "bin"
             commands.mkdir()
-            for name in ("growpart", "resize.f2fs", "mount"):
+            for name in ("growpart", "resize.f2fs", "mount", "xfs_growfs", "resize2fs"):
                 trap = commands / name
                 trap.write_text('#!/bin/sh\necho called >> "$TEST_FORBIDDEN"\nexit 1\n')
                 trap.chmod(0o755)
@@ -76,6 +78,7 @@ state_dir="$2/state"
 state_file="$state_dir/device-resized"
 ebegin() { :; }
 eend() { :; }
+einfo() { :; }
 ewarn() { :; }
 findmnt() {
     case "$*" in
@@ -83,7 +86,6 @@ findmnt() {
         *) printf '/dev/mmcblk1p2\\n' ;;
     esac
 }
-split_root_device() { echo reached-resize-path >> "$TEST_FORBIDDEN"; return 1; }
 start
 '''
             subprocess.run(["sh", "-c", script, "sh",
@@ -92,7 +94,41 @@ start
                                     TEST_FORBIDDEN=str(stage / "forbidden")),
                            check=True)
             self.assertFalse((stage / "forbidden").exists())
-            self.assertFalse((stage / "state/device-resized").exists())
+            state = (stage / "state/device-resized").read_text()
+            self.assertIn("disk=/dev/mmcblk1", state)
+            self.assertIn("partition=2", state)
+            self.assertIn("filesystem=f2fs", state)
+
+    def test_resize_hook_stays_quiet_outside_f2fs(self):
+        # The hook runs on every device boot. It must exit without touching
+        # anything for other filesystems, unresolvable roots, and roots that
+        # are not partitions, even though the traps below would happily
+        # "succeed".
+        hook = ROOT / "aports/uflinux/uflinux-initramfs-resize"
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            commands = stage / "bin"
+            commands.mkdir()
+            for name in ("growpart", "resize.f2fs"):
+                trap = commands / name
+                trap.write_text('#!/bin/sh\necho called >> "$TEST_FORBIDDEN"\nexit 0\n')
+                trap.chmod(0o755)
+            # An unresolvable volume name, like a root= that points at a
+            # volume the image writer never formatted.
+            findfs = commands / "findfs"
+            findfs.write_text('#!/bin/sh\nexit 1\n')
+            findfs.chmod(0o755)
+            for number, args in enumerate([["ext4", "UUID=abcd"],
+                                           ["f2fs", "UUID=no-such-volume"],
+                                           ["f2fs", "/dev/not-a-partition"],
+                                           ["f2fs", "/dev/mmcblk1p2"]]):
+                with self.subTest(args=args):
+                    forbidden = stage / ("forbidden-%d" % number)
+                    subprocess.run(["sh", str(hook)] + args, check=True,
+                                   env=dict(os.environ,
+                                            PATH=str(commands) + os.pathsep + os.environ['PATH'],
+                                            TEST_FORBIDDEN=str(forbidden)))
+                    self.assertFalse(forbidden.exists())
 
 
 if __name__ == "__main__":

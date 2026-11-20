@@ -1,0 +1,96 @@
+#!/bin/busybox sh
+# Grow an F2FS root filesystem while the initramfs has not mounted it yet.
+# resize.f2fs rewrites on-disk metadata directly, so it must run before the
+# kernel caches the filesystem; the initramfs is the only point in the boot
+# where the root is guaranteed to be unmounted. The patched initramfs-init
+# calls this with the root filesystem type and the root= value, after the
+# storage devices have been located and before the root is mounted.
+#
+# Everything here is best-effort. A failure leaves the root at the size the
+# image was written with, which is the behaviour device images had before,
+# so the script must never abort the boot.
+fstype="$1"
+root="$2"
+[ "$fstype" = f2fs ] || exit 0
+[ -n "$root" ] || exit 0
+
+log() {
+	echo "uflinux-resize: $*" 2>/dev/null >/dev/kmsg
+}
+
+# BusyBox mount resolves UUID= and LABEL= itself; do the same here so the
+# hook works with whatever the bootloader was handed.
+case "$root" in
+ZFS=*) root="${root#ZFS=}";;
+esac
+case "$root" in
+	UUID=* | LABEL=*)
+		resolved="$(findfs "$root" 2>/dev/null)" || resolved=""
+		if [ -z "$resolved" ] && [ -e "/dev/disk/by-${root%%=*}/${root#*=}" ]; then
+			resolved="$(readlink -f "/dev/disk/by-${root%%=*}/${root#*=}")"
+		fi
+		root="$resolved"
+		;;
+esac
+[ -n "$root" ] || {
+	log "cannot resolve the root device $2"
+	exit 0
+}
+
+# Split the root block device such as /dev/mmcblk0p2 or /dev/sda2 into the
+# disk and the partition index; growpart takes them separately.
+disk=""
+part=""
+tail="$root"
+digits=""
+while [ -n "$tail" ]; do
+	last="${tail#"${tail%?}"}"
+	tail="${tail%?}"
+	case $last in
+	[0-9]) digits="$last$digits" ;;
+	p)
+		[ -n "$digits" ] || exit 0
+		disk="$tail"
+		part="$digits"
+		break
+		;;
+	*)
+		[ -n "$digits" ] || exit 0
+		disk="$tail$last"
+		part="$digits"
+		break
+		;;
+	esac
+done
+[ -n "$disk" ] && [ -n "$part" ] || exit 0
+[ -b "$disk" ] && [ -b "$root" ] || {
+	log "$disk or $root is not a block device"
+	exit 0
+}
+
+growpart_bin="$(command -v growpart 2>/dev/null)" || growpart_bin=""
+resize_bin="$(command -v resize.f2fs 2>/dev/null)" || resize_bin=""
+if [ -z "$growpart_bin" ] || [ -z "$resize_bin" ]; then
+	log "growpart or resize.f2fs is missing from the initramfs"
+	exit 0
+fi
+
+# growpart exits 0 on a dry run only when a growth is pending, so this both
+# skips boards that were written to a card of the image's own size and keeps
+# a second boot after a successful growth a no-op.
+if ! "$growpart_bin" --dry-run "$disk" "$part" >/dev/null 2>&1; then
+	log "no growth pending for $root"
+	exit 0
+fi
+if ! "$growpart_bin" "$disk" "$part" >/dev/null 2>&1; then
+	log "growpart failed for $disk partition $part"
+	exit 0
+fi
+# -F skips the interactive confirmation, which would hang PID 1. Without an
+# explicit target resize.f2fs grows the filesystem to the whole device.
+if ! "$resize_bin" -F "$root" >/dev/null 2>&1; then
+	log "resize.f2fs failed for $root"
+	exit 0
+fi
+log "grew $root to the end of $disk"
+exit 0

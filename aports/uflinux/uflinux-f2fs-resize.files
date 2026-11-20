@@ -1,0 +1,9 @@
+# Userspace payload for the offline F2FS root expansion performed by
+# /usr/libexec/uflinux-initramfs-resize. mkinitfs resolves each path with
+# lddtree, so the shared libraries of these binaries come along by themselves.
+# flock, which growpart uses to lock the disk, is a BusyBox applet and is
+# already installed by initramfs-init, so it is not listed here.
+/usr/sbin/resize.f2fs
+/usr/bin/growpart
+/sbin/sfdisk
+/usr/sbin/partx

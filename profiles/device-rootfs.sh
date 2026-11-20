@@ -37,6 +37,13 @@ esac
 # feature matches the one scripts/builder.py formats, so the initramfs can
 # mount it without probing.
 features="base $rootfs phy mmc usb scsi nvme ata virtio kms"
+# An F2FS root can only be grown while it is unmounted, so the resize happens
+# here in the initramfs instead of in the first-boot service. The stock f2fs
+# feature only carries the kernel module; this one adds the userspace the
+# resize hook runs (growpart, sfdisk, partx, resize.f2fs).
+if [ "$rootfs" = f2fs ]; then
+	features="$features uflinux-f2fs-resize"
+fi
 
 # The mkinitfs trigger fires on every /lib/modules change and would build an
 # initramfs from the ISO feature set (and abort the transaction if that
@@ -50,10 +57,11 @@ features="base $rootfs phy mmc usb scsi nvme ata virtio kms"
 # copies Alpine's own initramfs-init, which on the ISO comes from the
 # uflinux-plymouth feature that is deliberately not used here. Without it the
 # wrapper execs a missing file, init dies, and the kernel panics with nothing on
-# the display. The two helpers are listed with it so that the hooks the wrapper
+# the display. The helpers are listed with it so that the hooks the wrapper
 # injects resolve rather than failing at every boot stage; they stay inert
-# without plymouth, which the device initramfs does not carry.
-initramfs_boot_files="usr/share/mkinitfs/initramfs-init usr/libexec/uflinux-initramfs-splash usr/libexec/uflinux-bootsplash"
+# without plymouth, which the device initramfs does not carry, and the resize
+# hook exits on its own for a filesystem that cannot be grown offline.
+initramfs_boot_files="usr/share/mkinitfs/initramfs-init usr/libexec/uflinux-initramfs-splash usr/libexec/uflinux-bootsplash usr/libexec/uflinux-initramfs-resize"
 # Files this profile generates itself and mkinitfs has to copy in, as opposed to
 # the installed ones above. Set once the package set is in place.
 initramfs_generated_files=""
