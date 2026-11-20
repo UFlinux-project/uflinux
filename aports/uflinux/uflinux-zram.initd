@@ -1,0 +1,237 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh disable=SC2034,SC3043
+
+name="uflinux-zram"
+description="Compressed swap sized from the installed RAM, with a CPU-matched compressor"
+
+# The paths are variables so that the policy can be exercised against a fake
+# /proc and a fake sysfs without a device.
+conf_file="/etc/conf.d/uflinux-zram"
+meminfo="/proc/meminfo"
+cpuinfo="/proc/cpuinfo"
+mounts="/proc/mounts"
+zram_control="/sys/class/zram-control/hot_add"
+zram_block="/sys/block"
+zswap_module="/sys/module/zswap/parameters"
+
+# Defaults; /etc/conf.d/uflinux-zram overrides them.
+RAM_SPLIT_MIB=4096
+ZRAM_COMP=""
+ZRAM_DISKSIZE=""
+ZRAM_MEM_LIMIT=""
+SWAPFILE="/swapfile"
+SWAPFILE_MIB=""
+ZSWAP_COMP=""
+ZSWAP_MAX_POOL_PERCENT=20
+ZSWAP_ACCEPT_THRESHOLD_PERCENT=70
+
+depend() {
+	# Alpine enables no sysfs service in its runlevels, so the /sys paths below
+	# have to pull it in explicitly. Swapping cannot start before the module
+	# and filesystem services have done their work.
+	need sysfs
+	after modules localmount
+	keyword -vserver -lxc
+}
+
+# Read the operator's overrides. The file is owned by the package and only ever
+# holds assignments, so shellcheck does not need to follow it.
+# shellcheck source=/dev/null
+load_conf() {
+	if [ -r "$conf_file" ]; then . "$conf_file"; fi
+}
+
+# Clamp a MiB amount into a range.
+clamp_mib() {
+	value="$1"
+	min="$2"
+	max="$3"
+	[ "$value" -lt "$min" ] && value="$min"
+	[ "$value" -gt "$max" ] && value="$max"
+	printf '%s\n' "$value"
+}
+
+# Total installed RAM in MiB.
+memory_mib() {
+	awk '/^MemTotal:/ { printf "%d", $2 / 1024; exit }' "$meminfo"
+}
+
+# Online CPUs, counted here rather than with nproc so the service needs no tool
+# beyond the base system.
+cpu_count() {
+	awk '/^processor[ \t]*:/ { n = n + 1 } END { printf "%d\n", n + 0 }' "$cpuinfo"
+}
+
+# Filesystem type of a directory, from the mount table, by finding the longest
+# mount point that contains it. Empty when it cannot be told.
+fs_type_of() {
+	awk -v target="$1" '
+	BEGIN { best = -1 }
+	{
+		point = $2
+		type = $3
+		if (point != "/" && substr(target, 1, length(point)) != point) next
+		if (point != "/" && substr(target, length(point) + 1, 1) != "/") next
+		if (length(point) > best) { best = length(point); found = type }
+	}
+	END { if (found != "") print found }
+	' "$mounts"
+}
+
+# lz4 is the right trade-off on the low-end boards: it costs a fraction of the
+# cycles zstd wants, and those machines never reach the ratio that would make
+# zstd worth it. A 64-bit board with several cores has the cycles to spare and
+# gains from the better ratio, which matters most on the small slow storage of
+# a device.
+pick_compressor() {
+	case "$machine" in
+	armv7* | armv6* | armv8l | riscv32 | riscv64 | mips*)
+		printf 'lz4\n'
+		return
+	;;
+	esac
+	if [ "$cores" -le 2 ]; then
+		printf 'lz4\n'
+		return
+	fi
+	printf 'zstd\n'
+}
+
+# Write one zram attribute. An attribute the kernel does not have is skipped in
+# silence; one it rejects is reported, because that changes the behaviour.
+set_zram_attribute() {
+	[ -e "$zram_block/$ZRAM_DEVICE/$1" ] || return 0
+	if ! printf '%s\n' "$2" > "$zram_block/$ZRAM_DEVICE/$1" 2>/dev/null; then
+		ewarn "the kernel rejected $1=$2 for $ZRAM_DEVICE"
+	fi
+}
+
+# A swapfile with a hole cannot be used at all, and F2FS additionally refuses
+# the compressed and inline-file modes fallocate can produce, so on F2FS, and
+# on any filesystem that cannot be identified, the file is written rather than
+# allocated. fallocate is used elsewhere because it is instant, and a write is
+# the fallback where it is unsupported.
+create_swapfile() {
+	if [ -f "$SWAPFILE" ]; then return 0; fi
+	local fstype allocated
+	fstype="$(fs_type_of "$(dirname "$SWAPFILE")")"
+	allocated=1
+	ebegin "Creating $SWAPFILE"
+	if [ "$fstype" = ext4 ] || [ "$fstype" = xfs ] || [ "$fstype" = btrfs ]; then
+		fallocate -l "${SWAPFILE_MIB}M" "$SWAPFILE" 2>/dev/null && allocated=0
+	fi
+	if [ "$allocated" -ne 0 ]; then
+		rm -f "$SWAPFILE"
+		if ! dd if=/dev/zero of="$SWAPFILE" bs=1M count="$SWAPFILE_MIB" status=none; then
+			rm -f "$SWAPFILE"
+			eend 1 "cannot write $SWAPFILE"
+			return 1
+		fi
+	fi
+	chmod 600 "$SWAPFILE"
+	if ! mkswap -L uflinux-swap "$SWAPFILE" >/dev/null 2>&1; then
+		rm -f "$SWAPFILE"
+		eend 1 "cannot format $SWAPFILE"
+		return 1
+	fi
+	eend 0
+}
+
+# zswap only pays off when there is somewhere to put the pages it pushes out,
+# so it is configured together with the swapfile. Every parameter is a runtime
+# file; an unknown compressor makes the kernel log a notice and keep its own
+# default, which is why a failed write is only a warning here.
+start_zswap() {
+	local file value
+	for file in enabled compressor max_pool_percent accept_threshold_percent; do
+		[ -w "$zswap_module/$file" ] || return 0
+	done
+	printf '1\n' > "$zswap_module/enabled" 2>/dev/null
+	case "$(cat "$zswap_module/enabled" 2>/dev/null)" in
+	Y | 1) ;;
+	*)
+		ewarn "zswap is not available on this kernel, keeping zram only"
+		return 0
+	;;
+	esac
+	value="$ZSWAP_COMP"
+	[ -n "$value" ] || value="$ZRAM_COMP"
+	if ! printf '%s\n' "$value" > "$zswap_module/compressor" 2>/dev/null; then
+		ewarn "zswap rejected compressor=$value"
+	fi
+	printf '%s\n' "$ZSWAP_MAX_POOL_PERCENT" > "$zswap_module/max_pool_percent" 2>/dev/null
+	printf '%s\n' "$ZSWAP_ACCEPT_THRESHOLD_PERCENT" \
+		> "$zswap_module/accept_threshold_percent" 2>/dev/null
+}
+
+start() {
+	load_conf
+	local total
+	total="$(memory_mib)"
+	if [ "$total" -le 0 ]; then
+		ewarn "cannot read the installed memory from $meminfo, not configuring swap"
+		return 0
+	fi
+	machine="$(uname -m)"
+	cores="$(cpu_count)"
+	[ "$cores" -gt 0 ] || cores=1
+	[ -n "$ZRAM_COMP" ] || ZRAM_COMP="$(pick_compressor)"
+	[ -n "$ZSWAP_COMP" ] || ZSWAP_COMP="$ZRAM_COMP"
+
+	# Half of RAM of compressed block device, and a quarter of RAM as the real
+	# memory it may occupy, keeps the overhead bounded on every size of machine.
+	[ -n "$ZRAM_DISKSIZE" ] || ZRAM_DISKSIZE="$(clamp_mib "$((total / 2))" 256 2048)M"
+	[ -n "$ZRAM_MEM_LIMIT" ] || ZRAM_MEM_LIMIT="$(clamp_mib "$((total / 4))" 64 1024)M"
+	[ -n "$SWAPFILE_MIB" ] || SWAPFILE_MIB="$(clamp_mib "$((total / 2))" 2048 8192)"
+
+	if [ ! -e "$zram_control" ] && ! modprobe zram; then
+		ewarn "the zram module is unavailable, not configuring swap"
+		return 0
+	fi
+
+	ebegin "Setting up zram with $ZRAM_DISKSIZE using $ZRAM_COMP"
+	# hot_add hands out the number of the device it created, so the block device
+	# and its sysfs directory are named after it.
+	if ! ZRAM_SLOT="$(cat "$zram_control" 2>/dev/null)"; then
+		eend 1 "cannot create a zram device"
+		return 1
+	fi
+	ZRAM_DEVICE="zram$ZRAM_SLOT"
+	set_zram_attribute disksize "$ZRAM_DISKSIZE"
+	set_zram_attribute comp_algorithm "$ZRAM_COMP"
+	set_zram_attribute mem_limit "$ZRAM_MEM_LIMIT"
+	if ! swapon -p 100 "/dev/$ZRAM_DEVICE"; then
+		eend 1 "cannot activate /dev/$ZRAM_DEVICE"
+		return 1
+	fi
+	eend 0
+
+	# Small systems keep the whole compressed pool in RAM: a second compression
+	# layer below zram only costs cycles there.
+	[ "$total" -gt "$RAM_SPLIT_MIB" ] || return 0
+	create_swapfile || return 1
+	if swapon -p 10 "$SWAPFILE"; then
+		start_zswap
+	else
+		ewarn "cannot activate $SWAPFILE, zswap stays off"
+	fi
+	return 0
+}
+
+stop() {
+	load_conf
+	local device name
+	ebegin "Turning compressed swap off"
+	swapoff "$SWAPFILE" 2>/dev/null
+	for device in "$zram_block"/zram*; do
+		[ -e "$device" ] || continue
+		name="$(basename "$device")"
+		swapoff "/dev/$name" 2>/dev/null
+		printf '1\n' > "$device/reset" 2>/dev/null
+	done
+	eend 0
+}
+
+shutdown() {
+	stop
+}

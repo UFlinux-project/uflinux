@@ -80,7 +80,7 @@ for device_id, device in devices.items():
 for path in [*ROOT.glob("scripts/*.py"), *ROOT.glob("tests/*.py"), ROOT / "aports/uflinux/uflinux-install", ROOT / "aports/uflinux/uflinux-install-gui-backend", ROOT / "aports/uflinux/uflinux-boot-assets.py"]:
     ast.parse(path.read_text(), filename=str(path))
 for path in [*ROOT.glob("scripts/*.sh"), *ROOT.glob("tests/*.sh"), *ROOT.glob("profiles/*.sh"), *ROOT.glob("aports/*/APKBUILD"),
-             *[ROOT / "aports/uflinux" / n for n in ("uflinux-session", "uflinux-autostart", "uflinux-live.initd", "uflinux-image-user", "uflinux-compositor", "uflinux-network-init", "uflinux-bootsplash", "uflinux-splash.initd", "uflinux-splash-stop.initd", "uflinux-device.initd")], *ROOT.glob("settings/data/*.initd"), ROOT / "settings/data/uflinux-power-button"]:
+             *[ROOT / "aports/uflinux" / n for n in ("uflinux-session", "uflinux-autostart", "uflinux-live.initd", "uflinux-image-user", "uflinux-compositor", "uflinux-network-init", "uflinux-bootsplash", "uflinux-splash.initd", "uflinux-splash-stop.initd", "uflinux-device.initd", "uflinux-zram.initd")], *ROOT.glob("settings/data/*.initd"), ROOT / "settings/data/uflinux-power-button"]:
     subprocess.run(["sh", "-n", str(path)], check=True)
 for path in (ROOT / "aports/uflinux").glob("*.xml"):
     ET.parse(path)
@@ -111,6 +111,22 @@ recorder = (ROOT / "aports/gpu-screen-recorder/APKBUILD").read_text()
 assert lock["sources"]["gpu-screen-recorder"]["sha512"] in recorder
 for name, digest in lock["gpu-screen-recorder"]["patches"].items():
     assert hashlib.sha512((ROOT / "aports/gpu-screen-recorder" / name).read_bytes()).hexdigest() == digest
+# The Qualcomm Venus capture alignment has to stay in the patch that carries it,
+# and that patch has to be applied: without it the Iris encoder on qcs6490 shows
+# the padding artefact.
+venus = (ROOT / "aports/gpu-screen-recorder/0010-Encoder-align-v4l2-m2m-capture-for-Qualcomm-venus.patch").read_text()
+assert "VENUS_WIDTH_ALIGNMENT 128" in venus and "VENUS_HEIGHT_ALIGNMENT 32" in venus
+assert "0010-Encoder-align-v4l2-m2m-capture-for-Qualcomm-venus.patch" in recorder
+# Every app has to get all three window buttons. GTK reads gtk-decoration-layout
+# from the XDG system config dirs and from the sysconfdir, so the settings file
+# must be installed under both /etc/xdg and /etc for each toolkit; if either
+# copy goes missing, affected apps fall back to the built-in "menu:close".
+uflinux_apkbuild = (ROOT / "aports/uflinux/APKBUILD").read_text()
+for path in ("/etc/xdg/gtk-3.0/settings.ini", "/etc/xdg/gtk-4.0/settings.ini",
+             "/etc/gtk-3.0/settings.ini", "/etc/gtk-4.0/settings.ini"):
+    assert f'install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir{path}"' in uflinux_apkbuild, \
+        f"gtk-settings.ini must be installed to {path}"
+assert 'install -Dm644 "$srcdir/90-uflinux.gschema.override"' in uflinux_apkbuild
 portal = (ROOT / "aports/xdg-desktop-portal-gtk4/APKBUILD").read_text()
 portal_source = lock["sources"]["xdg-desktop-portal-gtk4"]
 assert portal_source["sha512"] in portal

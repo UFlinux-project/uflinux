@@ -119,6 +119,19 @@ def close_menu():
     wait(lambda: not menu(), 'Super-style toggle failed to close Start')
 def pointer(x, y, width=1280, height=720):
     command('/tmp/uflinux-ui-driver/pointer-driver', str(x), str(y), str(x), str(y), str(width), str(height))
+def bounds(item):
+    rect = item.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+    return (rect.x, rect.y, rect.width, rect.height)
+def assert_row_is_centered(name):
+    # A program name must sit at the vertical middle of its row, level with the icon.
+    label = wait(lambda: find(name), 'Row %s disappeared' % name)
+    row = label
+    while row is not None and role_of(row) != 'list item':
+        row = row.parent
+    assert row is not None, 'No list item contains ' + name
+    text = bounds(label); box = bounds(row)
+    offset = abs((text[1] + text[3] / 2) - (box[1] + box[3] / 2))
+    assert offset <= 2, '%s is %.1fpx away from the vertical center of its row' % (name, offset)
 
 data = Path(os.environ['XDG_DATA_HOME'])
 apps = data / 'applications'; apps.mkdir(parents=True, exist_ok=True)
@@ -157,6 +170,7 @@ try:
     wait(lambda: find('Favorites'), 'Escape did not return to favorites')
     search('STRASSE documents')
     wait(lambda: find('UFLinux Fixture Straße'), 'Unicode/token search missed the visible fixture')
+    assert_row_is_centered('UFLinux Fixture Straße')
     assert not find('UFLinux Fixture Hidden')
     command('wtype', '-k', 'Down')
     command('wtype', '-k', 'Return')
@@ -186,9 +200,6 @@ try:
     # Never actually end a session in this headless build harness.
     shutdown = wait(lambda: find('Shut down', 'button') or find('Shut down', 'push button'), 'Shutdown control missing')
     home = wait(lambda: find('Home', 'button') or find('Home', 'push button'), 'Home control missing')
-    def bounds(item):
-        rect = item.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-        return (rect.x, rect.y, rect.width, rect.height)
     original_bounds = (bounds(home), bounds(shutdown))
     click(shutdown)
     wait(lambda: find('Cancel', 'push button') or find('Cancel', 'button'), 'Shutdown confirmation missing')

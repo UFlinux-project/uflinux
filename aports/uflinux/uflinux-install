@@ -256,6 +256,7 @@ def make_overlay(directory, args, repositories=None, uefi=False):
                            ("hwdrivers", "sysinit"), ("uflinux-splash", "sysinit"),
                            ("uflinux-splash-stop", "default"), ("hwclock", "boot"), ("modules", "boot"),
                            ("sysctl", "boot"), ("hostname", "boot"), ("bootmisc", "boot"),
+                           ("uflinux-zram", "boot"),
                            ("syslog", "boot"), ("dbus", "default"), ("elogind", "default"),
                            ("iwd", "default"), ("connman", "default"), ("connman-vpn", "default"), ("bluetooth", "default"),
                            ("tlp", "default"), ("uflinux-acpid", "default"),

@@ -57,11 +57,18 @@ Set `UFLINUX_TEST_TASKBAR=1` to add a taskbar-favourites phase: it seeds
 `taskbar.json`, restarts the daemon and requires the file to survive unchanged,
 then corrupts the file and requires the daemon to start anyway with no popup.
 The packaged session also ships a Mako style with bottom-right cards and a
-window control layout: the gschema `button-layout` override plus a matching
-`gtk-decoration-layout` in the system `settings.ini` cover client-side
-decorations, and `<theme><titlebar><layout>` in `labwc-rc.xml` covers server
-side decorations. If none of them resolves, GTK falls back to its built-in
-`menu:close` and apps show only a close button. Note that labwc names the
+window control layout that gives every application all three buttons: the
+gschema `button-layout` override plus a matching `gtk-decoration-layout` in the
+system `settings.ini` cover client-side decorations, and
+`<theme><titlebar><layout>` in `labwc-rc.xml` covers server
+side decorations. The settings file is installed twice, under
+`/etc/xdg/gtk-{3,4}.0` and `/etc/gtk-{3,4}.0`: a toolkit reads the sysconfdir
+copy unconditionally, while the XDG copy is only found when
+`XDG_CONFIG_DIRS` still points at `/etc/xdg`. If none of them resolves, GTK
+falls back to its built-in `menu:close` and apps show only a close button.
+A per-user `~/.config/gtk-{3,4}.0/settings.ini` always wins over both, and an
+app that sets its own decoration layout (dialogs, Firefox) ignores the
+setting. Note that labwc names the
 buttons `iconify` and `max` where GTK uses `minimize` and `maximize`. All of
 this is configuration, not prototype behaviour, and is not exercised by the
 headless harness.

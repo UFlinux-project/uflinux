@@ -396,7 +396,7 @@ PACKAGE_NAMES = {
                          "uflinux-settings-doc", "uflinux-settings-system", "uflinux-settings-system-openrc", "uflinux-installer-ui", "uflinux-desktop", "uflinux-screencapture"},
     "uflinux": {"uflinux", "uflinux-defaults", "uflinux-desktop-meta", "uflinux-installer",
                 "uflinux-live", "uflinux-live-openrc", "uflinux-release", "uflinux-bootsplash-openrc",
-                "uflinux-initramfs", "uflinux-device"},
+                "uflinux-initramfs", "uflinux-device", "uflinux-zram"},
     "simp1e-cursors": {"simp1e-cursors", "simp1e-cursors-adw-dark"},
 }
 CARGO_ORIGINS = {"uflinux-regreet", "uflinux-settings", "xdg-desktop-portal-gtk4"}

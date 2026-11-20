@@ -14,6 +14,9 @@ from the file manager's configured search roots. Local application matches
 supplement the index when localized names or keywords differ, and remain
 available if the search service is absent. Applications launch through GIO
 desktop-entry handling. Files and folders open in their default applications.
+Every result row shows its icon with the program or file name vertically centered
+against it, so the text stays level with the icon instead of sitting at the top of
+the row.
 
 The right column contains the account name, Home and configured XDG folders,
 Settings and Terminal. Unavailable folders have an explanation. `xdg-user-dirs`

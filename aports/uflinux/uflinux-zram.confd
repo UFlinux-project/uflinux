@@ -1,0 +1,29 @@
+# Compressed swap policy for uflinux-zram. Everything here is optional; the
+# service computes its own defaults from the installed RAM and the CPU.
+
+# Systems with at most this much RAM get zram only. Above it the service also
+# creates a swapfile and turns on zswap, so that compressed pages can be
+# written out instead of being pinned in RAM forever.
+#RAM_SPLIT_MIB=4096
+
+# Compression algorithm. Leave empty to choose from the CPU: lz4 on low-end
+# machines (32-bit ARM, riscv64, or two cores or fewer) and zstd elsewhere.
+# Both are built into the UFLinux kernels, so either name works; an unknown
+# name makes the kernel keep its own default and the service only warns.
+#ZRAM_COMP=""
+
+# Size of the zram block device and the amount of real memory it may consume.
+# Defaults: half of RAM clamped to 256 MiB..2048 MiB, and a quarter of RAM
+# clamped to 64 MiB..1024 MiB. Suffixes such as 512M and 1G are accepted.
+#ZRAM_DISKSIZE=1G
+#ZRAM_MEM_LIMIT=512M
+
+# Swapfile used as zswap's backing device on larger systems, its size, and the
+# zswap pool limits. The default size is half of RAM clamped to
+# 2048 MiB..8192 MiB. The file is created once, on first boot, with fallocate
+# (or a full write on F2FS, which refuses a swapfile containing a hole).
+#SWAPFILE=/swapfile
+#SWAPFILE_MIB=4096
+#ZSWAP_COMP="$ZRAM_COMP"
+#ZSWAP_MAX_POOL_PERCENT=20
+#ZSWAP_ACCEPT_THRESHOLD_PERCENT=70

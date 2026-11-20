@@ -5,6 +5,11 @@ uncommitted changes. This is a source and saved-artifact audit. No fresh guest
 boot, hardware benchmark, or performance comparison was run, and no runtime or
 build configuration was changed.
 
+A later round implemented priority 7 and documented priority 8 as blocked. The
+same round confirmed that the shipped window control layout gives applications
+all three buttons; see
+[desktop prototype validation](desktop-prototype-validation.md).
+
 ## Priorities
 
 | Priority | Opportunity | Main benefit | Effort |
@@ -15,8 +20,9 @@ build configuration was changed.
 | 4 | Remove blocking clock queries from the Settings event loop | Settings responsiveness during ConnMan delays | Low–medium |
 | 5 | Decode wallpapers asynchronously | Desktop responsiveness on login and wallpaper changes | Medium |
 | 6 | Shorten the graphical boot dependency chain | Potentially earlier greeter/desktop | Low–medium |
-| 7 | Offer bounded zram swap | Better behavior under application memory pressure | Medium |
-| 8 | Tune native compilation separately from emulated builds | Shorter build turnaround | Low–medium |
+| 7 | Offer bounded zram swap | Better behavior under application memory pressure | Done (measurement left open) |
+| 8 | Force OpenSSL kTLS | Kernel-side TLS record encryption | Blocked (needs an openssl fork) |
+| 9 | Tune native compilation separately from emulated builds | Shorter build turnaround | Low–medium |
 
 ### 1. Select firmware per device
 
@@ -142,19 +148,46 @@ login automation do not distort boot comparisons.
 
 ### 7. Offer bounded zram swap for small machines
 
-No explicit zram policy was found in the shipped setup. Add an optional OpenRC
-service for installed systems and constrained devices, with a configurable
-logical size, actual-memory limit, and supported compression algorithm.
-Benchmark LZ4 and Zstandard on the target CPU instead of assuming one is best.
-Compressed swap can provide headroom when Firefox and applications exceed
-available RAM, at a CPU cost; it does not reduce baseline process PSS.
+Implemented as the `uflinux-zram` OpenRC service in the `uflinux` package. It
+runs in the `boot` runlevel of installed systems and device images, and is
+installed but not enabled in the live session, so the existing 512 MiB/no-swap
+live acceptance case still holds for the ISO. See
+[memory compression](memory-compression.md) for the policy and the knobs.
 
-Preserve the existing 512 MiB/no-swap acceptance case as a separate regression
-check. Compare OOM behavior, input latency, memory pressure, and compression
-CPU cost under a repeatable workload. The [kernel zram guide](https://docs.kernel.org/admin-guide/blockdev/zram.html)
+The remaining measurement work is unchanged: benchmark LZ4 and Zstandard on
+each target CPU instead of trusting the current heuristic, and compare OOM
+behavior, input latency, memory pressure, and compression CPU cost under a
+repeatable workload. Compressed swap provides headroom when Firefox and
+applications exceed available RAM, at a CPU cost; it does not reduce baseline
+process PSS. The [kernel zram guide](https://docs.kernel.org/admin-guide/blockdev/zram.html)
 documents swap use, algorithm selection, and memory limits.
 
-### 8. Tune build throughput with measured comparisons
+### 8. Force OpenSSL kTLS
+
+Not implemented. Kernel TLS is off unless the loaded OpenSSL configuration asks
+for it, and there is no way to ask for it from a separate file.
+
+`Options = KTLS` is a real directive (`SSL_FLAG_TBL("KTLS", SSL_OP_ENABLE_KTLS)`
+in OpenSSL's `ssl/ssl_conf.c`), but it is only read inside a
+`[system_default_sect]` reached through `[openssl_init] ssl_conf` →
+`[ssl_sect] system_default`. Alpine's `/etc/ssl/openssl.cnf` is built
+`enable-ktls` and its `[openssl_init]` section lists only `providers`, plus a
+commented `.include` line, so a standalone drop-in can never be reached:
+OpenSSL has no configuration drop-in directory.
+
+That file is owned by `libcrypto3`, whose `_libcrypto()` subpackage function does
+`amove etc`. abuild and apk-tools have no `fileconflicts` mechanism, so the only
+way to replace it is `replaces="libcrypto3"` (apk otherwise errors with
+“trying to overwrite … owned by”), and a later upgrade can re-extract the
+original. `CONFIG_TLS=m` in every shipped kernel means a `ktls`
+`modules-load.d` drop-in is required as well; `aports/uflinux-settings/APKBUILD`
+already uses that pattern for other modules.
+
+Conclusion: forcing kTLS needs an `aports/openssl` fork that owns and patches
+`openssl.cnf`, the same way `aports/connman` pins `connman=2.0-r4`. Until then
+each application opts in itself, and nothing in the image does.
+
+### 9. Tune build throughput with measured comparisons
 
 `.github/workflows/build.yml:72` sets `CARGO_BUILD_JOBS=1` for every compile job.
 `aports/uflinux-settings/APKBUILD:22` overrides the workspace's ThinLTO with fat

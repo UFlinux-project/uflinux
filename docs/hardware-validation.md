@@ -16,6 +16,11 @@ to have no display output with the current mainline device tree.
   launch/log out normally, and test supported Vulkan/OpenGL plus the software
   fallback. Record explicit overrides. A configured renderer is not evidence of
   hardware acceleration by itself.
+- **Screen capture:** record the desktop on a board whose encoder is the
+  Qualcomm Iris/Venus V4L2 device (for example the Arrow Dragon Q6A) and inspect
+  the result for padding artefacts along the right and bottom edges. The
+  capture buffer is aligned to 128 by 32 there, so a correct recording has
+  clean edges at any resolution.
 - **Displays:** apply exact advertised refresh modes, scaling, rotation and
   arrangement. Leave a change unconfirmed to check the 15-second rollback. Unplug
   the enabled external display after saving a disabled internal display, then

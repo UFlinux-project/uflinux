@@ -42,6 +42,10 @@ the expander state is itself a preference. The page also reports whether the
 the capture overlay, and Shift or Ctrl plus Print Screen starts a recording straight away.
 Hardware encoding needs a VA-API driver; the desktop meta ships the Mesa gallium driver
 plus both Intel VA-API drivers (x86) so recording works out of the box on AMD and Intel GPUs.
+On boards whose encoder is the Qualcomm Iris/Venus V4L2 device (for example the Arrow
+Dragon Q6A), the capture buffer is aligned to 128 by 32 before it reaches the encoder,
+which is what that device requires and what removes the padding artefact seen at other
+alignments.
 
 ## Services and authorization
 

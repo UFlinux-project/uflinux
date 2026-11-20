@@ -73,6 +73,7 @@ own bootloader, kernel and root partition.
 - [Build stages, outputs, and source verification](docs/building.md)
 - [Parallel package build validation](docs/parallel-build-validation.md)
 - [Boot-image compression](docs/compression.md)
+- [Memory compression (zram and zswap)](docs/memory-compression.md)
 - [Optimization audit](docs/optimization-audit.md)
 - [Installation and updates](docs/installing.md)
 - [Device disk images for boards and virtual machines](docs/device-images.md)

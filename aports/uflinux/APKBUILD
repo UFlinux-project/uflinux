@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=17
+pkgrel=18
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -10,7 +10,7 @@ depends="uflinux-desktop-meta=$pkgver-r$pkgrel"
 subpackages="uflinux-release:release uflinux-defaults:defaults uflinux-desktop-meta:desktop
 	uflinux-live:live uflinux-live-openrc:live_openrc uflinux-installer:installer
 	uflinux-bootsplash-openrc:bootsplash_openrc uflinux-initramfs:initramfs
-	uflinux-device:device"
+	uflinux-device:device uflinux-zram:zram"
 # Configuration and installer checks are run by scripts/check.py and verify.
 options="!check"
 makedepends="rsvg-convert python3"
@@ -18,7 +18,7 @@ builddir="$srcdir"
 source="uflinux-image-user uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.svg uflinux-entry.svg uflinux-bullet.svg
 	uflinux-boot-assets.py uflinux-splash-original.png plymouthd.conf
 	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-plymouth.files uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-autostart uflinux-theme-sync uflinux-install uflinux-install-gui-backend
-	uflinux-live.initd uflinux-device.initd uflinux.desktop uflinux-logo.svg artwork-NOTICE labwc-rc.xml labwc-menu.xml
+	uflinux-live.initd uflinux-device.initd uflinux-zram.initd uflinux-zram.confd uflinux.desktop uflinux-logo.svg artwork-NOTICE labwc-rc.xml labwc-menu.xml
 	labwc-autostart labwc-environment mako.conf
 	gtk-settings.ini 90-uflinux.gschema.override 45-uflinux-fonts.conf firefox-defaults.js
 	labwc-portals.conf xdg-desktop-portal-wlr-labwc regreet.toml regreet.css greetd-installed.toml greetd-live.toml greetd.pam
@@ -57,6 +57,8 @@ package() {
 	install -Dm755 "$srcdir/uflinux-splash.initd" "$pkgdir/etc/init.d/uflinux-splash"
 	install -Dm755 "$srcdir/uflinux-splash-stop.initd" "$pkgdir/etc/init.d/uflinux-splash-stop"
 	install -Dm755 "$srcdir/uflinux-device.initd" "$pkgdir/etc/init.d/uflinux-device"
+	install -Dm755 "$srcdir/uflinux-zram.initd" "$pkgdir/etc/init.d/uflinux-zram"
+	install -Dm644 "$srcdir/uflinux-zram.confd" "$pkgdir/etc/conf.d/uflinux-zram"
 	install -d "$pkgdir/usr/share/uflinux"
 	install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/uflinux/LICENSE"
 	printf '%s\n' "$pkgver" > "$pkgdir/usr/share/uflinux/version"
@@ -129,6 +131,13 @@ package() {
 	install -Dm644 "$srcdir/45-uflinux-fonts.conf" "$pkgdir/etc/fonts/conf.d/45-uflinux-fonts.conf"
 	install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir/etc/xdg/gtk-3.0/settings.ini"
 	install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir/etc/xdg/gtk-4.0/settings.ini"
+	# Same file under the sysconfdir. Both toolkits read it unconditionally and
+	# ahead of the XDG system dirs, so the layout survives a session (or an app)
+	# that overrides XDG_CONFIG_DIRS, and it is the last system-level layer
+	# before the per-user ~/.config file wins. Neither Alpine gtk package owns
+	# settings.ini in these directories, so there is no file conflict.
+	install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir/etc/gtk-3.0/settings.ini"
+	install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir/etc/gtk-4.0/settings.ini"
 	# GTK's Wayland backend uses GSettings when the desktop schemas are present.
 	install -Dm644 "$srcdir/90-uflinux.gschema.override" "$pkgdir/usr/share/glib-2.0/schemas/90-uflinux.gschema.override"
 	install -Dm644 "$srcdir/greetd-installed.toml" "$pkgdir/etc/greetd/config.toml"
@@ -177,6 +186,7 @@ initramfs() {
 desktop() {
 	pkgdesc="UFLinux minimal desktop dependencies"
 	depends="uflinux-release=$pkgver-r$pkgrel uflinux-defaults=$pkgver-r$pkgrel uflinux-bootsplash-openrc=$pkgver-r$pkgrel
+		uflinux-zram=$pkgver-r$pkgrel
 		xdg-user-dirs labwc uflinux-desktop uflinux-settings uflinux-screencapture gpu-screen-recorder
 		xdg-desktop-portal xdg-desktop-portal-gtk4 xdg-desktop-portal-wlr ptyxis loupe htop mako
 		transmission-gtk celluloid gnome-disk-utility file-roller
@@ -240,6 +250,16 @@ device() {
 	amove etc/init.d/uflinux-device
 }
 
+zram() {
+	pkgdesc="Compressed swap sized from the installed RAM for UFLinux"
+	# No kernel is named here: the module is carried by every kernel the project
+	# ships, and the ISO and each device image choose its own kernel package.
+	# mkswap, swapon, dd, fallocate, awk and modprobe all come from the base
+	# system, so the service needs nothing beyond OpenRC itself.
+	depends="openrc"
+	amove etc/init.d/uflinux-zram etc/conf.d/uflinux-zram
+}
+
 bootsplash_openrc() {
 	pkgdesc="OpenRC startup animation and display handoff for UFLinux"
 	depends="openrc uflinux-defaults=$pkgver-r$pkgrel"
@@ -274,10 +294,12 @@ e7547d393b9489bfaf96ea7f1f580099e8d01487e7a59cc897001032e0f0f424b68d77d21e92ac38
 844131c113ff067ce0ce8be00ea3621a6f04185e5c78b9387dd1f31b7bdaab502442e962cd1b3358118de581461dc0ed21a4c55695f6c31e31dc37692adedf0d  uflinux-compositor
 1d974b858af0c586108515062a832ad31baed68761931396d295b7709b7c70670a99ae58b22a146a72b3323d4199d2f9b531f268a78c7a12213b292ad34a0ae4  uflinux-autostart
 0c37806c49629bb84275ed096c735d37d879483bdf4e1320fdc7ab0a0755bf376544c023227ed1d2321997c27a26128139e1865d6caac291aaf09a145a62c367  uflinux-theme-sync
-0c5a92177630793029a141a60d96432f74a69db19aed44d11d30512046b834a02568de42fb358e237d290e0576357e45bb9f6c7f53caaf7b1a16fa5b8b566914  uflinux-install
+6fd2bb95dc819e1fe16b72963318b391dd4786f17661a0f4243bf64afae66961c01ec3e2554a28392e68cc669036dea22fb9a8557002291be7dbc35cddea3a0e  uflinux-install
 35c122aeebee0d0b1dc0a8156d63745fce0bf66d293900a7d478e8361fe959d686b012bd7caaa0b8ac22ff254e537f009585c0983f504d9c4ed37ce952e323ca  uflinux-install-gui-backend
 7153126defd63a0b0a46cd40080194b8435f751413e9ac97eaa9fc66f81b661d7f5f5b6398931fcab52adac8e609f560dcb461700575f0c84a5d85c36f664ef8  uflinux-live.initd
 e0e40c8867a95ec24e1cabfa7f34e35b69583123f21dbb1ff6409a7a40b69bf67e6072e397a4bc25acab21b4e82f4c332452ea3b6f87e5be9ffed1fbc10e072b  uflinux-device.initd
+e17f8f9264a7dc1dc59176c1bc12f289e7733dab839c9db47da4e8ea06a90396777d046d48e2287689b2da0b4f2fad658cba18abc48dea48ff2ffc8d0545a310  uflinux-zram.initd
+9651bc6bb8e2b7f231c541600d19c47b164cc1bcea8a50c847f128267b3f44e0a058be02f295a1fd5bcd231bc4f51e1706e81ea0808d119aa0cf5ae7abe2747c  uflinux-zram.confd
 e6df4f4a610b45f3426de64299f2fcc0e53691cf4f62a571cc9a3a0c168628042f31ea328e202bcec79d0aa62204e370265b38ea131772c8c548a5b1a19a9d11  uflinux.desktop
 2c4bc926abc85b818305af2c8fcba0aff27d8c307d59fea20415c60c0c47874b63efc3cceccc95ba569587d748d607f54b94c768b66b9642f4e8c6089e180d13  uflinux-logo.svg
 aef715c855631a661e0683fcd6a92a411c3407da3f8bfce0b23dfd2c7ff257767dd935be274f99e93b69df8a8c2eb6b467be6d555c140401b8e879f541b83962  artwork-NOTICE

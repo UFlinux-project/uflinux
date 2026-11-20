@@ -280,6 +280,12 @@ an already damaged card. Preserve data before running offline `fsck.f2fs` or
 reflashing. The old service must also be replaced or disabled before booting a
 repaired card, otherwise it can repeat the unsafe resize.
 
+Device images also enable `uflinux-zram`, which sizes compressed swap from the
+memory the board actually has and picks the compressor from its CPU. On these
+boards that means an LZ4 zram device, plus a `dd`-written `/swapfile` and zswap
+once the board has more than 4 GiB. See
+[memory compression](memory-compression.md).
+
 Every device image ships a regular account: **user / user**. Select the UFLinux
 session at the graphical greeter, or use this account on the text/serial console.
 The account belongs to `wheel`, `audio`, `video`, `input`, `netdev` and, when

@@ -1,0 +1,157 @@
+From 0000000000000000000000000000000000000010 Mon Sep 17 00:00:00 2001
+From: panmourovaty <panmourovaty@centrum.cz>
+Date: Fri, 21 Nov 2026 09:00:00 +0100
+Subject: [PATCH] Encoder: align v4l2 m2m capture for the qualcomm venus
+ encoder
+
+The mem2mem node behind the qcom-venus driver (Arrow Dragon Q6A and the rest
+of the Kailasa boards) only produces correct frames when the raw queue is
+aligned to 128 columns and 32 rows. Anything else comes back padded wrongly,
+which shows up as shifted or green bands in the recording; the ffmpeg
+workaround for it is -vf "pad=ceil(iw/128)*128:ceil(ih/32)*32:0:0,format=nv12".
+
+The backend aligned every queue to 16 and 2, which is what bcm2835-isa,
+rkvenc and mpp want, so the same binary cannot serve both kinds of board.
+Pick the alignment at encoder start from sysfs: use 128/32 when a device is
+bound to qcom-venus and the previous 16/2 otherwise.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ src/encoder/video/v4l2_m2m.c | 89 +++++++++++++++++++++++++++++++++----
+ 1 file changed, 83 insertions(+), 6 deletions(-)
+
+diff --git a/src/encoder/video/v4l2_m2m.c b/src/encoder/video/v4l2_m2m.c
+index 2cd8cc3..8a8651e 100644
+--- a/src/encoder/video/v4l2_m2m.c
++++ b/src/encoder/video/v4l2_m2m.c
+@@ -7,6 +7,12 @@
+ #include <libavutil/frame.h>
+ 
+ #include <stdlib.h>
++#include <string.h>
++
++#include <dirent.h>
++#include <limits.h>
++#include <stdio.h>
++#include <sys/stat.h>
+ 
+ /*
+  * Encoder backend for the ffmpeg v4l2m2m encoders (h264_v4l2m2m, hevc_v4l2m2m) used by
+@@ -19,6 +25,70 @@
+  */
+ 
+ #define LINESIZE_ALIGNMENT 16
++#define HEIGHT_ALIGNMENT 2
++
++/*
++ * The Qualcomm venus encoder (Arrow Dragon Q6A and every other board whose mem2mem node is
++ * bound to the qcom-venus driver) wants a far coarser alignment on the raw queue: frames whose
++ * width is not a multiple of 128 or whose height is not a multiple of 32 come back padded
++ * wrongly, which shows up as shifted or green bands in the recording. Aligning the frame the
++ * way ffmpeg's "pad=ceil(iw/128)*128:ceil(ih/32)*32,format=nv12" workaround does is what the
++ * driver expects. It is detected at runtime because one root filesystem runs on boards with
++ * and without the venus driver.
++ */
++#define VENUS_WIDTH_ALIGNMENT 128
++#define VENUS_HEIGHT_ALIGNMENT 32
++#define VENUS_DRIVER_SYSFS_PATH "/sys/bus/platform/drivers/qcom-venus"
++
++/* A driver directory in sysfs holds one entry per bound device plus its own attribute files.
++   Anything that is not one of those attributes and resolves to a directory is a bound device. */
++static bool venus_driver_has_device(void) {
++    static const char *const driver_attributes[] = { "bind", "unbind", "uevent", "module",
++                                                     "drivers_autoprobe", "parameters" };
++    DIR *dir = opendir(VENUS_DRIVER_SYSFS_PATH);
++    if(!dir)
++        return false;
++
++    bool bound = false;
++    const struct dirent *entry = NULL;
++    while((entry = readdir(dir))) {
++        if(entry->d_name[0] == '.')
++            continue;
++
++        bool is_attribute = false;
++        for(size_t i = 0; i < sizeof(driver_attributes) / sizeof(driver_attributes[0]); ++i) {
++            if(strcmp(entry->d_name, driver_attributes[i]) == 0) {
++                is_attribute = true;
++                break;
++            }
++        }
++        if(is_attribute)
++            continue;
++
++        char path[PATH_MAX];
++        if(snprintf(path, sizeof(path), "%s/%s", VENUS_DRIVER_SYSFS_PATH, entry->d_name) < 0)
++            continue;
++
++        struct stat st;
++        if(stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
++            bound = true;
++            break;
++        }
++    }
++
++    closedir(dir);
++    return bound;
++}
++
++static void capture_alignment(int *width_alignment, int *height_alignment) {
++    if(venus_driver_has_device()) {
++        *width_alignment = VENUS_WIDTH_ALIGNMENT;
++        *height_alignment = VENUS_HEIGHT_ALIGNMENT;
++    } else {
++        *width_alignment = LINESIZE_ALIGNMENT;
++        *height_alignment = HEIGHT_ALIGNMENT;
++    }
++}
+ 
+ /* glReadPixels row stride, in pixels. Not declared by the minimal gl subset in egl.h. */
+ #define GSR_GL_PACK_ROW_LENGTH 0x0D02
+@@ -31,8 +101,8 @@ typedef struct {
+     vec2i texture_sizes[GSR_COLOR_CONVERSION_MAX_DESTINATION_TEXTURES];
+ } gsr_video_encoder_v4l2_m2m;
+ 
+-static bool gsr_video_encoder_v4l2_m2m_setup_textures(gsr_video_encoder_v4l2_m2m *self, AVCodecContext *video_codec_context, AVFrame *frame) {
+-    int res = av_frame_get_buffer(frame, LINESIZE_ALIGNMENT);
++static bool gsr_video_encoder_v4l2_m2m_setup_textures(gsr_video_encoder_v4l2_m2m *self, AVCodecContext *video_codec_context, AVFrame *frame, int frame_alignment) {
++    int res = av_frame_get_buffer(frame, frame_alignment);
+     if(res < 0) {
+         gsr_log(GSR_LOG_LEVEL_ERROR, "gsr_video_encoder_v4l2_m2m_setup_textures: av_frame_get_buffer failed: %d", res);
+         return false;
+@@ -62,13 +132,20 @@ static void gsr_video_encoder_v4l2_m2m_stop(gsr_video_encoder_v4l2_m2m *self, AV
+ static bool gsr_video_encoder_v4l2_m2m_start(gsr_video_encoder *encoder, AVCodecContext *video_codec_context, AVFrame *frame) {
+     gsr_video_encoder_v4l2_m2m *self = encoder->priv;
+ 
+-    video_codec_context->width = FFALIGN(video_codec_context->width, LINESIZE_ALIGNMENT);
+-    video_codec_context->height = FFALIGN(video_codec_context->height, 2);
++    int width_alignment = 0;
++    int height_alignment = 0;
++    capture_alignment(&width_alignment, &height_alignment);
++
++    video_codec_context->width = FFALIGN(video_codec_context->width, width_alignment);
++    video_codec_context->height = FFALIGN(video_codec_context->height, height_alignment);
+ 
+     frame->width = video_codec_context->width;
+     frame->height = video_codec_context->height;
+ 
+-    if(!gsr_video_encoder_v4l2_m2m_setup_textures(self, video_codec_context, frame)) {
++    /* The planes are NV12, so one byte per luma pixel: aligning the buffer to the wider of the
++       two alignments covers both queues. */
++    const int frame_alignment = width_alignment > height_alignment ? width_alignment : height_alignment;
++    if(!gsr_video_encoder_v4l2_m2m_setup_textures(self, video_codec_context, frame, frame_alignment)) {
+         gsr_video_encoder_v4l2_m2m_stop(self, video_codec_context);
+         return false;
+     }
+@@ -107,7 +184,7 @@ static void gsr_video_encoder_v4l2_m2m_copy_textures_to_frame(gsr_video_encoder
+         const gsr_video_encoder_plane_format *plane = &self->texture_format.planes[i];
+ 
+         /* Unlike the software backend, honour the frame's line size. The planes are aligned to
+-           LINESIZE_ALIGNMENT, so reading rows back packed would skew every row after the first
++           the capture alignment, so reading rows back packed would skew every row after the first
+            whenever the driver asks for a wider stride. */
+         const int row_length = plane->bytes_per_pixel > 0 ? frame->linesize[i] / plane->bytes_per_pixel : 0;
+         egl->glPixelStorei(GSR_GL_PACK_ROW_LENGTH, row_length);
+-- 
+2.47.0
+

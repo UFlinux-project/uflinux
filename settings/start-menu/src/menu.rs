@@ -158,6 +158,9 @@ impl Menu {
             detail.add_css_class("dim-label");
             let labels = gtk::Box::new(gtk::Orientation::Vertical, 0);
             labels.set_hexpand(true);
+            // A vertical box stacks from the top, so without this the name sits high in the
+            // 38px row while the icon stays centered.
+            labels.set_valign(gtk::Align::Center);
             labels.append(&label);
             labels.append(&detail);
             row.append(&labels);
