@@ -44,10 +44,8 @@ pub struct Client {
     emit: Rc<dyn Fn(Vpn)>,
 }
 impl Client {
-    pub async fn new(emit: Rc<dyn Fn(Vpn)>) -> Result<Rc<Self>> {
-        let bus = gio::bus_get_future(gio::BusType::System)
-            .await
-            .map_err(|e| e.to_string())?;
+    pub async fn new(system: &gio::DBusConnection, emit: Rc<dyn Fn(Vpn)>) -> Result<Rc<Self>> {
+        let bus = system.clone();
         let this = Rc::new(Self {
             subscriptions: RefCell::new(Vec::new()),
             bus,

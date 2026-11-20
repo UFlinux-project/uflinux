@@ -2,7 +2,7 @@ fn main() {
     // Compatibility for existing user key bindings; the launcher owns its process.
     if std::env::args().any(|arg| arg == "--start-menu") {
         use std::os::unix::process::CommandExt;
-        let error = std::process::Command::new("uflinux-start-menu")
+        let error = std::process::Command::new("uflinux-desktop")
             .args(std::env::args_os().skip(1))
             .exec();
         eprintln!("Could not start the launcher: {error}");

@@ -47,7 +47,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y shellcheck
-          shellcheck -S warning scripts/*.sh profiles/*.sh tests/*.sh aports/uflinux/uflinux-session aports/uflinux/uflinux-autostart aports/uflinux/uflinux-compositor aports/uflinux/uflinux-network-init aports/connman/connman-vpn.initd settings/data/uflinux-acpid.initd settings/data/uflinux-power-button
+          shellcheck -S warning scripts/*.sh profiles/*.sh tests/*.sh settings/scripts/*.sh aports/uflinux/uflinux-session aports/uflinux/uflinux-autostart aports/uflinux/uflinux-compositor aports/uflinux/uflinux-network-init aports/connman/connman-vpn.initd settings/data/uflinux-acpid.initd settings/data/uflinux-power-button
           go install github.com/rhysd/actionlint/cmd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca
           "$(go env GOPATH)/bin/actionlint" -config-file .github/actionlint.yaml .github/workflows/build.yml
       - id: matrix
@@ -69,7 +69,7 @@ jobs:
     env:
       SOURCE_DATE_EPOCH: ${{ needs.checks.outputs.epoch }}
       APK_REPOSITORY_URL: ${{ vars.APK_REPOSITORY_URL }}
-      CARGO_BUILD_JOBS: '1'
+      CARGO_BUILD_JOBS: '${{ matrix.cargo_jobs }}'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

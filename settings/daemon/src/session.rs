@@ -1,4 +1,5 @@
 use crate::{audio, bluetooth, capture, devices, display, network, vpn};
+use futures_util::future::join3;
 use gio::prelude::*;
 use glib::variant::ToVariant;
 use settings_core::{bus, *};
@@ -43,6 +44,16 @@ struct App {
     ddc_pending: Cell<bool>,
     ddc_busy: Cell<bool>,
     ddc_dirty: Cell<bool>,
+    /// A compositor reload is already queued behind the coalescing delay.
+    reconfigure_pending: Cell<bool>,
+    /// Reloads requested while a reload was queued or in flight.
+    reconfigure_dirty: Cell<bool>,
+    /// A clock poll is already in flight; the next one waits for it.
+    clock_pending: Cell<bool>,
+    /// A power read is in flight; events during it are retried once.
+    power_pending: Cell<bool>,
+    /// A power event arrived while a read was in flight.
+    power_dirty: Cell<bool>,
 }
 pub fn run() -> Result<()> {
     if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
@@ -54,12 +65,14 @@ pub fn run() -> Result<()> {
         let appearance=files::read_json(&files::config_dir().join("appearance.json"));
         let screen_capture:ScreenCapture=files::read_json(&files::config_dir().join("screen-capture.json"));
         let screen_capture=capture::validate(&screen_capture).map(|()|screen_capture).unwrap_or_default();
-        let app=Rc::new(App{bus:connection.clone(),system,view:RefCell::new(Snapshot{appearance,screen_capture,datetime:clock::status(),power:power::status(),about:information(),..Snapshot::default()}),
-            network:RefCell::new(None),bluetooth:RefCell::new(None),vpn:RefCell::new(None),audio:RefCell::new(None),audio_retry:Cell::new(false),display:RefCell::new(None),pending:RefCell::new(None),applying:Cell::new(false),publishing:Cell::new(false),restored:Cell::new(false),brightness_pending:Cell::new(false),ddc_pending:Cell::new(false),ddc_busy:Cell::new(false),ddc_dirty:Cell::new(false)});
+        // The snapshot starts from defaults: About, clock, power and brightness are
+        // probed off the main context below and published as soon as they arrive, so
+        // acquiring the bus name never waits for a sysfs or /proc fan-out.
+        let app=Rc::new(App{bus:connection.clone(),system,view:RefCell::new(Snapshot{appearance,screen_capture,..Snapshot::default()}),
+            network:RefCell::new(None),bluetooth:RefCell::new(None),vpn:RefCell::new(None),audio:RefCell::new(None),audio_retry:Cell::new(false),display:RefCell::new(None),pending:RefCell::new(None),applying:Cell::new(false),publishing:Cell::new(false),restored:Cell::new(false),brightness_pending:Cell::new(false),ddc_pending:Cell::new(false),ddc_busy:Cell::new(false),ddc_dirty:Cell::new(false),reconfigure_pending:Cell::new(false),reconfigure_dirty:Cell::new(false),clock_pending:Cell::new(false),power_pending:Cell::new(false),power_dirty:Cell::new(false)});
         app.view.borrow_mut().displays.renderer=std::env::var("UFLINUX_RENDERER").unwrap_or_else(|_|"User-selected / compositor default".into());
         app.view.borrow_mut().displays.hdr_requested=fs::read_to_string(hdr_path()).ok().and_then(|s|files::hdr_requested(&s)).unwrap_or(false);
         app.view.borrow_mut().displays.hdr_status="Labwc applies HDR automatically where supported. Per-monitor activation is not reported by this protocol; mirroring is unavailable.".into();
-        app.view.borrow_mut().displays.brightness=backlights();
         let info=gio::DBusNodeInfo::for_xml(bus::SESSION_XML).map_err(|e|e.to_string())?.interfaces()[0].clone();
         let weak=Rc::downgrade(&app);
         connection.register_object(SESSION_PATH,&info).method_call(move|_,sender,_,_,method,parameters,invocation|{
@@ -89,12 +102,38 @@ pub fn run() -> Result<()> {
             }
         });
         let weak=Rc::downgrade(&app);
-        let network=network::Client::new(Rc::new(move|network|if let Some(app)=weak.upgrade(){app.view.borrow_mut().network=network;app.publish();})).await?;
-        app.network.replace(Some(network));app.start_audio();
+        let network_client=network::Client::new(&app.system,Rc::new(move|network|if let Some(app)=weak.upgrade(){app.view.borrow_mut().network=network;app.publish();}));
         let weak=Rc::downgrade(&app);
-        if let Ok(client)=bluetooth::Client::new(Rc::new(move|bluetooth|if let Some(app)=weak.upgrade(){app.view.borrow_mut().bluetooth=bluetooth;app.publish();})).await {app.bluetooth.replace(Some(client));}
+        let bluetooth_client=bluetooth::Client::new(&app.system,Rc::new(move|bluetooth|if let Some(app)=weak.upgrade(){app.view.borrow_mut().bluetooth=bluetooth;app.publish();}));
         let weak=Rc::downgrade(&app);
-        if let Ok(client)=vpn::Client::new(Rc::new(move|vpn|if let Some(app)=weak.upgrade(){app.view.borrow_mut().vpn=vpn;app.publish();})).await {app.vpn.replace(Some(client));}
+        let vpn_client=vpn::Client::new(&app.system,Rc::new(move|vpn|if let Some(app)=weak.upgrade(){app.view.borrow_mut().vpn=vpn;app.publish();}));
+        // Each client only registers itself with the system bus, so the three
+        // round trips overlap instead of queueing behind each other.
+        let (network,bluetooth,vpn)=join3(network_client,bluetooth_client,vpn_client).await;
+        app.network.replace(Some(network?));app.start_audio();
+        if let Ok(client)=bluetooth {app.bluetooth.replace(Some(client));}
+        if let Ok(client)=vpn {app.vpn.replace(Some(client));}
+        // The About page, the backlight list and the clock are not needed to answer
+        // the first request; reading them inline would hold the bus name and the
+        // first Get for as long as udev, /proc, timedatectl and ConnMan take.
+        {
+            let app = app.clone();
+            glib::MainContext::default().spawn_local(async move {
+                let (about, brightness, datetime) = join3(
+                    gio::spawn_blocking(information),
+                    gio::spawn_blocking(backlights),
+                    clock::status_async(&app.system),
+                )
+                .await;
+                {
+                    let mut view = app.view.borrow_mut();
+                    view.about = about.unwrap_or_else(|_| information());
+                    view.displays.brightness = brightness.unwrap_or_else(|_| backlights());
+                    view.datetime = datetime;
+                }
+                app.publish();
+            });
+        }
         let (send,receive)=async_channel::bounded(16);
         match display::Client::start(send){Ok(client)=>{app.display.replace(Some(client));},Err(error)=>app.view.borrow_mut().error=Some(error)}
         let weak=Rc::downgrade(&app);
@@ -129,9 +168,13 @@ pub fn run() -> Result<()> {
         let initial=app.clone();glib::MainContext::default().spawn_local(async move{
             let appearance=initial.view.borrow().appearance.clone();
             let enabled = appearance.window_previews;
-            if let Err(error) = write_window_previews(enabled) {
-                initial.view.borrow_mut().error = Some(error);
-                initial.publish();
+            match write_window_previews(enabled) {
+                Ok(true) => initial.schedule_reconfigure(),
+                Ok(false) => {}
+                Err(error) => {
+                    initial.view.borrow_mut().error = Some(error);
+                    initial.publish();
+                }
             }
             let _=initial.set_appearance(appearance,false).await;
         });
@@ -143,10 +186,15 @@ pub fn run() -> Result<()> {
         let weak=Rc::downgrade(&app);
         glib::timeout_add_local(Duration::from_secs(15),move||{
             let Some(app)=weak.upgrade() else{return glib::ControlFlow::Break;};
-            let next=clock::status();
-            let changed={let view=app.view.borrow();let old=&view.datetime;
-                old.timezone!=next.timezone||old.time_sync_enabled!=next.time_sync_enabled||old.sntp_running!=next.sntp_running||old.synchronized!=next.synchronized||old.timeservers!=next.timeservers};
-            app.view.borrow_mut().datetime=next;if changed{app.publish();}
+            // timedatectl and ConnMan are both subprocesses, so the poll runs as a
+            // task; a slow clock daemon must not stall the bus for fifteen seconds.
+            if !app.clock_pending.replace(true) {
+                let task = app.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    task.refresh_clock().await;
+                    task.clock_pending.set(false);
+                });
+            }
             app.refresh_power();
             glib::ControlFlow::Continue
         });
@@ -236,12 +284,78 @@ impl App {
             });
         });
     }
-    fn refresh_power(self: &Rc<Self>) {
-        let state = power::status();
-        if self.view.borrow().power != state {
-            self.view.borrow_mut().power = state;
+    /// Reloads the compositor once for a burst of requests. The saved file is the
+    /// source of truth, so a failed reload is reported but cannot undo a save.
+    fn schedule_reconfigure(self: &Rc<Self>) {
+        self.reconfigure_dirty.set(true);
+        if self.reconfigure_pending.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(Duration::from_millis(40), move || {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            app.reconfigure_pending.set(false);
+            if !app.reconfigure_dirty.replace(false) {
+                return;
+            }
+            glib::MainContext::default().spawn_local(async move {
+                let result =
+                    match gio::spawn_blocking(|| reconfigure_compositor(compositor_pid())).await {
+                        Ok(result) => result,
+                        Err(_) => reconfigure_compositor(compositor_pid()),
+                    };
+                if let Err(error) = result {
+                    eprintln!("uflinux-settingsd: {error}");
+                }
+            });
+        });
+    }
+    /// Re-reads the clock without blocking the main context on timedatectl or ConnMan.
+    async fn refresh_clock(self: &Rc<Self>) {
+        let next = clock::status_async(&self.system).await;
+        let changed = {
+            let view = self.view.borrow();
+            let old = &view.datetime;
+            old.timezone != next.timezone
+                || old.time_sync_enabled != next.time_sync_enabled
+                || old.sntp_running != next.sntp_running
+                || old.synchronized != next.synchronized
+                || old.timeservers != next.timeservers
+        };
+        self.view.borrow_mut().datetime = next;
+        if changed {
             self.publish();
         }
+    }
+    fn refresh_power(self: &Rc<Self>) {
+        // A udev burst, a resume or a TLP daemon restart can raise a dozen events;
+        // the sysfs fan-out runs once for all of them, away from the main context.
+        if self.power_pending.replace(true) {
+            self.power_dirty.set(true);
+            return;
+        }
+        let app = self.clone();
+        glib::MainContext::default().spawn_local(async move {
+            loop {
+                let state = match gio::spawn_blocking(power::status).await {
+                    Ok(state) => state,
+                    // The blocking pool only drops a task if its own thread died.
+                    Err(_) => power::status(),
+                };
+                if app.view.borrow().power != state {
+                    app.view.borrow_mut().power = state;
+                    app.publish();
+                }
+                // An event raised while this read ran still needs fresh values, so
+                // the flag is cleared only after the read it refers to has finished.
+                if !app.power_dirty.replace(false) {
+                    app.power_pending.set(false);
+                    return;
+                }
+            }
+        });
     }
     fn publish(self: &Rc<Self>) {
         if self.publishing.replace(true) {
@@ -313,7 +427,12 @@ impl App {
         match &action {
             Action::Refresh => {
                 self.view.borrow_mut().error = None;
-                self.view.borrow_mut().about = information();
+                // About reads /proc and several sysfs trees; keep it off the main context.
+                let about = match gio::spawn_blocking(information).await {
+                    Ok(about) => about,
+                    Err(_) => information(),
+                };
+                self.view.borrow_mut().about = about;
                 if let Some(network) = self.network.borrow().clone() {
                     let _ = network.reload().await;
                 }
@@ -323,7 +442,7 @@ impl App {
                 if let Some(vpn) = self.vpn.borrow().clone() {
                     let _ = vpn.reload().await;
                 }
-                self.view.borrow_mut().datetime = clock::status();
+                self.refresh_clock().await;
                 self.refresh_power();
                 self.queue_brightness(true);
                 self.publish();
@@ -680,7 +799,9 @@ impl App {
                     "HDR needs the Vulkan renderer; log in using hardware Vulkan first".into(),
                 );
             }
-            write_hdr(hdr)?;
+            if write_hdr(hdr)? {
+                self.schedule_reconfigure();
+            }
         }
         if let Err(error) = client.apply(outputs).await {
             restore_xml(&path, &previous_xml)?;
@@ -851,7 +972,9 @@ impl App {
             persist && self.view.borrow().appearance.window_previews != appearance.window_previews;
         if update_switcher {
             let enabled = appearance.window_previews;
-            write_window_previews(enabled)?;
+            if write_window_previews(enabled)? {
+                self.schedule_reconfigure();
+            }
         }
         if persist {
             if let Err(error) = files::save_json(
@@ -874,30 +997,32 @@ impl App {
 fn hdr_path() -> PathBuf {
     files::config_dir().parent().unwrap().join("labwc/rc.xml")
 }
-fn write_window_previews(enabled: bool) -> Result<()> {
+/// Rewrites the thumbnail switcher setting. Returns whether the file changed and
+/// the compositor should be reloaded; the reload itself is coalesced by the caller.
+fn write_window_previews(enabled: bool) -> Result<bool> {
     let path = hdr_path();
     let previous = fs::read(&path).ok();
     let source = match fs::read_to_string(&path) {
         Ok(source) => source,
         // The distribution configuration already enables thumbnails. Avoid
         // creating a personal configuration just to repeat the default.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && enabled => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && enabled => return Ok(false),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "<labwc_config/>".into(),
         Err(_) => return Err("Cannot read your labwc configuration".into()),
     };
     let xml = files::set_window_previews_xml(&source, enabled)?;
     if xml == source {
-        return Ok(());
+        return Ok(false);
     }
-    files::atomic(&path, xml.as_bytes(), 0o600)?;
-    if let Err(error) = reconfigure_compositor(compositor_pid()) {
+    if let Err(error) = files::atomic(&path, xml.as_bytes(), 0o600) {
         let _ = restore_xml(&path, &previous);
         return Err(error);
     }
-    Ok(())
+    Ok(true)
 }
-fn write_hdr(enabled: bool) -> Result<()> {
+fn write_hdr(enabled: bool) -> Result<bool> {
     let path = hdr_path();
+    let previous = fs::read(&path).ok();
     let xml = match fs::read_to_string(&path) {
         Ok(xml) => xml,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -906,8 +1031,11 @@ fn write_hdr(enabled: bool) -> Result<()> {
         Err(_) => return Err("Cannot read your labwc configuration".into()),
     };
     let xml = files::set_hdr_xml(&xml, enabled)?;
-    files::atomic(&path, xml.as_bytes(), 0o600)?;
-    reconfigure_compositor(compositor_pid())
+    if let Err(error) = files::atomic(&path, xml.as_bytes(), 0o600) {
+        let _ = restore_xml(&path, &previous);
+        return Err(error);
+    }
+    Ok(true)
 }
 /// labwc reloads its configuration when it is signalled through the identifier
 /// a session exports at startup, so a missing or stale identifier means there

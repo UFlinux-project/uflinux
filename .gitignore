@@ -15,7 +15,6 @@
 !/settings/daemon/src/vpn.rs
 !/settings/ui/
 !/settings/screencapture/
-!/settings/install-core/
 !/settings/core/
 /settings/core/*
 !/settings/core/src/

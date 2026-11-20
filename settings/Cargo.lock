@@ -1059,7 +1059,6 @@ name = "uflinux-desktop"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "cc",
  "futures-util",
  "gdk-pixbuf",
  "gio",
@@ -1068,7 +1067,6 @@ dependencies = [
  "gtk4",
  "gtk4-layer-shell",
  "libc",
- "pkg-config",
  "serde",
  "serde_json",
  "settings-core",
@@ -1128,6 +1126,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "cc",
+ "futures-util",
  "gdk-pixbuf",
  "gio",
  "glib",

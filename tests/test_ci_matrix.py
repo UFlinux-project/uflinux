@@ -78,6 +78,19 @@ class MatrixTests(unittest.TestCase):
         for job in jobs:
             self.assertEqual(job['runner'],ci.arches[job['arch']]['runner'])
 
+    def test_native_architectures_compile_with_more_cargo_jobs_than_emulated_ones(self):
+        # Native runners have spare cores; the QEMU-emulated ones do not, and an
+        # over-subscribed emulator is slower than a serialized build.
+        expected={'x86_64':4,'aarch64':4,'x86':2,'armv7':2,'ppc64le':2,'riscv64':2}
+        self.assertEqual({arch:config['jobs'] for arch,config in ci.arches.items()},expected)
+        for full,selected in ((False,{'x86_64'}),(True,set(expected))):
+            result=ci.configuration('workflow_dispatch','refs/heads/main',full)
+            self.assertEqual({job['arch']:job['cargo_jobs'] for job in result['matrix']['include']},
+                             {arch:expected[arch] for arch in selected})
+            self.assertEqual({job['arch'] for job in result['packages']['include']},selected)
+            for job in result['packages']['include']:
+                self.assertEqual(job['cargo_jobs'],expected[job['arch']])
+
     def test_each_architecture_has_seven_independent_jobs(self):
         for event,ref,full,count in [('pull_request','refs/heads/main',False,7),
                                      ('workflow_dispatch','refs/heads/main',True,42)]:

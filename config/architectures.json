@@ -2,31 +2,37 @@
   "x86": {
     "runner": "ubuntu-26.04",
     "qemu_user": "i386",
-    "machine": "pc"
+    "machine": "pc",
+    "jobs": 2
   },
   "x86_64": {
     "runner": "ubuntu-26.04",
     "qemu_user": "x86_64",
-    "machine": "q35"
+    "machine": "q35",
+    "jobs": 4
   },
   "aarch64": {
     "runner": "ubuntu-26.04-arm",
     "qemu_user": "aarch64",
-    "machine": "virt"
+    "machine": "virt",
+    "jobs": 4
   },
   "armv7": {
     "runner": "ubuntu-26.04-arm",
     "qemu_user": "arm",
-    "machine": "virt"
+    "machine": "virt",
+    "jobs": 2
   },
   "ppc64le": {
     "runner": "ubuntu-26.04",
     "qemu_user": "ppc64le",
-    "machine": "pseries"
+    "machine": "pseries",
+    "jobs": 2
   },
   "riscv64": {
     "runner": "ubuntu-26.04",
     "qemu_user": "riscv64",
-    "machine": "virt"
+    "machine": "virt",
+    "jobs": 2
   }
 }

@@ -902,7 +902,10 @@ class Builder:
             (source / "uflinux-settings" / f"uflinux-settings-{settings_version}.tar").write_bytes(settings_source)
             (self.cache / "downloads" / (settings_digest + ".tar")).write_bytes(settings_source)
         env = {"CARGO_HOME": "/cache/cargo", "CARGO_TARGET_DIR": "/cache/target",
-               "CARGO_BUILD_JOBS": os.environ.get("CARGO_BUILD_JOBS", "1")}
+               # Emulated architectures pay a large per-CRU cost under QEMU, so the
+               # fan-out is configured per architecture rather than globally.
+               "CARGO_BUILD_JOBS": os.environ.get(
+                   "CARGO_BUILD_JOBS", str(ARCHES[self.args.arch]["jobs"]))}
         if getattr(self.args, "settings_pgo", False):
             env["UFLINUX_SETTINGS_PGO"] = "1"
             profiles = "/cache/target/settings-training"

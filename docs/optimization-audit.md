@@ -100,18 +100,19 @@ an application that was never running does not save its imagined idle RSS.
 
 ### 4. Make clock refresh asynchronous
 
-`settings/daemon/src/session.rs:144` calls `clock::status()` on the GLib event
-loop every 15 seconds. That function, in `settings/core/src/clock.rs:96`, makes
-two synchronous ConnMan requests, each with a 2,000 ms timeout. A stalled
-ConnMan can therefore consume roughly four seconds in those requests while
-the Settings service cannot process other work on its event loop.
+`settings/daemon/src/session.rs` used to call `clock::status()` on the GLib event
+loop every 15 seconds. That function makes two synchronous ConnMan requests, each
+with a 2,000 ms timeout, so a stalled ConnMan could consume roughly four seconds
+while the Settings service could not process other work on its event loop.
 
-Reuse the service's system-bus connection, use asynchronous calls or one bounded
-background refresh, and cache clock/service properties from ConnMan signals.
-Keep a modest reconciliation timer for kernel synchronization state and missed
-events. Prevent overlapping refreshes and preserve the last useful snapshot.
-Test with an intentionally unresponsive ConnMan fixture while measuring other
-Settings request latencies. [GIO documents that `call_sync` blocks its caller](https://docs.gtk.org/gio/method.DBusConnection.call_sync.html).
+The daemon now reuses the system-bus connection it already holds and calls
+`clock::status_async()`, which issues both ConnMan requests asynchronously and
+reads the kernel and configuration state on the blocking pool. The 15 second
+timer is kept for kernel synchronization state and missed events, and a pending
+flag prevents overlapping refreshes; the previous snapshot stays visible until a
+better one arrives. Caching clock and service properties from ConnMan signals,
+instead of polling, remains open. [GIO documents that `call_sync` blocks its
+caller](https://docs.gtk.org/gio/method.DBusConnection.call_sync.html).
 
 ### 5. Move wallpaper loading out of painting
 
@@ -189,23 +190,23 @@ each application opts in itself, and nothing in the image does.
 
 ### 9. Tune build throughput with measured comparisons
 
-`.github/workflows/build.yml:72` sets `CARGO_BUILD_JOBS=1` for every compile job.
+`config/architectures.json` now carries a per-architecture `jobs` value, and
+`.github/workflows/build.yml` passes it as `CARGO_BUILD_JOBS`, so native
+compiles use four compiler workers while the emulated architectures stay at two.
 `aports/uflinux-settings/APKBUILD:22` overrides the workspace's ThinLTO with fat
-LTO in packaged builds. Native builds may benefit from additional compiler
-workers and ThinLTO; emulated jobs need their own memory/concurrency limits.
+LTO in packaged builds, and the PGO training workloads in
+`settings/scripts/pgo-build.sh` run three at a time between the phase barriers.
 
-Compare one versus two workers on native runners, then compare fat versus thin
-LTO using clean build time, peak RAM, binary/APK size, desktop latency, and the
-existing reproducibility checks. Retain architecture portability and source
-verification. This is a build-time opportunity; a desktop runtime speedup has
-not been demonstrated.
+Compare fat versus thin LTO using clean build time, peak RAM, binary/APK size,
+desktop latency, and the existing reproducibility checks. Retain architecture
+portability and source verification. This is a build-time opportunity; a desktop
+runtime speedup has not been demonstrated.
 
 ## Recommended first implementation
 
-Start with asynchronous clock refresh and per-device firmware lists: both have
-specific causes and bounded scope. The shared firmware list already covers the
-generic PC case, so the remaining firmware work is a small VM and board list.
-Follow with wallpaper loading and an optional
+Start with per-device firmware lists: it has a specific cause and bounded scope.
+The shared firmware list already covers the generic PC case, so the remaining
+firmware work is a small VM and board list. Follow with wallpaper loading and an optional
 small desktop profile. Treat the compressed live root as a separate prototype.
 
 The unified desktop, on-demand screen capture, capped/on-demand preview capture,

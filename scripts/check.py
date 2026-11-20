@@ -16,6 +16,10 @@ arches = json.loads((ROOT / "config/architectures.json").read_text())
 lock = json.loads((ROOT / "config/sources.lock.json").read_text())
 assert set(arches) == set(lock["rootfs"])
 assert set(arches) == {"x86", "x86_64", "aarch64", "armv7", "ppc64le", "riscv64"}
+for architecture, config in arches.items():
+    jobs = config["jobs"]
+    assert isinstance(jobs, int) and not isinstance(jobs, bool) and jobs > 0, \
+        f"{architecture} needs a positive integer jobs count"
 devices = json.loads((ROOT / "config/devices.json").read_text())
 device_lock = json.loads((ROOT / "config/devices.lock.json").read_text())
 assert device_lock["schema"] == 1

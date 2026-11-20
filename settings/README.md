@@ -8,10 +8,11 @@ its ConnMan subscription alive. Authentication uses libpolkit-agent-1 and PAM.
 
 Open `uflinux-settings`, use `--page network|displays|audio|power|default-apps|datetime|appearance|screen-capture|about`,
 or `--panel network|sound|power --output DP-1` for the taskbar menus.
-`--quick-settings` remains an alias for the Network panel. The separate resident `uflinux-start-menu
-[--output DP-1]` toggles the ArcMenu-inspired launcher. It prepares its fixed
+`--quick-settings` remains an alias for the Network panel. The separate resident
+launcher runs as `uflinux-desktop start-menu [--output DP-1]`, toggling the
+ArcMenu-inspired launcher. It prepares its fixed
 favorites and application search while hidden at login. The old Settings
-`--start-menu` option forwards to this launcher for compatibility.
+`--start-menu` option forwards to that launcher for compatibility.
 Either Super key toggles Start; Super+I opens Settings. CLI hotkeys use
 `uflinux-settingsctl volume 5`, `brightness -5`, and `mute`. `status` prints JSON.
 `request` reads one typed JSON request from standard input; passwords must never

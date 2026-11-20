@@ -20,8 +20,10 @@ def configuration(event, ref, full=False, device_builds=False):
     # Ordinary commits smoke-test x86_64 only; releases and a full-matrix manual
     # dispatch cover every architecture.
     selected = list(arches) if release or full else ["x86_64"]
-    matrix = {"include": [{"arch": arch, "runner": arches[arch]["runner"]} for arch in selected]}
+    matrix = {"include": [{"arch": arch, "runner": arches[arch]["runner"],
+                           "cargo_jobs": arches[arch]["jobs"]} for arch in selected]}
     packages = {"include": [{"arch": arch, "runner": arches[arch]["runner"], "package": package,
+                             "cargo_jobs": arches[arch]["jobs"],
                              "settings_pgo": release and package == "uflinux-settings" and arch in {"x86_64", "aarch64"}}
                              for arch in selected for package in PACKAGE_NAMES]}
     # Only the x86_64 ISO is boot-tested, in both firmware modes, whatever the
