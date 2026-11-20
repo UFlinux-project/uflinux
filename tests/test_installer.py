@@ -112,22 +112,42 @@ class InstallerTests(unittest.TestCase):
             prompt.assert_not_called()
 
     def test_clean_overlay_excludes_live_credentials(self):
+        live_world = "alpine-base\nuflinux\nuflinux-live\nlinux-firmware-ath11k\nlinux-firmware-i915\n"
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             original_read = Path.read_text
             def read(path, *args, **kwargs):
                 if str(path) == "/usr/share/uflinux/repositories":
                     return "https://example.org/apk\n"
+                if str(path) == "/etc/apk/world":
+                    return live_world
                 return original_read(path, *args, **kwargs)
             with patch.object(Path, "read_text", read), patch.object(Path, "glob", return_value=[]):
                 installer.make_overlay(root, self.args("/mnt"))
             self.assertEqual((root / "etc/shadow").read_text(), "root:!:19000:0:99999:7:::\n")
             world = (root / "etc/apk/world").read_text().splitlines()
             self.assertNotIn("live", world)
-            self.assertIn("linux-firmware", world)
-            self.assertNotIn("linux-firmware-none", world)
+            self.assertIn("linux-firmware-ath11k", world)
+            self.assertIn("linux-firmware-i915", world)
             self.assertFalse((root / "etc/runlevels/default/uflinux-live").exists())
             self.assertEqual((root / "etc/runlevels/default/greetd").readlink(), Path("/etc/init.d/greetd"))
+
+    def test_overlay_falls_back_to_the_firmware_metapackage(self):
+        # The installer can run outside a live image, where there is no live
+        # world to copy; the installed system must still get firmware.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original_read = Path.read_text
+            def read(path, *args, **kwargs):
+                if str(path) == "/etc/apk/world":
+                    raise FileNotFoundError(path)
+                if str(path) == "/usr/share/uflinux/repositories":
+                    return "https://example.org/apk\n"
+                return original_read(path, *args, **kwargs)
+            with patch.object(Path, "read_text", read), patch.object(Path, "glob", return_value=[]):
+                installer.make_overlay(root, self.args("/mnt"))
+            world = (root / "etc/apk/world").read_text().splitlines()
+            self.assertIn("linux-firmware", world)
 
     def test_overlay_world_names_a_browser_the_architecture_has(self):
         # Alpine has no riscv64 firefox, so an installed riscv64 system must
@@ -135,7 +155,8 @@ class InstallerTests(unittest.TestCase):
         def world_for(arch):
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                with patch.object(Path, "glob", return_value=[]):
+                with patch.object(Path, "glob", return_value=[]), \
+                     patch.object(installer, "firmware_world", return_value="linux-firmware\n"):
                     installer.make_overlay(root, self.args("/mnt", arch=arch),
                                            "https://example.org/apk\n")
                 return (root / "etc/apk/world").read_text().splitlines()

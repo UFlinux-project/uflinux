@@ -212,9 +212,26 @@ def browser_world(arch):
     return "firefox\nublock-origin\n"
 
 
+def firmware_world():
+    """The firmware lines of etc/apk/world, carried over from the live system.
+
+    The live image names Alpine's firmware subpackages instead of the
+    linux-firmware metapackage, which pins the Snapdragon-only
+    linux-firmware-qcom, so the installed system mirrors whatever the running
+    image selected. Falling back to the metapackage keeps firmware present even
+    when the installer runs outside a live image.
+    """
+    try:
+        world = Path("/etc/apk/world").read_text()
+    except OSError:
+        return "linux-firmware\n"
+    kept = sorted({line for line in world.split() if line.startswith("linux-firmware")})
+    return "".join(line + "\n" for line in kept) or "linux-firmware\n"
+
+
 def make_overlay(directory, args, repositories=None, uefi=False):
     write(directory, "etc/hostname", args.hostname + "\n")
-    world = "alpine-base\nuflinux\nxfsprogs\nlinux-firmware\n"
+    world = "alpine-base\nuflinux\nxfsprogs\n" + firmware_world()
     if args.arch in {"x86", "x86_64", "aarch64", "armv7", "ppc64le", "riscv64"}:
         world += browser_world(args.arch)
     if uefi:

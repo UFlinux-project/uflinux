@@ -137,6 +137,23 @@ def browser_packages(arch):
     return ["firefox", "ublock-origin"]
 
 
+FIRMWARE_PACKAGES = tuple(
+    line for line in (PROJECT / "config/firmware-packages.txt").read_text().splitlines()
+    if line and not line.startswith("#"))
+
+
+def firmware_packages():
+    """The Alpine firmware subpackages an image installs.
+
+    Alpine's linux-firmware metapackage pins every vendor, so asking for it
+    always drags in linux-firmware-qcom: 163 MiB of Snapdragon board blobs that
+    no PC uses and that pushed the release ISO past GitHub's per-asset limit.
+    Listing the subpackages keeps that space for the Arrow Dragon Q6A image,
+    which names linux-firmware-qcom itself in config/devices.json.
+    """
+    return list(FIRMWARE_PACKAGES)
+
+
 def device_packages(device, arch):
     """Everything the device rootfs needs beyond the live system's package set."""
     packages = ["uflinux-desktop-meta", "uflinux-device"] + list(device["packages"])
@@ -145,7 +162,8 @@ def device_packages(device, arch):
                  "labwc-lang", "vulkan-loader", "xfsprogs"]
     packages += browser_packages(arch)
     packages += ["alpine-base", "apk-tools", "zstd", "util-linux", "dosfstools", "mtools",
-                 "e2fsprogs", "e2fsprogs-extra", "cloud-utils-growpart", "linux-firmware"]
+                 "e2fsprogs", "e2fsprogs-extra", "cloud-utils-growpart"]
+    packages += firmware_packages()
     # Keep f2fs-tools available for diagnosis and offline maintenance. Mounted
     # F2FS roots must not be expanded by the first-boot service.
     if device.get("rootfs", "ext4") == "f2fs":

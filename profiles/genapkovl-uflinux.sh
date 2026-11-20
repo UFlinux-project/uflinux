@@ -19,7 +19,9 @@ $serial::respawn:/sbin/getty -L 115200 $serial vt100
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/sbin/openrc shutdown
 EOF
-printf '%s\n' alpine-base uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang linux-firmware > "$tmp/etc/apk/world"
+# The firmware list replaces Alpine's metapackage, which pins the Snapdragon-only
+# linux-firmware-qcom; see config/firmware-packages.txt.
+printf '%s\n' alpine-base uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang $(grep -v '^#' /project/config/firmware-packages.txt) > "$tmp/etc/apk/world"
 case "$ARCH" in
 	x86|x86_64|aarch64|armv7|riscv64) printf '%s\n' efibootmgr >> "$tmp/etc/apk/world" ;;
 esac

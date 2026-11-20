@@ -8,8 +8,10 @@ Board images for Raspberry Pi, QCOM, SpacemiT K1 and virtual machines skip this
 page entirely: they are written to the whole disk and already installed, see
 [device images](device-images.md).
 The live desktop and its core packages boot from the media without a network.
-The live image and installed system include Alpine’s full `linux-firmware`
-collection, which increases image size and live-session RAM use. Installation
+The live image and installed system include Alpine’s `linux-firmware` collection
+except the Snapdragon-only `linux-firmware-qcom`, which only ships in the Arrow
+Dragon Q6A device image; see [the firmware list](../config/firmware-packages.txt).
+Installation
 uses the signed media repository by default. Add
 `--online` to allow official Alpine mirrors for packages absent from the media.
 
@@ -82,7 +84,7 @@ reported failure and clean/reprepare the target before retrying.
 
 The installed initramfs includes the graphics drivers active during installation
 and their dependencies, limiting the firmware needed for early graphics. Other
-drivers and the full firmware collection remain available after the root filesystem
+drivers and the rest of the firmware collection remain available after the root filesystem
 mounts. If the graphics hardware changes, the system may use the firmware
 framebuffer during early boot; reinstalling or updating
 `/etc/mkinitfs/features.d/uflinux-graphics.modules` and rebuilding the initramfs
