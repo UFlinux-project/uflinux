@@ -169,7 +169,11 @@ defaults() {
 	replaces="plymouth greetd greetd-agreety-config connman connman-openrc iwd busybox-openrc"
 	replaces_priority=100
 	amove usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init usr/libexec/uflinux-image-user
-	amove etc/fonts etc/rc.conf.d etc/xdg etc/greetd etc/pam.d etc/connman etc/iwd etc/conf.d usr/bin \
+	# Split functions run in $subpackages order and amove claims whole
+	# directories, so etc/conf.d is named per-file: amoving the directory
+	# here would delete etc/conf.d/uflinux-zram before the later zram()
+	# split can claim it.
+	amove etc/fonts etc/rc.conf.d etc/xdg etc/greetd etc/pam.d etc/connman etc/iwd etc/conf.d/connman usr/bin \
 		usr/share/wayland-sessions usr/share/backgrounds usr/share/themes usr/share/dbus-1 \
 		usr/share/icons usr/share/glib-2.0/schemas usr/lib/firefox usr/lib/firefox-esr usr/share/licenses/uflinux-defaults
 }
