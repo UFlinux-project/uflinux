@@ -84,6 +84,9 @@ fn fill(
         if !node.children.is_empty() || string(node, "children-display") == "submenu" {
             let button = gtk::MenuButton::new();
             button.set_label(&label);
+            // dbusmenu labels carry menu accelerators as "_F", so they must be read as
+            // mnemonics. Without this the underscore is drawn literally.
+            button.set_use_underline(true);
             button.set_sensitive(enabled);
             let popover = gtk::Popover::new();
             let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -95,7 +98,7 @@ fn fill(
         }
         let toggle_type = string(node, "toggle-type");
         if toggle_type == "checkmark" || toggle_type == "radio" {
-            let check = gtk::CheckButton::with_label(&label);
+            let check = gtk::CheckButton::with_mnemonic(&label);
             check.set_sensitive(enabled);
             if toggle_type == "radio" {
                 if let Some(group) = radio_group.as_ref() {
@@ -125,13 +128,17 @@ fn fill(
             });
             container.append(&check);
         } else {
-            let button = gtk::Button::with_label(&label);
+            let button = gtk::Button::with_mnemonic(&label);
             button.set_sensitive(enabled);
             let icon = string(node, "icon-name");
             if !icon.is_empty() {
+                // Replacing the child replaces the button's own label, so the row label has to
+                // carry the mnemonic itself and point it back at the button.
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+                let text = gtk::Label::with_mnemonic(&label);
+                text.set_mnemonic_widget(Some(&button));
                 row.append(&gtk::Image::from_icon_name(&icon));
-                row.append(&gtk::Label::new(Some(&label)));
+                row.append(&text);
                 button.set_child(Some(&row));
             }
             let bus = bus.clone();
