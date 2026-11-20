@@ -206,7 +206,7 @@ def main():
             guest(child, "df -h /; df -i /")
             guest(child, "test -e /run/uflinux-live; test $(id -un) = root; ! rc-service sshd status")
             guest(child, "apk info -e uflinux uflinux-desktop labwc")
-            guest(child, '. /etc/rc.conf.d/uflinux.conf; test "$rc_parallel" = YES; apk info -e linux-firmware')
+            guest(child, '. /etc/rc.conf.d/uflinux.conf; test "$rc_parallel" = YES; apk info -e linux-firmware-i915 linux-firmware-amdgpu linux-firmware-ath11k')
             guest(child, "test -x /usr/bin/uflinux-desktop")
             guest(child, "apk info -e connman iwd busybox-openrc uflinux-settings uflinux-settings-daemon uflinux-settings-system; connmanctl state; connmanctl services; ! pgrep -x ntpd; ! pgrep -x NetworkManager; ! pgrep -x chronyd; ! pgrep -x openntpd; ! pgrep -x wpa_supplicant")
             guest(child, "for n in $(seq 1 30); do pgrep -x labwc >/dev/null && pgrep -f '[u]flinux-desktop --daemon' >/dev/null && break; sleep 1; done; if ! pgrep -x labwc || ! pgrep -f '[u]flinux-desktop --daemon'; then rc-status; cat /var/log/messages; exit 1; fi")
@@ -255,7 +255,7 @@ def main():
             child.close()
             child = start(args, state, log, installed=True)
             login(child, "alice", "uflinux-test-password")
-            guest(child, "awk '$2 == \"/\" && $3 == \"xfs\" {ok=1} END {exit !ok}' /proc/mounts; test ! -e /run/uflinux-live; ! id live; apk info -e uflinux uflinux-desktop labwc linux-firmware", admin=False)
+            guest(child, "awk '$2 == \"/\" && $3 == \"xfs\" {ok=1} END {exit !ok}' /proc/mounts; test ! -e /run/uflinux-live; ! id live; apk info -e uflinux uflinux-desktop labwc linux-firmware-i915 linux-firmware-amdgpu linux-firmware-ath11k", admin=False)
             # Authenticate doas normally before invoking the root-only test harness.
             guest(child, '. /etc/rc.conf.d/uflinux.conf; test "$rc_parallel" = YES', admin=False)
             child.sendline("doas true")

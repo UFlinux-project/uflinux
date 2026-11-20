@@ -265,6 +265,33 @@ class DesktopDependencyTests(unittest.TestCase):
                              "the EFI image leaves too much FAT32 slack in the ISO")
         self.assertIn('rm -f "$DESTDIR"/boot/System.map-* "$DESTDIR"/boot/config-*', iso_function)
 
+    def test_firmware_list_keeps_the_release_asset_off_the_metapackage(self):
+        # Alpine's linux-firmware metapackage pins every vendor, including the
+        # 163 MiB Snapdragon-only linux-firmware-qcom, so the ISO and the device
+        # images list subpackages from config/firmware-packages.txt instead. The
+        # profile and the overlay must read that one file, and the Qualcomm SoC
+        # blobs may only come back through the Dragon Q6A device config.
+        listing = Path(builder.PROJECT / "config/firmware-packages.txt").read_text()
+        self.assertEqual(builder.firmware_packages(), list(builder.FIRMWARE_PACKAGES))
+        self.assertIn("linux-firmware-qcom", builder.DEVICES["qcs6490"]["packages"])
+        for name in builder.FIRMWARE_PACKAGES:
+            self.assertTrue(name.startswith("linux-firmware-"), name)
+        self.assertNotIn("linux-firmware-qcom", builder.FIRMWARE_PACKAGES)
+        # Qualcomm M.2 Wi-Fi and Bluetooth live outside the qcom subpackage.
+        for name in ("linux-firmware-ath10k", "linux-firmware-ath11k", "linux-firmware-ath12k",
+                     "linux-firmware-qca", "linux-firmware-ar3k"):
+            self.assertIn(name, builder.FIRMWARE_PACKAGES, f"{name} would lose its firmware")
+        for profile in ("profiles/mkimg.uflinux.sh", "profiles/genapkovl-uflinux.sh"):
+            text = (Path(builder.PROJECT) / profile).read_text()
+            self.assertIn("grep -v '^#' /project/config/firmware-packages.txt", text,
+                          f"{profile} does not use the shared firmware list")
+            self.assertNotIn(" linux-firmware ", text + " ",
+                             f"{profile} still asks for the firmware metapackage")
+        for line in listing.splitlines():
+            if line.startswith("#"):
+                continue
+            self.assertIn(line, builder.FIRMWARE_PACKAGES)
+
     def test_iso_profile_picks_a_browser_every_architecture_has(self):
         # Alpine builds firefox for every target architecture except riscv64,
         # which only gets firefox-esr; ublock-origin installs into

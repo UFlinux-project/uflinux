@@ -2,10 +2,12 @@
 # These variables are consumed by the upstream mkimage plugin loader.
 profile_uflinux() {
 	profile_standard
-	# Retain upstream boot support, but keep competing network/clock stacks off media.
+	# Retain upstream boot support, but keep competing network/clock stacks and
+	# the firmware metapackage off media: profile_standard asks for the whole
+	# collection, which pins the Snapdragon-only linux-firmware-qcom.
 	local selected="" package
 	for package in $apks; do
-		case "$package" in chrony|openntpd|dhcpcd|wpa_supplicant|network-extras|tiny-cloud-alpine) ;; *) selected="$selected $package" ;; esac
+		case "$package" in chrony|openntpd|dhcpcd|wpa_supplicant|network-extras|tiny-cloud-alpine|linux-firmware|linux-firmware-none) ;; *) selected="$selected $package" ;; esac
 	done
 	apks="$selected"
 	title="UFLinux"
@@ -18,14 +20,15 @@ profile_uflinux() {
 	# Keep profile_standard's architecture-specific console and boot configuration.
 	kernel_addons=""
 	initfs_features="$initfs_features kms xfs uflinux-plymouth"
-	# The diskless live root includes Alpine's full firmware collection.
+	# Alpine's firmware metapackage pins every vendor, so the list that keeps the
+	# Snapdragon-only blobs off the release ISO is shared with the profile.
 	initfs_cmdline="$initfs_cmdline rootflags=mode=0755,size=75%"
 	# Boot straight past the loader menu with minimal console chatter; warnings
 	# and errors still reach the serial log. Hold a key before the loader
 	# initializes to bring the systemd-boot menu up on demand.
 	kernel_cmdline="$kernel_cmdline quiet"
 	modloop_addons="$modloop_addons uflinux-initramfs"
-	apks="$apks uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang linux-lts linux-firmware
+	apks="$apks uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang linux-lts $(grep -v '^#' /project/config/firmware-packages.txt)
 		systemd-boot xfsprogs e2fsprogs dosfstools util-linux vulkan-loader mesa-vulkan-ati"
 	# Alpine builds firefox for every target architecture except riscv64, which
 	# only gets firefox-esr. ublock-origin is a noarch xpi that installs into

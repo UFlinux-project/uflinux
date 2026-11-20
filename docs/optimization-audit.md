@@ -9,7 +9,7 @@ build configuration was changed.
 
 | Priority | Opportunity | Main benefit | Effort |
 | --- | --- | --- | --- |
-| 1 | Select firmware per device | Smaller device images and installed footprint | Medium |
+| 1 | Select firmware per device | Smaller device images and installed footprint | Medium (generic PC media done) |
 | 2 | Avoid unpacking the live desktop into RAM | Lower live RAM requirement and less boot extraction | High |
 | 3 | Offer smaller icon/font/application profiles | Smaller live root and installed footprint | Medium |
 | 4 | Remove blocking clock queries from the Settings event loop | Settings responsiveness during ConnMan delays | Low–medium |
@@ -20,24 +20,30 @@ build configuration was changed.
 
 ### 1. Select firmware per device
 
-`scripts/builder.py:122` always adds `linux-firmware` to device packages, even
-though `config/devices.json` already selects board-specific packages and GPU
-drivers. The QCS6490 profile explicitly adds `linux-firmware-qcom`, but the
-global dependency also brings in the complete collection.
+Implemented for generic PC media: `config/firmware-packages.txt` lists every
+Alpine `linux-firmware` subpackage except `linux-firmware-qcom` and
+`linux-firmware-none`, and the ISO profile, the live APK world, the device
+package set and `scripts/check-packages.py` all read that one list. Alpine's
+`linux-firmware` metapackage pins all 111 vendors, so it is no longer requested
+anywhere; the installer copies the firmware lines from the live system's
+`/etc/apk/world` into the installed world. Dropping the Snapdragon-only
+`linux-firmware-qcom` removes 163 MiB of compressed APKs from every ISO.
 
-Add explicit firmware lists to device profiles, including an intentionally
-small VM list. Keep a broad compatibility option for generic PC media.
-Retain firmware required by attached Wi-Fi, Bluetooth, audio, and GPUs, and
-preserve the explicit early-boot firmware requirements in each board profile.
+Per-device firmware lists remain open: `config/devices.json` still selects
+board-specific packages on top of the shared list, and a generic VM image
+carries the whole PC collection. Qualcomm M.2 Wi-Fi and Bluetooth are unaffected
+by the exclusion, since their firmware is in the `ath10k`, `ath11k`, `ath12k`,
+`qca` and `ar3k` subpackages, all of which are kept.
 
-The cached x86_64 firmware APK set contains about **756 MiB of installed payload**.
+The cached x86_64 firmware APK set contained about **756 MiB of compressed
+payload** before the list was introduced; the kept set is about 594 MiB.
 That is the full set, not a promised saving: the required subset varies by
 device. It also does not measure process PSS. Validate cold boot, network,
 audio, graphics, suspend/resume, and hotplug before narrowing a profile.
 
 ### 2. Change how the live root is supplied
 
-`profiles/genapkovl-uflinux.sh` requests the desktop and full firmware in the live
+`profiles/genapkovl-uflinux.sh` requests the desktop and the firmware list in the live
 APK world. `profiles/mkimg.uflinux.sh:22` currently sets the tmpfs root ceiling
 to **75% of RAM**. Increasing this ceiling does not reduce the actual memory
 consumed by unpacked files. The older half-RAM description in `docs/building.md`
@@ -164,7 +170,9 @@ not been demonstrated.
 ## Recommended first implementation
 
 Start with asynchronous clock refresh and per-device firmware lists: both have
-specific causes and bounded scope. Follow with wallpaper loading and an optional
+specific causes and bounded scope. The shared firmware list already covers the
+generic PC case, so the remaining firmware work is a small VM and board list.
+Follow with wallpaper loading and an optional
 small desktop profile. Treat the compressed live root as a separate prototype.
 
 The unified desktop, on-demand screen capture, capped/on-demand preview capture,

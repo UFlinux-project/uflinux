@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from builder import browser_packages, device_packages
+from builder import browser_packages, device_packages, firmware_packages
 
 root = Path(__file__).resolve().parents[1]
 lock = json.loads((root / "config/sources.lock.json").read_text())
@@ -23,7 +23,7 @@ for block in re.findall(r'\bdepends="([^"]*)"', text):
         name = re.split(r"[=<>~]", item)[0]
         if not name.startswith(("uflinux", "$")):
             required.add(name)
-required.update({"linux-lts", "linux-firmware", "xfsprogs", "alpine-conf", "rust", "cargo", "cargo-auditable",
+required.update({"linux-lts", "xfsprogs", "alpine-conf", "rust", "cargo", "cargo-auditable",
                  "gtk4.0-dev", "gtk4-layer-shell-dev", "pulseaudio-dev", "openssl-dev", "abuild"})
 required.update({"polkit-dev", "eudev-dev", "vulkan-loader-dev", "mesa-dev", "pkgconf",
                  "ddcutil", "tzdata", "vulkan-loader", "mesa-vulkan-ati"})
@@ -70,6 +70,15 @@ def alpine_index(arch):
 
 def check(arch):
     found, versions = alpine_index(arch)
+    # The firmware list replaces the metapackage, so it has to keep up with
+    # Alpine: every published subpackage except the Snapdragon-only qcom and the
+    # empty none. Anything new that Alpine ships would otherwise go missing.
+    shipped = {name for name in found if name.startswith("linux-firmware")}
+    expected = shipped - {"linux-firmware", "linux-firmware-none", "linux-firmware-qcom"}
+    if set(firmware_packages()) != expected:
+        raise RuntimeError(f"{arch}: firmware list is out of date: "
+                           f"missing {', '.join(sorted(expected - set(firmware_packages()))) or '-'}; "
+                           f"stale {', '.join(sorted(set(firmware_packages()) - expected)) or '-'}")
     boots = {"grub-ieee1275"} if arch == "ppc64le" else {"systemd-boot"}
     if arch in {"x86", "x86_64", "aarch64", "armv7", "riscv64"}:
         boots.add("efibootmgr")
@@ -81,12 +90,13 @@ def check(arch):
         boots.update({"mesa-vulkan-asahi", "mesa-vulkan-broadcom", "mesa-vulkan-freedreno",
                       "mesa-vulkan-imagination", "mesa-vulkan-intel", "mesa-vulkan-nouveau",
                       "mesa-vulkan-panfrost", "mesa-vulkan-virtio"})
-    missing = (required | boots | set(browser_packages(arch))) - found
+    wanted = required | boots | set(browser_packages(arch)) | set(firmware_packages())
+    missing = wanted - found
     if missing:
         raise RuntimeError(f"{arch}: unavailable packages: {', '.join(sorted(missing))}")
     if not versions.get("tlp", "").startswith("1.10."):
         raise RuntimeError(f"{arch}: Settings expects the tested TLP 1.10 series")
-    return f"{arch}: {len(required | boots | set(browser_packages(arch)))} required Alpine packages available"
+    return f"{arch}: {len(wanted)} required Alpine packages available"
 
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
