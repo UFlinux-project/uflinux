@@ -122,6 +122,13 @@ def pointer(x, y, width=1280, height=720):
 def bounds(item):
     rect = item.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
     return (rect.x, rect.y, rect.width, rect.height)
+def surface_bounds(item):
+    # GTK reports desktop-relative coordinates as (0,0) for a layer-shell surface,
+    # because the client never learns where the compositor placed it. Window
+    # coordinates are relative to the surface itself and are the only ones that
+    # can compare two widgets of the same window.
+    rect = item.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
+    return (rect.x, rect.y, rect.width, rect.height)
 def assert_row_is_centered(name):
     # A program name must sit at the vertical middle of its row, level with the icon.
     label = wait(lambda: find(name), 'Row %s disappeared' % name)
@@ -129,8 +136,10 @@ def assert_row_is_centered(name):
     while row is not None and role_of(row) != 'list item':
         row = row.parent
     assert row is not None, 'No list item contains ' + name
-    text = bounds(label); box = bounds(row)
-    offset = abs((text[1] + text[3] / 2) - (box[1] + box[3] / 2))
+    icon = next((a for a in tree(row) if role_of(a) == 'image'), None)
+    assert icon is not None, 'Row %s has no icon' % name
+    text = surface_bounds(label); marker = surface_bounds(icon)
+    offset = abs((text[1] + text[3] / 2) - (marker[1] + marker[3] / 2))
     assert offset <= 2, '%s is %.1fpx away from the vertical center of its row' % (name, offset)
 
 data = Path(os.environ['XDG_DATA_HOME'])
