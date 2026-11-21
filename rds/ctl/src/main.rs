@@ -1,0 +1,312 @@
+//! `uflinux-rdsctl` — command-line control for the UFLinux RDS broker.
+//!
+//! Talks to `uflinux-rdsd` over the control socket using the shared
+//! [`Request`]/[`Reply`] protocol. Service persistence (`enable`, `disable`)
+//! shells out to OpenRC, so those verbs need root; the Settings UI reaches the
+//! same effect through the polkit helper instead.
+
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+use uflinux_rds_common::{BrokerState, Config, Reply, Request, SessionInfo, SystemAction};
+
+const SERVICE: &str = "uflinux-rds";
+const USAGE: &str = "\
+Usage: uflinux-rdsctl [OPTIONS] <COMMAND>
+
+Commands:
+  status               Configuration, listener and roster summary
+  sessions             One line per live session
+  disconnect <id>      Terminate one session
+  apply <file>         Push a JSON configuration to the broker
+  enable               Add the service to the default runlevel
+  disable              Remove the service from the default runlevel
+  start                Start the service now
+  stop                 Stop the service now
+
+Options:
+  --socket <path>      Control socket (default $UFLINUX_RDS_CONTROL_SOCKET or
+                       /run/uflinux-rds/control.sock)
+  -h, --help           Show this help
+";
+
+fn main() {
+    let code = match run() {
+        Ok(()) => 0,
+        Err(message) => {
+            eprintln!("uflinux-rdsctl: {message}");
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
+fn run() -> Result<(), String> {
+    let mut socket: Option<PathBuf> = None;
+    let mut command: Option<String> = None;
+    let mut argument: Option<String> = None;
+
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            "--socket" => {
+                socket = Some(PathBuf::from(args.next().ok_or("--socket needs a path")?));
+            }
+            other if other.starts_with('-') => return Err(format!("unknown option {other}")),
+            other => {
+                if command.is_none() {
+                    command = Some(other.to_owned());
+                } else if argument.is_none() {
+                    argument = Some(other.to_owned());
+                } else {
+                    return Err(format!("unexpected argument {other}"));
+                }
+            }
+        }
+    }
+
+    let socket = socket.unwrap_or_else(uflinux_rds_common::control_socket_path);
+    match command.as_deref() {
+        None => Err(format!("no command given\n{USAGE}")),
+        Some("status") => status(&socket),
+        Some("sessions") => sessions(&socket),
+        Some("disconnect") => {
+            let id = argument
+                .ok_or("disconnect needs a session id")?
+                .parse::<u32>()
+                .map_err(|_| "session id must be a number".to_owned())?;
+            let reply = exchange(&socket, Request::Disconnect { session: id })?;
+            expect_ok(reply)?;
+            println!("session {id} disconnected");
+            Ok(())
+        }
+        Some("apply") => {
+            let path = argument.ok_or("apply needs a configuration file")?;
+            let config =
+                Config::load(Path::new(&path)).map_err(|e| format!("cannot read {path}: {e}"))?;
+            config.validate().map_err(|e| format!("{path}: {e}"))?;
+            expect_ok(exchange(
+                &socket,
+                Request::Execute {
+                    action: SystemAction::ApplyConfig {
+                        config: Box::new(config),
+                    },
+                },
+            )?)?;
+            println!("configuration applied");
+            Ok(())
+        }
+        Some("enable") => openrc(&["enable", SERVICE], true),
+        Some("disable") => openrc(&["disable", SERVICE], true),
+        Some("start") => openrc(&["start", SERVICE], false),
+        Some("stop") => openrc(&["stop", SERVICE], false),
+        Some(other) => Err(format!("unknown command {other}\n{USAGE}")),
+    }
+}
+
+fn status(socket: &Path) -> Result<(), String> {
+    match exchange(socket, Request::GetState)? {
+        Reply::Ok {
+            state: Some(state), ..
+        } => {
+            print_state(&state);
+            Ok(())
+        }
+        Reply::Ok { .. } => Err("broker returned no state".to_owned()),
+        Reply::Error { message } => Err(message),
+    }
+}
+
+fn sessions(socket: &Path) -> Result<(), String> {
+    match exchange(socket, Request::ListSessions)? {
+        Reply::Ok {
+            sessions: Some(sessions),
+            ..
+        } => {
+            for session in sessions {
+                print_session(&session);
+            }
+            Ok(())
+        }
+        Reply::Ok { .. } => Err("broker returned no sessions".to_owned()),
+        Reply::Error { message } => Err(message),
+    }
+}
+
+fn print_state(state: &BrokerState) {
+    let config = &state.effective;
+    println!(
+        "Service:   {} / {}",
+        if state.enabled { "enabled" } else { "disabled" },
+        if state.running { "running" } else { "stopped" }
+    );
+    println!(
+        "RDP:       {} on {}:{} (NLA {})",
+        if state.rdp_listening {
+            "listening"
+        } else {
+            "closed"
+        },
+        config.rdp_bind,
+        config.rdp_port,
+        if config.nla_required {
+            "required"
+        } else {
+            "optional"
+        }
+    );
+    if config.web.enabled {
+        println!(
+            "Web:       {} on {}:{} ({})",
+            if state.web_listening {
+                "listening"
+            } else {
+                "closed"
+            },
+            config.web.bind,
+            config.web.port,
+            if config.web.https { "https" } else { "http" }
+        );
+    } else {
+        println!("Web:       disabled");
+    }
+    println!(
+        "Codecs:    h264={}, remotefx={}, max {} fps",
+        format!("{:?}", config.codec.h264).to_ascii_lowercase(),
+        if config.codec.allow_remotefx {
+            "on"
+        } else {
+            "off"
+        },
+        config.codec.max_fps
+    );
+    println!(
+        "Sessions:  {} of {}",
+        state.sessions.len(),
+        config.max_sessions
+    );
+    for session in &state.sessions {
+        print_session(session);
+    }
+    if let Some(fault) = &state.fault {
+        println!("Fault:     {fault}");
+    }
+}
+
+fn print_session(session: &SessionInfo) {
+    let device = session
+        .codec_device
+        .as_deref()
+        .map(|device| format!(" on {device}"))
+        .unwrap_or_default();
+    println!(
+        "  {:>3}  {:<16} {:<4} {}x{}  {}{}  {}s up, {}s idle",
+        session.id,
+        session.username,
+        session.transport,
+        session.width,
+        session.height,
+        session.codec,
+        device,
+        session.connected_seconds,
+        session.idle_seconds
+    );
+}
+
+/// Send one request and wait for its single reply.
+fn exchange(socket: &Path, request: Request) -> Result<Reply, String> {
+    let stream = UnixStream::connect(socket)
+        .map_err(|e| format!("cannot reach {SERVICE} at {}: {e}", socket.display()))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .map_err(|e| e.to_string())?;
+    let mut encoded = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
+    encoded.push(b'\n');
+    (&stream).write_all(&encoded).map_err(|e| e.to_string())?;
+    stream.shutdown(std::net::Shutdown::Write).ok();
+
+    let mut line = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    if line.trim().is_empty() {
+        return Err("broker closed the connection".to_owned());
+    }
+    serde_json::from_str(line.trim_end()).map_err(|e| e.to_string())
+}
+
+fn expect_ok(reply: Reply) -> Result<(), String> {
+    match reply {
+        Reply::Ok { .. } => Ok(()),
+        Reply::Error { message } => Err(message),
+    }
+}
+
+fn openrc(args: &[&str], root_only: bool) -> Result<(), String> {
+    if root_only && unsafe { libc::geteuid() } != 0 {
+        return Err(format!(
+            "{} needs root (try: sudo uflinux-rdsctl {})",
+            args[0], args[0]
+        ));
+    }
+    let status = Command::new("rc-service")
+        .args(args)
+        .env("LC_ALL", "C")
+        .status()
+        .map_err(|_| "cannot run rc-service".to_owned())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("rc-service {} failed", args.join(" ")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_printing_accepts_a_default_broker_state() {
+        let state = BrokerState {
+            config: Config::default(),
+            effective: Config::default(),
+            enabled: false,
+            running: false,
+            rdp_listening: false,
+            web_listening: false,
+            sessions: Vec::new(),
+            fault: None,
+        };
+        print_state(&state);
+    }
+
+    #[test]
+    fn requests_round_trip_through_the_cli_encoding() {
+        let json = serde_json::to_string(&Request::Disconnect { session: 7 }).unwrap();
+        assert_eq!(json, r#"{"op":"disconnect","session":7}"#);
+    }
+
+    #[test]
+    fn an_error_reply_becomes_an_error() {
+        assert!(
+            expect_ok(Reply::Error {
+                message: "refused".to_owned()
+            })
+            .is_err()
+        );
+        assert!(
+            expect_ok(Reply::Ok {
+                state: None,
+                sessions: None
+            })
+            .is_ok()
+        );
+    }
+}

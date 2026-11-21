@@ -1,4 +1,4 @@
-use crate::{audio, bluetooth, capture, devices, display, network, vpn};
+use crate::{audio, bluetooth, capture, devices, display, network, rdp, vpn};
 use futures_util::future::join3;
 use gio::prelude::*;
 use glib::variant::ToVariant;
@@ -181,6 +181,10 @@ pub fn run() -> Result<()> {
         let probed=app.clone();glib::MainContext::default().spawn_local(async move{
             let caps=capture::probe().await;
             probed.view.borrow_mut().capture_capabilities=caps;
+            probed.publish();
+        });
+        let probed=app.clone();glib::MainContext::default().spawn_local(async move{
+            probed.view.borrow_mut().rdp=rdp::query().await;
             probed.publish();
         });
         let weak=Rc::downgrade(&app);
@@ -423,6 +427,14 @@ impl App {
         let raw = reply.get::<(String,)>().ok_or("Invalid system response")?.0;
         serde_json::from_str(&raw).map_err(|_| "Invalid system response".into())
     }
+    /// Sends one RDP mutation to the broker, then re-reads the published state
+    /// so the panel refreshes without the UI asking for it.
+    async fn rdp_apply(self: &Rc<Self>, request: serde_json::Value) -> Result<()> {
+        rdp::execute(request).await?;
+        self.view.borrow_mut().rdp = rdp::query().await;
+        self.publish();
+        Ok(())
+    }
     async fn execute(self: &Rc<Self>, action: Action, caller: &str) -> Result<serde_json::Value> {
         match &action {
             Action::Refresh => {
@@ -663,6 +675,72 @@ impl App {
                 let caps = capture::probe().await;
                 let value = serde_json::to_value(&caps).map_err(|_| "Invalid capture state")?;
                 self.view.borrow_mut().capture_capabilities = caps;
+                self.publish();
+                return Ok(value);
+            }
+            Action::RdpStatus => {
+                let rdp = rdp::query().await;
+                let value = serde_json::to_value(&rdp).map_err(|_| "Invalid RDP state")?;
+                self.view.borrow_mut().rdp = rdp;
+                self.publish();
+                return Ok(value);
+            }
+            Action::SetRdpPorts { rdp_port, web_port } => {
+                self.rdp_apply(rdp::ports_request(
+                    rdp::disk_config(),
+                    *rdp_port,
+                    *web_port,
+                )?)
+                .await?;
+            }
+            Action::SetRdpWeb { enabled, port } => {
+                self.rdp_apply(rdp::web_request(rdp::disk_config(), *enabled, *port)?)
+                    .await?;
+            }
+            Action::SetRdpHttps { enabled } => {
+                self.rdp_apply(rdp::https_request(rdp::disk_config(), *enabled)?)
+                    .await?;
+            }
+            Action::SetRdpCertificate {
+                mode,
+                certificate_path,
+                key_path,
+            } => {
+                let request = rdp::certificate_request(
+                    rdp::disk_config(),
+                    *mode,
+                    certificate_path.as_deref(),
+                    key_path.as_deref(),
+                )?;
+                self.rdp_apply(request).await?;
+            }
+            Action::SetRdpCodecs {
+                allow_h264,
+                allow_remotefx,
+                hardware_acceleration,
+            } => {
+                let request = rdp::codecs_request(
+                    rdp::disk_config(),
+                    *allow_h264,
+                    *allow_remotefx,
+                    *hardware_acceleration,
+                )?;
+                self.rdp_apply(request).await?;
+            }
+            Action::SetRdpMaxSessions { max_sessions } => {
+                self.rdp_apply(rdp::max_sessions_request(
+                    rdp::disk_config(),
+                    *max_sessions,
+                )?)
+                .await?;
+            }
+            Action::RdpDisconnect { session_id } => {
+                self.rdp_apply(rdp::disconnect_request(session_id)?).await?;
+            }
+            Action::RdpSystem { operation } => {
+                let current = self.view.borrow().rdp.clone();
+                let value = rdp::system(&self.system, operation, &current).await?;
+                self.view.borrow_mut().rdp = rdp::query().await;
                 self.publish();
                 return Ok(value);
             }

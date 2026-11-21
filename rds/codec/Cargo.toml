@@ -1,0 +1,42 @@
+[package]
+name = "uflinux-rds-codec"
+description = "Encoder tier selection and H.264 backends for UFLinux RDS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Software H.264 through egfx's dlopen-based openh264 binding. The library is
+# loaded at runtime, so this adds no build-time dependency beyond the bindings.
+# Hardware encode needs no cargo feature at all: it runs the out-of-process
+# `ffmpeg -c:v h264_vaapi` helper, so only the runtime ffmpeg package matters.
+h264 = ["dep:ironrdp-egfx"]
+# Names used by `uflinux-rds-server`. Hardware encode needs nothing beyond the
+# runtime ffmpeg package, so `h264-vaapi` deliberately pulls in no bindings;
+# `h264-software` is the OpenH264 backend above.
+h264-vaapi = []
+h264-software = ["h264"]
+
+[dependencies]
+uflinux-rds-common.workspace = true
+# Consumed only behind `h264`; the encoder trait and the AVC frame builders
+# live in ironrdp-egfx.
+ironrdp-egfx = { workspace = true, optional = true, features = ["openh264-libloading"] }
+serde.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"

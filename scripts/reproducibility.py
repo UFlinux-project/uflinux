@@ -23,12 +23,17 @@ baseline = {p.name: unsigned_digest(p) for p in (out / "packages" / args.arch).g
 if not baseline:
     raise RuntimeError("The baseline packages stage must complete first")
 training = out / "inputs" / args.arch / "settings-pgo-profiles.tar.gz"
+rds_training = out / "inputs" / args.arch / "rds-pgo-profiles.tar.gz"
 compile_record = json.loads((out / "metadata" / args.arch / "compile.json").read_text())
 optimization_args = []
 if compile_record.get("settings_pgo"):
     if not training.is_file():
         raise RuntimeError("Settings optimization profiles are missing")
     optimization_args = ["--settings-pgo", "--settings-pgo-profiles", str(training)]
+if compile_record.get("rds_pgo"):
+    if not rds_training.is_file():
+        raise RuntimeError("Remote Desktop optimization profiles are missing")
+    optimization_args = ["--rds-pgo", "--rds-pgo-profiles", str(rds_training)]
 suffix = args.package or "all"
 cache = PROJECT / ".cache/reproducibility" / suffix
 if cache.exists():

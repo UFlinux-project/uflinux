@@ -1,0 +1,71 @@
+[package]
+name = "uflinux-rds-server"
+description = "Per-connection UFLinux RDS session host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "uflinux-rdp-session"
+path = "src/main.rs"
+
+[features]
+default = ["rayon", "qoi", "qoiz"]
+# PAM authentication needs libpam headers and (via pam-sys' build script) an
+# unversioned libclang at build time, so it is opt-in:
+# `cargo build -p uflinux-rds-server --features pam`.
+pam = ["dep:pam"]
+rayon = ["ironrdp-server/rayon"]
+qoi = ["dep:ironrdp", "ironrdp-server/qoi", "ironrdp/qoi"]
+qoiz = ["dep:ironrdp", "ironrdp-server/qoiz", "ironrdp/qoiz"]
+egfx = ["dep:ironrdp", "ironrdp-server/egfx"]
+h264-vaapi = ["egfx", "uflinux-rds-codec/h264-vaapi"]
+h264-software = [
+    "egfx",
+    "uflinux-rds-codec/h264-software",
+    "ironrdp-egfx/openh264-libloading",
+]
+
+[dependencies]
+uflinux-rds-common.workspace = true
+uflinux-rds-wayland.workspace = true
+uflinux-rds-codec.workspace = true
+# `core` is listed explicitly: the meta crate's features are bare `dep:`
+# switches, so `server`/`pdu`/`dvc` do not pull it in, and it is the only
+# non-deprecated path to `Encode`/`WriteCursor`/`ensure_size!`
+# (ironrdp-pdu's own glob re-export of ironrdp-core is `#[doc(hidden)]
+# #[deprecated]`, which would trip `-D warnings`).
+ironrdp = { workspace = true, optional = true, features = ["core", "server", "graphics", "input", "dvc", "pdu"] }
+ironrdp-server.workspace = true
+ironrdp-acceptor.workspace = true
+ironrdp-pdu.workspace = true
+ironrdp-egfx.workspace = true
+# Needed for the EGFX wire path: drain_output() yields DvcMessage, which has to
+# be wrapped into SvcMessage before it can be sent as EgfxServerMessage.
+ironrdp-svc.workspace = true
+ironrdp-dvc.workspace = true
+# BitmapUpdate::data is a bytes::Bytes.
+bytes = "1"
+# The RdpServerDisplay / CredentialValidator traits are #[async_trait].
+async-trait = "0.1"
+tokio.workspace = true
+tokio-rustls = { workspace = true, features = ["ring", "tls12", "logging"] }
+rustls = { workspace = true, features = ["ring"] }
+rustls-pemfile.workspace = true
+rcgen.workspace = true
+pam = { workspace = true, optional = true }
+nix.workspace = true
+libc.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"

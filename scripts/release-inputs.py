@@ -27,6 +27,9 @@ else:
 record = out / "metadata" / args.arch / "package-shards" / "uflinux-settings" / "compile.json"
 if record.is_file() and json.loads(record.read_text()).get("settings_pgo"):
     expected.add("uflinux-settings/settings-pgo-profiles.tar.gz")
+record = out / "metadata" / args.arch / "package-shards" / "uflinux-rds" / "compile.json"
+if record.is_file() and json.loads(record.read_text()).get("rds_pgo"):
+    expected.add("uflinux-rds/rds-pgo-profiles.tar.gz")
 if {str(p.relative_to(directory)) for p in inputs} != expected:
     raise RuntimeError("The complete rebuild input set is required")
 checksums = []

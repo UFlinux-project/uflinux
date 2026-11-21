@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# shellcheck shell=sh disable=SC2034
+
+description="UFLinux Remote Desktop broker"
+
+command="/usr/bin/uflinux-rdsd"
+command_background=true
+pidfile="/run/uflinux-rds/uflinux-rdsd.pid"
+
+extra_started_commands="reload"
+
+reload() {
+	ebegin "Reloading ${RC_SVCNAME}"
+	start-stop-daemon --signal HUP --pidfile "${pidfile}"
+	eend $?
+}
+
+depend() {
+	need net
+}

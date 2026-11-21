@@ -191,14 +191,16 @@ fn bluetooth_tab(app: &Rc<App>, surface: Surface) -> gtk::Box {
             name.set_ellipsize(gtk::pango::EllipsizeMode::End);
             name.add_css_class("network-name");
             text.append(&name);
-            let mut status = vec![if device.connected {
-                "Connected"
-            } else if device.paired {
-                "Paired"
-            } else {
-                "Not paired"
-            }
-            .to_string()];
+            let mut status = vec![
+                if device.connected {
+                    "Connected"
+                } else if device.paired {
+                    "Paired"
+                } else {
+                    "Not paired"
+                }
+                .to_string(),
+            ];
             if device.trusted {
                 status.push("Trusted".into());
             }

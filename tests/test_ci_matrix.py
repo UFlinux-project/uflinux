@@ -46,6 +46,21 @@ class MatrixTests(unittest.TestCase):
                 {(arch, 'uflinux-settings') for arch in expected},
             )
 
+    def test_rds_pgo_is_limited_to_native_release_shards(self):
+        for event, ref, full, expected in (
+            ('push', 'refs/tags/v0.1.0', False, {'x86_64', 'aarch64'}),
+            ('push', 'refs/heads/main', False, set()),
+            ('workflow_dispatch', 'refs/tags/v0.1.0', True, set()),
+        ):
+            optimized = ci.configuration(event, ref, full)['packages']['include']
+            self.assertEqual(
+                {(job['arch'], job['package']) for job in optimized if job['rds_pgo']},
+                {(arch, 'uflinux-rds') for arch in expected},
+            )
+            # The two optimized crates never share a shard, so a job can only
+            # ever replay one profile set.
+            self.assertFalse([job for job in optimized if job['settings_pgo'] and job['rds_pgo']])
+
     def test_full_matrix_runs_still_boot_only_the_x86_64_images(self):
         for full in (False, True):
             jobs = ci.configuration('workflow_dispatch', 'refs/heads/main', full)['vm']['include']
@@ -91,13 +106,13 @@ class MatrixTests(unittest.TestCase):
             for job in result['packages']['include']:
                 self.assertEqual(job['cargo_jobs'],expected[job['arch']])
 
-    def test_each_architecture_has_seven_independent_jobs(self):
-        for event,ref,full,count in [('pull_request','refs/heads/main',False,7),
-                                     ('workflow_dispatch','refs/heads/main',True,42)]:
+    def test_each_architecture_has_eight_independent_jobs(self):
+        for event,ref,full,count in [('pull_request','refs/heads/main',False,8),
+                                     ('workflow_dispatch','refs/heads/main',True,48)]:
             result=ci.configuration(event,ref,full)
             jobs=result['packages']['include']
             self.assertEqual(len(jobs),count)
             for architecture in result['matrix']['include']:
                 selected=[job for job in jobs if job['arch']==architecture['arch']]
-                self.assertEqual({job['package'] for job in selected},{'connman','gpu-screen-recorder','simp1e-cursors','uflinux-regreet','uflinux-settings','uflinux','xdg-desktop-portal-gtk4'})
+                self.assertEqual({job['package'] for job in selected},{'connman','gpu-screen-recorder','simp1e-cursors','uflinux-regreet','uflinux-rds','uflinux-settings','uflinux','xdg-desktop-portal-gtk4'})
                 self.assertTrue(all(job['runner']==architecture['runner'] for job in selected))

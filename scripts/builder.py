@@ -395,12 +395,14 @@ PACKAGE_NAMES = {
                             "gpu-screen-recorder-dev", "gpu-screen-recorder-doc"},
     "uflinux-settings": {"uflinux-settings", "uflinux-settings-daemon", "uflinux-settings-dbg",
                          "uflinux-settings-doc", "uflinux-settings-system", "uflinux-settings-system-openrc", "uflinux-installer-ui", "uflinux-desktop", "uflinux-screencapture"},
+    "uflinux-rds": {"uflinux-rds", "uflinux-rds-dbg", "uflinux-rds-doc", "uflinux-rds-server",
+                    "uflinux-rds-web", "uflinux-rds-system", "uflinux-rds-vaapi"},
     "uflinux": {"uflinux", "uflinux-defaults", "uflinux-desktop-meta", "uflinux-installer",
                 "uflinux-live", "uflinux-live-openrc", "uflinux-release", "uflinux-bootsplash-openrc",
                 "uflinux-initramfs", "uflinux-device", "uflinux-zram"},
     "simp1e-cursors": {"simp1e-cursors", "simp1e-cursors-adw-dark"},
 }
-CARGO_ORIGINS = {"uflinux-regreet", "uflinux-settings", "xdg-desktop-portal-gtk4"}
+CARGO_ORIGINS = {"uflinux-regreet", "uflinux-settings", "uflinux-rds", "xdg-desktop-portal-gtk4"}
 
 
 def package_version(origin, distribution_version):
@@ -901,6 +903,32 @@ class Builder:
             (self.root / "var/cache/distfiles" / f"uflinux-settings-{settings_version}.tar").write_bytes(settings_source)
             (source / "uflinux-settings" / f"uflinux-settings-{settings_version}.tar").write_bytes(settings_source)
             (self.cache / "downloads" / (settings_digest + ".tar")).write_bytes(settings_source)
+        if "uflinux-rds" in selected:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("rds_source", PROJECT / "scripts/rds-source.py")
+            source_builder = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(source_builder)
+            rds_version, rds_source = source_builder.bundle()
+            if rds_version != LOCK["uflinux-rds"]["version"]:
+                raise RuntimeError("Remote Desktop version differs from the package version")
+            rds_digest = hashlib.sha512(rds_source).hexdigest()
+            recipe = source / "uflinux-rds/APKBUILD"
+            checksums = f"{rds_digest}  uflinux-rds-{rds_version}.tar\n"
+            if getattr(self.args, "rds_pgo", False):
+                llvm_name = "llvm-project-22.1.3.src.tar.xz"
+                llvm_digest = ("3557a955d55471671ae2f7b9c809affd59a29a6fb1e70a2a5d040dc1c6376246de"
+                               "b0635be8ca36cae09112981760e9afb128c822e5554bd722589fb8dee3f0df")
+                llvm_archive = download_pinned(
+                    "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.3/" + llvm_name,
+                    llvm_digest, "sha512", self.cache / "downloads" / llvm_name)
+                shutil.copy2(llvm_archive, self.root / "var/cache/distfiles" / llvm_name)
+                shutil.copy2(llvm_archive, recipe.parent / llvm_name)
+                checksums += f"{llvm_digest}  {llvm_name}\n"
+            recipe.write_text(re.sub(r'^sha512sums="[^"]*"', f'sha512sums="\n{checksums}"',
+                                     recipe.read_text(), flags=re.M))
+            (self.root / "var/cache/distfiles" / f"uflinux-rds-{rds_version}.tar").write_bytes(rds_source)
+            (source / "uflinux-rds" / f"uflinux-rds-{rds_version}.tar").write_bytes(rds_source)
+            (self.cache / "downloads" / (rds_digest + ".tar")).write_bytes(rds_source)
         env = {"CARGO_HOME": "/cache/cargo", "CARGO_TARGET_DIR": "/cache/target",
                # Emulated architectures pay a large per-CRU cost under QEMU, so the
                # fan-out is configured per architecture rather than globally.
@@ -918,6 +946,18 @@ class Builder:
                     archive.extractall(profile_dir, filter="data")
                 self.chroot("chown", "-R", "builder:builder", profiles)
                 env["UFLINUX_SETTINGS_PGO_REPLAY"] = "1"
+        if getattr(self.args, "rds_pgo", False):
+            env["UFLINUX_RDS_PGO"] = "1"
+            rds_profiles = "/cache/target/rds-training"
+            rds_profile_dir = self.cache / self.args.arch / "target/rds-training"
+            if rds_profile_dir.exists():
+                remove_tree(rds_profile_dir)
+            self.chroot("install", "-d", "-o", "builder", "-g", "builder", rds_profiles)
+            if self.args.rds_pgo_profiles:
+                with tarfile.open(self.args.rds_pgo_profiles, "r:gz") as archive:
+                    archive.extractall(rds_profile_dir, filter="data")
+                self.chroot("chown", "-R", "builder:builder", rds_profiles)
+                env["UFLINUX_RDS_PGO_REPLAY"] = "1"
         self.build_origins(selected, env)
         from sbom import apk_metadata
         versions = {}
@@ -947,6 +987,10 @@ class Builder:
         training_archive.unlink(missing_ok=True)
         if getattr(self.args, "settings_pgo", False):
             archive_tree(profile_dir, training_archive, self.epoch)
+        rds_training_archive = inputs / "rds-pgo-profiles.tar.gz"
+        rds_training_archive.unlink(missing_ok=True)
+        if getattr(self.args, "rds_pgo", False):
+            archive_tree(rds_profile_dir, rds_training_archive, self.epoch)
         cargo = self.cache / self.args.arch / "cargo"
         names = [str(p.relative_to(cargo)) for p in (cargo / "registry/cache", cargo / "registry/index", cargo / "git/db") if p.exists()]
         if names:
@@ -1439,6 +1483,8 @@ class Builder:
                     "files": files, "host": platform.platform(), "source_commit": os.environ.get("GITHUB_SHA", "local")}
         if stage == "compile" and getattr(self.args, "settings_pgo", False):
             metadata["settings_pgo"] = True
+        if stage == "compile" and getattr(self.args, "rds_pgo", False):
+            metadata["rds_pgo"] = True
         if stage == "image":
             iso = self.out / "images" / self.args.arch / f"uflinux-{self.args.version}-{self.args.arch}.iso"
             metadata["iso_sha256"] = sha(iso)
@@ -1463,12 +1509,19 @@ def main(argv=None):
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--settings-pgo", action="store_true", help="Build the native Settings shard with PGO and BOLT")
     parser.add_argument("--settings-pgo-profiles", type=Path, help="Replay archived Settings training profiles")
+    parser.add_argument("--rds-pgo", action="store_true", help="Build the native Remote Desktop shard with PGO and BOLT")
+    parser.add_argument("--rds-pgo-profiles", type=Path, help="Replay archived Remote Desktop training profiles")
     args = parser.parse_args(argv)
     if args.settings_pgo and (args.stage != "packages" or args.package != "uflinux-settings"
                               or args.arch not in {"x86_64", "aarch64"} or platform.machine() != args.arch):
         parser.error("--settings-pgo requires the Settings package stage on native x86_64 or aarch64")
     if args.settings_pgo_profiles and not args.settings_pgo:
         parser.error("--settings-pgo-profiles requires --settings-pgo")
+    if args.rds_pgo and (args.stage != "packages" or args.package != "uflinux-rds"
+                         or args.arch not in {"x86_64", "aarch64"} or platform.machine() != args.arch):
+        parser.error("--rds-pgo requires the Remote Desktop package stage on native x86_64 or aarch64")
+    if args.rds_pgo_profiles and not args.rds_pgo:
+        parser.error("--rds-pgo-profiles requires --rds-pgo")
     if args.package and (args.stage not in {"bootstrap", "packages"} or args.release):
         parser.error("--package requires --stage packages or bootstrap, without --release")
     if args.stage == "device" and args.device is None:

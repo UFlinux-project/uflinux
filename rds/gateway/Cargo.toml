@@ -1,0 +1,43 @@
+[package]
+name = "uflinux-rds-gateway"
+description = "UFLinux RDS web gateway: axum HTTPS server and RDCleanPath WebSocket bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "uflinux-rds-web"
+path = "src/main.rs"
+
+[dependencies]
+uflinux-rds-common.workspace = true
+ironrdp-rdcleanpath.workspace = true
+axum = { workspace = true, features = ["ws"] }
+tokio.workspace = true
+tokio-rustls = { workspace = true, features = ["ring", "tls12", "logging"] }
+rustls = { workspace = true, features = ["ring"] }
+rustls-pemfile.workspace = true
+rcgen.workspace = true
+pam = { workspace = true, optional = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+rand.workspace = true
+nix.workspace = true
+
+# PAM authentication needs libpam headers and (via pam-sys' build script) an
+# unversioned libclang at build time, so it is opt-in:
+# `cargo build -p uflinux-rds-gateway --features pam`.
+[features]
+default = []
+pam = ["dep:pam"]
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"

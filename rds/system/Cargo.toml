@@ -1,0 +1,35 @@
+[package]
+name = "uflinux-rds-system"
+description = "Privileged helper for the UFLinux Remote Desktop service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "uflinux-rds-system"
+path = "src/main.rs"
+
+[dependencies]
+uflinux-rds-common.workspace = true
+glib.workspace = true
+gio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+rcgen.workspace = true
+rustls-pemfile.workspace = true
+# RSA-2048 key generation; rcgen's ring backend signs RSA but cannot generate
+# the key, so the pair is keyed here and signed through rcgen.
+rsa = "=0.10.0-rc.18"
+getrandom = { version = "=0.4.3", features = ["sys_rng"] }
+# rcgen depends on `time` without the formatting/parsing features; Status must
+# render RFC 3339 expiry stamps, so request them explicitly.
+time = { version = "=0.3.55", features = ["formatting", "parsing"] }
+x509-parser = "=0.18.1"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"

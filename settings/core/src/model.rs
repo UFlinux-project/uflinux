@@ -19,6 +19,11 @@ pub struct Snapshot {
     /// Probed from the capture backend at startup; runtime-only and never persisted.
     #[serde(default)]
     pub capture_capabilities: CaptureCapabilities,
+    /// Remote Desktop (IronRDP/RDS) view. Absent from a snapshot produced by a
+    /// daemon without the rds package, in which case the page shows it as not
+    /// installed rather than failing to parse the whole state.
+    #[serde(default)]
+    pub rdp: Rdp,
     pub about: BTreeMap<String, String>,
     pub error: Option<String>,
 }
@@ -608,6 +613,160 @@ pub struct Enterprise {
     pub key_password: String,
 }
 
+/// uflinux-rds view. `installed` is false when the rds package is absent, so the
+/// page explains itself instead of showing an empty Remote Desktop tab.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rdp {
+    /// False while the broker is unreachable (package not installed).
+    pub installed: bool,
+    /// True when the service is running and in a runlevel.
+    pub enabled: bool,
+    pub rdp_port: u16,
+    pub web_enabled: bool,
+    pub web_port: u16,
+    /// Only meaningful with the web client enabled.
+    pub https: bool,
+    pub certificate_mode: CertificateMode,
+    /// Used when certificate_mode is Custom; None means "not chosen yet".
+    pub custom_certificate_path: Option<String>,
+    pub custom_key_path: Option<String>,
+    pub max_sessions: u16,
+    pub codecs: RdpCodecs,
+    pub sessions: Vec<RdpSession>,
+    /// Last broker or helper failure, shown verbatim on the page.
+    pub error: Option<String>,
+}
+impl Default for Rdp {
+    fn default() -> Self {
+        Self {
+            installed: false,
+            enabled: false,
+            rdp_port: DEFAULT_RDP_PORT,
+            web_enabled: false,
+            web_port: DEFAULT_RDP_WEB_PORT,
+            https: true,
+            certificate_mode: CertificateMode::default(),
+            custom_certificate_path: None,
+            custom_key_path: None,
+            max_sessions: DEFAULT_RDP_MAX_SESSIONS,
+            codecs: RdpCodecs::default(),
+            sessions: Vec::new(),
+            error: None,
+        }
+    }
+}
+
+pub const DEFAULT_RDP_PORT: u16 = 3389;
+pub const DEFAULT_RDP_WEB_PORT: u16 = 3390;
+pub const DEFAULT_RDP_MAX_SESSIONS: u16 = 4;
+pub const MAX_RDP_SESSIONS: u16 = 64;
+
+/// Where the TLS material for the web client comes from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CertificateMode {
+    /// Generated in the gateway with rcgen.
+    #[default]
+    SelfSigned,
+    /// User-supplied PEM pair.
+    Custom,
+}
+impl CertificateMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::SelfSigned => "Self-signed",
+            Self::Custom => "Custom certificate",
+        }
+    }
+}
+
+/// Codec policy for the whole host. The per-connection tier is decided by the
+/// session binary from these preferences plus the client capabilities.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RdpCodecs {
+    pub allow_h264: bool,
+    pub allow_remotefx: bool,
+    pub hardware_acceleration: HardwareAccel,
+    /// VA-API render node reported by the session probe; None means no device.
+    pub detected_device: Option<String>,
+}
+impl Default for RdpCodecs {
+    fn default() -> Self {
+        Self {
+            allow_h264: true,
+            allow_remotefx: true,
+            hardware_acceleration: HardwareAccel::default(),
+            detected_device: None,
+        }
+    }
+}
+
+/// How hard the gateway should try to use a GPU encoder.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HardwareAccel {
+    /// Use VA-API when the probe finds a driver, otherwise drop a tier.
+    #[default]
+    Auto,
+    /// Refuse to fall back to a software encoder.
+    Always,
+    /// Never touch the GPU, even when one is present.
+    Off,
+}
+impl HardwareAccel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Automatic",
+            Self::Always => "Always use hardware",
+            Self::Off => "Software only",
+        }
+    }
+}
+
+/// One live RDP connection, as reported by the broker roster.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RdpSession {
+    /// Opaque broker id, the value RdpDisconnect takes.
+    pub id: String,
+    pub username: String,
+    pub client_address: String,
+    pub connected_since_secs: u64,
+    /// Encoder the session settled on, best-first.
+    pub codec: CodecTier,
+    /// Extra detail for the page, e.g. "VA-API: /dev/dri/renderD128 (Intel iHD)".
+    pub codec_detail: Option<String>,
+    /// True when the client came through the web gateway.
+    pub web: bool,
+}
+
+/// The encoder tiers, best-first. QOI/QOIz is the fallback and the only choice
+/// for a browser client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodecTier {
+    /// EGFX AVC420/AVC444 through a VA-API device.
+    H264Vaapi,
+    /// EGFX AVC through the bundled OpenH264 loader.
+    H264Software,
+    RemoteFx,
+    Qoi,
+    QoiZ,
+}
+impl CodecTier {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::H264Vaapi => "H.264 (hardware)",
+            Self::H264Software => "H.264 (software)",
+            Self::RemoteFx => "RemoteFX",
+            Self::Qoi => "QOI",
+            Self::QoiZ => "QOI+zstd",
+        }
+    }
+    pub fn is_h264(self) -> bool {
+        matches!(self, Self::H264Vaapi | Self::H264Software)
+    }
+}
+
 /// Exhaustive actions, not an arbitrary D-Bus proxy or command runner.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
@@ -748,9 +907,57 @@ pub enum Action {
     },
     ResetScreenCapture,
     ScreenCaptureCapabilities,
+    /// Re-reads the broker state; the answer is the whole Rdp section.
+    RdpStatus,
+    SetRdpPorts {
+        rdp_port: u16,
+        web_port: u16,
+    },
+    SetRdpWeb {
+        enabled: bool,
+        port: u16,
+    },
+    SetRdpHttps {
+        enabled: bool,
+    },
+    SetRdpCertificate {
+        mode: CertificateMode,
+        certificate_path: Option<String>,
+        key_path: Option<String>,
+    },
+    SetRdpCodecs {
+        allow_h264: bool,
+        allow_remotefx: bool,
+        hardware_acceleration: HardwareAccel,
+    },
+    SetRdpMaxSessions {
+        max_sessions: u16,
+    },
+    RdpDisconnect {
+        session_id: String,
+    },
+    /// Privileged rds operations, forwarded to the rds package's own helper on
+    /// org.uflinux.Rds.System1 rather than to the Settings system service.
+    RdpSystem {
+        operation: RdpSystemAction,
+    },
     System {
         operation: SystemAction,
     },
+}
+/// What the in-package uflinux-rds-system helper is allowed to do over its own
+/// bus name. Exhaustive for the same reason as SystemAction.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum RdpSystemAction {
+    /// rc-update add + rc-service start.
+    Enable,
+    /// rc-service stop + rc-update del.
+    Disable,
+    Start,
+    Stop,
+    /// Installs the configured certificate/key and restarts the gateway.
+    ApplyCertificate,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
@@ -869,4 +1076,149 @@ pub struct Battery {
     pub percent: Option<u8>,
     pub status: String,
     pub energy_full: Option<u64>,
+}
+
+#[cfg(test)]
+mod rdp_tests {
+    use super::*;
+
+    #[test]
+    fn rdp_section_defaults_to_a_disabled_host() {
+        let rdp = Rdp::default();
+        assert!(!rdp.installed);
+        assert!(!rdp.enabled);
+        assert_eq!(rdp.rdp_port, 3389);
+        assert_eq!(rdp.web_port, 3390);
+        assert!(!rdp.web_enabled);
+        assert!(rdp.https);
+        assert_eq!(rdp.certificate_mode, CertificateMode::SelfSigned);
+        assert_eq!(rdp.custom_certificate_path, None);
+        assert_eq!(rdp.custom_key_path, None);
+        assert_eq!(rdp.max_sessions, 4);
+        assert!(rdp.codecs.allow_h264);
+        assert!(rdp.codecs.allow_remotefx);
+        assert_eq!(rdp.codecs.hardware_acceleration, HardwareAccel::Auto);
+        assert_eq!(rdp.codecs.detected_device, None);
+        assert!(rdp.sessions.is_empty());
+        assert_eq!(rdp.error, None);
+    }
+
+    #[test]
+    fn snapshots_without_rdp_still_parse() {
+        let mut value = serde_json::to_value(Snapshot::default()).unwrap();
+        value.as_object_mut().unwrap().remove("rdp");
+        let snapshot: Snapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(snapshot.rdp, Rdp::default());
+    }
+
+    #[test]
+    fn rdp_actions_round_trip_with_kebab_case_tags() {
+        for (json, action) in [
+            (r#"{"action":"rdp-status"}"#, Action::RdpStatus),
+            (
+                r#"{"action":"set-rdp-ports","rdp_port":3391,"web_port":3392}"#,
+                Action::SetRdpPorts {
+                    rdp_port: 3391,
+                    web_port: 3392,
+                },
+            ),
+            (
+                r#"{"action":"set-rdp-web","enabled":true,"port":3390}"#,
+                Action::SetRdpWeb {
+                    enabled: true,
+                    port: 3390,
+                },
+            ),
+            (
+                r#"{"action":"set-rdp-https","enabled":false}"#,
+                Action::SetRdpHttps { enabled: false },
+            ),
+            (
+                r#"{"action":"set-rdp-certificate","mode":"custom","certificate_path":"/etc/uflinux/rds/server.pem","key_path":"/etc/uflinux/rds/server.key"}"#,
+                Action::SetRdpCertificate {
+                    mode: CertificateMode::Custom,
+                    certificate_path: Some("/etc/uflinux/rds/server.pem".into()),
+                    key_path: Some("/etc/uflinux/rds/server.key".into()),
+                },
+            ),
+            (
+                r#"{"action":"set-rdp-certificate","mode":"self-signed","certificate_path":null,"key_path":null}"#,
+                Action::SetRdpCertificate {
+                    mode: CertificateMode::SelfSigned,
+                    certificate_path: None,
+                    key_path: None,
+                },
+            ),
+            (
+                r#"{"action":"set-rdp-codecs","allow_h264":true,"allow_remotefx":false,"hardware_acceleration":"off"}"#,
+                Action::SetRdpCodecs {
+                    allow_h264: true,
+                    allow_remotefx: false,
+                    hardware_acceleration: HardwareAccel::Off,
+                },
+            ),
+            (
+                r#"{"action":"set-rdp-max-sessions","max_sessions":8}"#,
+                Action::SetRdpMaxSessions { max_sessions: 8 },
+            ),
+            (
+                r#"{"action":"rdp-disconnect","session_id":"42"}"#,
+                Action::RdpDisconnect {
+                    session_id: "42".into(),
+                },
+            ),
+            (
+                r#"{"action":"rdp-system","operation":{"operation":"apply-certificate"}}"#,
+                Action::RdpSystem {
+                    operation: RdpSystemAction::ApplyCertificate,
+                },
+            ),
+            (
+                r#"{"action":"rdp-system","operation":{"operation":"enable"}}"#,
+                Action::RdpSystem {
+                    operation: RdpSystemAction::Enable,
+                },
+            ),
+        ] {
+            let parsed: Action = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+            assert_eq!(serde_json::to_string(&action).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn unknown_rdp_actions_and_operations_are_rejected() {
+        assert!(serde_json::from_str::<Action>(r#"{"action":"rdp-run","command":"id"}"#).is_err());
+        assert!(
+            serde_json::from_str::<Action>(r#"{"action":"set-rdp-ports","rdp_port":3391}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<Action>(
+                r#"{"action":"rdp-system","operation":"apply-certificate","command":"id"}"#
+            )
+            .is_err()
+        );
+        assert!(serde_json::from_str::<RdpSystemAction>(r#"{"operation":"reboot"}"#).is_err());
+    }
+
+    #[test]
+    fn codec_tiers_report_their_family() {
+        assert!(CodecTier::H264Vaapi.is_h264());
+        assert!(CodecTier::H264Software.is_h264());
+        assert!(!CodecTier::RemoteFx.is_h264());
+        assert!(!CodecTier::Qoi.is_h264());
+        assert!(!CodecTier::QoiZ.is_h264());
+        assert_eq!(
+            serde_json::to_string(&vec![
+                CodecTier::H264Vaapi,
+                CodecTier::H264Software,
+                CodecTier::RemoteFx,
+                CodecTier::Qoi,
+                CodecTier::QoiZ,
+            ])
+            .unwrap(),
+            r#"["h264-vaapi","h264-software","remote-fx","qoi","qoi-z"]"#
+        );
+    }
 }

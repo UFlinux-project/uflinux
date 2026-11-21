@@ -1,0 +1,90 @@
+[workspace]
+members = ["common", "wayland", "codec", "server", "broker", "gateway", "web", "ctl", "system"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+# ironrdp-server 0.14 requires 1.94.
+rust-version = "1.94"
+homepage = "https://uflinux.org"
+repository = "https://github.com/UFlinux-project/uflinux3"
+
+# IronRDP is pinned to one commit so every crate in the graph agrees. The
+# published set on crates.io (ironrdp 0.17.0 / ironrdp-server 0.13.0 /
+# ironrdp-egfx 0.3.0) predates the server-side H.264 encoder trait, and
+# ironrdp-web is `publish = false`, so a git pin is required either way.
+[workspace.dependencies.ironrdp-git]
+git = "https://github.com/Devolutions/IronRDP"
+rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec"
+
+[workspace.dependencies]
+ironrdp = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec", default-features = false }
+ironrdp-server = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec", default-features = false }
+ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-acceptor = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-graphics = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-input = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-rdcleanpath = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+# ironrdp-server does not re-export these, but the EGFX wire path needs them:
+# drain_output() yields DvcMessage, which must be wrapped with
+# encode_dvc_messages() into SvcMessage before being sent as
+# EgfxServerMessage::SendMessages.
+ironrdp-svc = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-dvc = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-web = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec", default-features = false }
+
+tokio = { version = "1.52", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+tokio-rustls = { version = "0.26", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rustls-pemfile = "2.2"
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+axum = { version = "0.8", features = ["ws"] }
+pam = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+libc = "0.2"
+nix = { version = "0.32", features = ["user", "process", "signal", "fs"] }
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
+thiserror = "2.0"
+base64 = "0.22"
+rand = "0.9"
+
+# Only the privileged helper needs these; it mirrors the Settings system helper.
+glib = { version = "0.22", features = ["v2_80"] }
+gio = "0.22"
+
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+# wlr-screencopy-unstable-v1, wlr-output-management-unstable-v1,
+# wlr-virtual-pointer-unstable-v1.
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+# zwp_virtual_keyboard_v1 lives here, not in the wlr crate.
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-scanner = "0.31"
+
+ffmpeg-next = { version = "9.1", default-features = false, features = ["codec", "software-scaling"] }
+ffmpeg-sys-next = { version = "9.1", default-features = false }
+
+# The Alpine wasm-bindgen CLI version; a mismatch makes the CLI reject the wasm.
+wasm-bindgen = "=0.2.122"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = "0.3"
+
+uflinux-rds-common = { path = "common" }
+uflinux-rds-wayland = { path = "wayland" }
+uflinux-rds-codec = { path = "codec" }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 8
+panic = "abort"
+strip = false
+
+[profile.test]
+debug = 0

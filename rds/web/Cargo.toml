@@ -1,0 +1,59 @@
+[package]
+name = "uflinux-rds-web"
+description = "WebAssembly RDP client for the UFLinux RDS web gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+# QOI is pure Rust. QOIz pulls zstd-sys, whose build script needs a C compiler
+# for wasm32-unknown-unknown, so it stays opt-in (see rds/README.md).
+# `panic_hook` is a default feature of ironrdp-web, but the workspace pins it
+# with default-features = false; enabling it here turns a wasm panic into a
+# readable console message instead of a bare `abort()`.
+ironrdp-web = { workspace = true, features = ["qoi", "panic_hook"] }
+# Concrete wasm-bindgen types (DesktopSize, Extension, IronErrorKind,
+# internal::setup) that ironrdp-web's private bridge is built on. Same rev as
+# the workspace `ironrdp-git` pin, so no extra copy of anything is compiled.
+iron-remote-desktop = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+web-sys = { workspace = true, features = [
+    "console",
+    "Clipboard",
+    "CssStyleDeclaration",
+    "Document",
+    "DomParser",
+    "DomRect",
+    "DomRectReadOnly",
+    "Element",
+    "Event",
+    "HtmlDocument",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlFormElement",
+    "HtmlCanvasElement",
+    "HtmlButtonElement",
+    "KeyboardEvent",
+    "Location",
+    "MouseEvent",
+    "Navigator",
+    "PointerEvent",
+    "Storage",
+    "SubmitEvent",
+    "WheelEvent",
+    "Window",
+] }
+tracing.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"

@@ -2,7 +2,7 @@
 
 Settings is a Rust workspace using plain GTK4, application-local CSS and the
 user's GTK theme. It does not depend on libadwaita, GNOME Settings or GNOME
-Settings Daemon. Super+I opens the nine-page sidebar interface. Dynamic network
+Settings Daemon. Super+I opens the ten-page sidebar interface. Dynamic network
 lists use GtkListView; pages are constructed on demand and discarded when left.
 Image previews are bounded; arbitrary remote wallpapers are not downloaded.
 
@@ -20,7 +20,7 @@ uflinux-settingsctl power-profile balanced
 ```
 
 Other page names are `displays`, `audio`, `power`, `default-apps`, `datetime`, `appearance`,
-`screen-capture` and `about`. The Network panel provides connection selection, credentials and
+`remote-desktop`, `screen-capture` and `about`. The Network panel provides connection selection, credentials and
 radio controls, split into Wi-Fi, Ethernet, Bluetooth and VPN tabs. Audio and the
 Sound panel split devices into Output and Input tabs;
 Power provides battery status, brightness and power modes. Tabs share one fixed
@@ -46,6 +46,19 @@ On boards whose encoder is the Qualcomm Iris/Venus V4L2 device (for example the 
 Dragon Q6A), the capture buffer is aligned to 128 by 32 before it reaches the encoder,
 which is what that device requires and what removes the padding artefact seen at other
 alignments.
+
+Remote Desktop administers `uflinux-rds`, the IronRDP-based server that ships disabled. The
+page turns the service on and off, sets the native RDP port and the web-client port, restricts
+logins to a user or group list, and caps concurrent sessions; each connected user gets a private
+headless `labwc` session inside `cage`, so the machine behaves like a terminal server rather than
+sharing one desktop. The codec section chooses H.264 (`auto`, `force` or `off`), RemoteFX and the
+frame-rate cap. `auto` prefers the out-of-process `ffmpeg -c:v h264_vaapi` encoder, which needs
+the optional `uflinux-rds-vaapi` package, and falls back to software OpenH264 and then RemoteFX.
+The web client on port 3390 can be disabled entirely, switched from HTTPS to HTTP, and given a
+custom certificate instead of the generated self-signed one. Changes are written to
+`/etc/uflinux/rds.json` and pushed to the running broker, so applying them does not drop live
+sessions. Enabling the service, starting it and disconnecting a session go through
+`org.uflinux.rds.configure` and therefore through polkit.
 
 ## Services and authorization
 

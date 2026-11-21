@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Create the Remote Desktop Service source bundle with byte-stable USTAR headers (no compressor)."""
+import argparse
+import hashlib
+import io
+import json
+from pathlib import Path
+import re
+import tarfile
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def bundle():
+    source = ROOT / "rds"
+    version = tomllib.loads((source / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    contents = {"LICENSE": (ROOT / "LICENSE").read_bytes()}
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        if any(
+            part in {"target", "dist", "test-tmp", "__pycache__", ".git"} for part in relative.parts
+        ):
+            continue
+        if path.is_symlink():
+            raise ValueError("Source bundles cannot contain symlinks")
+        if path.is_file():
+            contents[str(relative)] = path.read_bytes()
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for name, data in sorted(contents.items()):
+            entry = tarfile.TarInfo(f"uflinux-rds-{version}/{name}")
+            entry.size = len(data)
+            entry.mode = 0o644
+            archive.addfile(entry, io.BytesIO(data))
+    return version, stream.getvalue()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--update", action="store_true")
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    version, data = bundle()
+    digest = hashlib.sha512(data).hexdigest()
+    lock_path = ROOT / "config/sources.lock.json"
+    recipe_path = ROOT / "aports/uflinux-rds/APKBUILD"
+    lock = json.loads(lock_path.read_text())
+    recipe = recipe_path.read_text()
+    if args.update:
+        lock["uflinux-rds"] = {"version": version}
+        lock_path.write_text(json.dumps(lock, indent=2) + "\n")
+        recipe = re.sub(r"^pkgver=.*$", "pkgver=" + version, recipe, flags=re.M)
+        recipe_path.write_text(recipe)
+    elif args.check:
+        if lock.get("uflinux-rds") != {"version": version} or not re.search(r"^pkgver=" + re.escape(version) + r"$", recipe, re.M):
+            raise SystemExit("RDS version changed; run python3 scripts/rds-source.py --update")
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_bytes(data)
+    print(f"{digest}  uflinux-rds-{version}.tar")
+
+
+if __name__ == "__main__":
+    main()

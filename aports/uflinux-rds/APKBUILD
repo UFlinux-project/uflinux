@@ -1,0 +1,126 @@
+# Maintainer: UFLinux contributors <noreply@example.invalid>
+pkgname=uflinux-rds
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="UFLinux Remote Desktop Services broker (IronRDP)"
+url="${UFLINUX_PROJECT_URL:-https://github.com}"
+arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
+license="GPL-3.0-only"
+depends="$pkgname-server=$pkgver-r$pkgrel $pkgname-web=$pkgver-r$pkgrel $pkgname-system=$pkgver-r$pkgrel
+	linux-pam openrc"
+# clang22-dev and linux-pam-dev: the `pam` crate runs bindgen, which needs an
+# unversioned libclang.so plus the libpam headers. wayland-dev: wayland-sys
+# resolves its libraries with pkg-config at build time. cmake and perl: aws-lc-sys
+# (through rustls) builds with CMake. rust-wasm and wasm-bindgen: the browser
+# client, compiled in prepare() before the gateway embeds it.
+makedepends="cargo cargo-auditable pkgconf musl-dev gcc cmake perl clang22-dev linux-pam-dev
+	wayland-dev glib-dev zlib-dev zstd-dev rust-wasm wasm-bindgen"
+subpackages="$pkgname-dbg $pkgname-doc $pkgname-server:server $pkgname-web:web
+	$pkgname-system:system $pkgname-vaapi:vaapi"
+options="net"
+# Generated from the repository by scripts/rds-source.py, independently verified.
+source="$pkgname-$pkgver.tar"
+# Optional capabilities. Hardware H.264 encodes through an out-of-process ffmpeg
+# helper, so the vaapi feature costs nothing at build time and the runtime
+# packages live in the opt-in $pkgname-vaapi subpackage.
+_rds_features="uflinux-rds-gateway/pam,uflinux-rds-server/pam,uflinux-rds-server/h264-vaapi,uflinux-rds-server/h264-software"
+if [ "${UFLINUX_RDS_PGO:-}" = 1 ]; then
+	makedepends="$makedepends llvm22 llvm22-dev llvm22-static llvm22-gtest clang22
+		samurai libxml2-dev labwc font-dejavu wtype dbus coreutils"
+	source="$source llvm-project-22.1.3.src.tar.xz"
+fi
+# pam-sys' bindgen invocation cannot find libclang without this on Alpine.
+export LIBCLANG_PATH=/usr/lib/llvm22/lib
+export CARGO_INCREMENTAL=0
+export CARGO_PROFILE_TEST_DEBUG=0
+# abuild exports release-profile overrides; enforce the distro's chosen settings.
+export CARGO_PROFILE_RELEASE_OPT_LEVEL=s
+export CARGO_PROFILE_RELEASE_LTO=fat
+export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
+export CARGO_PROFILE_RELEASE_PANIC=abort
+
+prepare() {
+	default_prepare
+	# The wasm client is a second target, so fetch both target graphs.
+	cargo fetch --locked --target="$CTARGET" --target wasm32-unknown-unknown
+	# The gateway embeds the client with include_bytes!, so it has to exist
+	# before anything is compiled.
+	sh scripts/build-wasm.sh
+	if [ "${UFLINUX_RDS_PGO:-}" = 1 ]; then
+		CARGO_PROFILE_RELEASE_OPT_LEVEL=2 CARGO_PROFILE_RELEASE_LTO=false \
+			cargo install cargo-pgo --locked --version 0.3.0 --root "$srcdir/pgo-tools"
+		sh "$builddir/scripts/build-bolt.sh" "$srcdir"
+	fi
+	# Source bundles normalize timestamps. Never reuse stale workspace binaries.
+	# The wasm crate is excluded: its artifact is the client embedded above.
+	local packages="-p uflinux-rds-common -p uflinux-rds-codec -p uflinux-rds-wayland
+		-p uflinux-rds-broker -p uflinux-rds-gateway -p uflinux-rds-server
+		-p uflinux-rds-ctl -p uflinux-rds-system"
+	# shellcheck disable=SC2086
+	cargo clean $packages
+	# shellcheck disable=SC2086
+	cargo clean --release $packages
+}
+build() {
+	# abuild enables Rust debug info when a -dbg subpackage exists.
+	unset CARGO_PROFILE_RELEASE_DEBUG
+	if [ "${UFLINUX_RDS_PGO:-}" = 1 ]; then
+		PATH="$srcdir/pgo-tools/bin:/usr/lib/llvm22/bin:$PATH" \
+		UFLINUX_RDS_FEATURES="$_rds_features" \
+		RUSTFLAGS="$RUSTFLAGS --remap-path-prefix=$builddir=/usr/src/$pkgname" \
+			sh scripts/pgo-build.sh "$CTARGET"
+		return
+	fi
+	# --bins skips the wasm crate, which has no binary target.
+	RUSTFLAGS="$RUSTFLAGS --remap-path-prefix=$builddir=/usr/src/$pkgname" \
+		cargo auditable build --workspace --bins --release --frozen \
+			--features "$_rds_features"
+}
+check() {
+	cargo test --workspace --frozen --features "$_rds_features"
+}
+package() {
+	local target="${CARGO_TARGET_DIR:-target}/release"
+	install -Dm755 "$target/uflinux-rdsd" "$pkgdir/usr/bin/uflinux-rdsd"
+	install -Dm755 "$target/uflinux-rdsctl" "$pkgdir/usr/bin/uflinux-rdsctl"
+	install -Dm755 "$target/uflinux-rdp-session" "$pkgdir/usr/libexec/uflinux-rdp-session"
+	install -Dm755 "$target/uflinux-rds-web" "$pkgdir/usr/bin/uflinux-rds-web"
+	install -Dm755 "$target/uflinux-rds-system" "$pkgdir/usr/libexec/uflinux-rds-system"
+	install -Dm644 data/rds.json "$pkgdir/etc/uflinux/rds.json"
+	install -Dm644 data/uflinux-rds.pam "$pkgdir/etc/pam.d/uflinux-rds"
+	install -Dm755 data/uflinux-rds.initd "$pkgdir/etc/init.d/uflinux-rds"
+	install -Dm644 data/uflinux-rds.confd "$pkgdir/etc/conf.d/uflinux-rds"
+	install -Dm644 data/org.uflinux.Rds.System1.service \
+		"$pkgdir/usr/share/dbus-1/system-services/org.uflinux.Rds.System1.service"
+	install -Dm644 data/org.uflinux.Rds.System1.conf \
+		"$pkgdir/usr/share/dbus-1/system.d/org.uflinux.Rds.System1.conf"
+	install -Dm644 data/org.uflinux.rds.policy \
+		"$pkgdir/usr/share/polkit-1/actions/org.uflinux.rds.policy"
+	install -Dm644 data/60-uflinux-rds.rules \
+		"$pkgdir/usr/share/polkit-1/rules.d/60-uflinux-rds.rules"
+	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+	install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
+server() {
+	pkgdesc="Per-user RDP session process for UFLinux Remote Desktop Services"
+	depends="$pkgname=$pkgver-r$pkgrel wayland labwc cage"
+	amove usr/libexec/uflinux-rdp-session
+}
+web() {
+	pkgdesc="Web client gateway for UFLinux Remote Desktop Services"
+	depends="$pkgname=$pkgver-r$pkgrel"
+	amove usr/bin/uflinux-rds-web
+}
+system() {
+	pkgdesc="Authorized UFLinux Remote Desktop system helper"
+	depends="polkit-elogind dbus elogind glib openrc busybox-openrc $pkgname=$pkgver-r$pkgrel"
+	amove usr/libexec/uflinux-rds-system usr/share/dbus-1/system-services usr/share/dbus-1/system.d
+	amove usr/share/polkit-1
+}
+vaapi() {
+	pkgdesc="Hardware H.264 encoding support for UFLinux Remote Desktop Services"
+	depends="$pkgname-server=$pkgver-r$pkgrel ffmpeg openh264 libva"
+	install -d "$subpkgdir"
+}
+# The build generates the checksum for the current local source bundle.
+sha512sums=""

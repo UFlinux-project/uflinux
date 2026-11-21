@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=19
+pkgrel=20
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -226,6 +226,11 @@ desktop() {
 		x86_64|aarch64|ppc64le|riscv64) file_manager="uflinux-files uflinux-files-desktop uflinux-files-searchd" ;;
 	esac
 	depends="$depends $file_manager"
+	# Remote Desktop Services (IronRDP). The broker ships disabled, so the image
+	# only carries the binaries until the user enables the service in Settings.
+	# uflinux-rds-vaapi adds the out-of-process ffmpeg H.264 encoder; it is a
+	# separate package so that a system that never enables RDP can drop it.
+	depends="$depends uflinux-rds uflinux-rds-vaapi"
 	install -d "$subpkgdir"
 }
 

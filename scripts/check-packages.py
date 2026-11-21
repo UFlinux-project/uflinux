@@ -31,6 +31,14 @@ required.update({"rsvg-convert", "glycin-thumbnailer", "libx11-dev", "make"})
 required.update({"tlp", "tlp-openrc", "tlp-udev"})
 required.update({"py3-atspi", "wtype", "gcc", "musl-dev", "wayland-dev", "libxkbcommon-dev", "desktop-file-utils", "wlr-randr"})
 required.update({"autoconf", "automake", "dbus-dev", "glib-dev", "libmnl-dev", "libnftnl-dev", "libtool", "readline-dev", "linux-headers"})
+# aports/uflinux-rds: bindgen against libpam, aws-lc-sys' CMake builder, the wasm
+# browser client, and the out-of-process ffmpeg H.264 encoder used by the vaapi
+# subpackage. Only aports/uflinux/APKBUILD is scanned above, so the RDS-specific
+# names are listed here instead.
+required.update({"clang22-dev", "linux-pam-dev", "cmake", "perl", "rust-wasm", "wasm-bindgen",
+                 "zlib-dev", "zstd-dev", "openh264", "ffmpeg", "libva",
+                 "llvm22", "llvm22-dev", "llvm22-static", "llvm22-gtest", "clang22", "samurai",
+                 "libxml2-dev", "coreutils", "font-dejavu"})
 
 # Packages built from this repository's own aports tree are not in the Alpine
 # repositories; they are compiled by the build jobs before the image is assembled.

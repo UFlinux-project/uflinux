@@ -47,7 +47,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y shellcheck
-          shellcheck -S warning scripts/*.sh profiles/*.sh tests/*.sh settings/scripts/*.sh aports/uflinux/uflinux-session aports/uflinux/uflinux-autostart aports/uflinux/uflinux-compositor aports/uflinux/uflinux-network-init aports/connman/connman-vpn.initd settings/data/uflinux-acpid.initd settings/data/uflinux-power-button
+          shellcheck -S warning scripts/*.sh profiles/*.sh tests/*.sh rds/scripts/*.sh settings/scripts/*.sh aports/uflinux/uflinux-session aports/uflinux/uflinux-autostart aports/uflinux/uflinux-compositor aports/uflinux/uflinux-network-init aports/connman/connman-vpn.initd settings/data/uflinux-acpid.initd settings/data/uflinux-power-button
           go install github.com/rhysd/actionlint/cmd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca
           "$(go env GOPATH)/bin/actionlint" -config-file .github/actionlint.yaml .github/workflows/build.yml
       - id: matrix
@@ -83,18 +83,19 @@ jobs:
         id: cache
         with:
           path: .cache/build/${{ matrix.package }}
-          key: compile-v2-${{ matrix.arch }}-${{ matrix.package }}-${{ matrix.settings_pgo && 'pgo-' || '' }}${{ needs.checks.outputs.cache }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: compile-v2-${{ matrix.arch }}-${{ matrix.package }}-${{ (matrix.settings_pgo || matrix.rds_pgo) && 'pgo-' || '' }}${{ needs.checks.outputs.cache }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            compile-v2-${{ matrix.arch }}-${{ matrix.package }}-${{ matrix.settings_pgo && 'pgo-' || '' }}${{ needs.checks.outputs.cache }}-
+            compile-v2-${{ matrix.arch }}-${{ matrix.package }}-${{ (matrix.settings_pgo || matrix.rds_pgo) && 'pgo-' || '' }}${{ needs.checks.outputs.cache }}-
       - name: Compile without release secrets
         run: |
           args=()
           if [ "${{ matrix.settings_pgo }}" = true ]; then args+=(--settings-pgo); fi
-          timeout --signal=INT --kill-after=60s ${{ matrix.settings_pgo && '210m' || '300m' }} sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,CARGO_BUILD_JOBS,GITHUB_REPOSITORY,GITHUB_SHA bash scripts/build.sh --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --stage packages --package '${{ matrix.package }}' "${args[@]}"
+          if [ "${{ matrix.rds_pgo }}" = true ]; then args+=(--rds-pgo); fi
+          timeout --signal=INT --kill-after=60s ${{ (matrix.settings_pgo || matrix.rds_pgo) && '210m' || '300m' }} sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,CARGO_BUILD_JOBS,GITHUB_REPOSITORY,GITHUB_SHA bash scripts/build.sh --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --stage packages --package '${{ matrix.package }}' "${args[@]}"
       - name: Compare a clean native rebuild
         if: matrix.arch == 'x86_64'
         run: |
-          timeout --signal=INT --kill-after=60s ${{ matrix.settings_pgo && '120m' || '40m' }} sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,CARGO_BUILD_JOBS,GITHUB_REPOSITORY,GITHUB_SHA python3 scripts/reproducibility.py --arch x86_64 --version '${{ needs.checks.outputs.version }}' --package '${{ matrix.package }}'
+          timeout --signal=INT --kill-after=60s ${{ (matrix.settings_pgo || matrix.rds_pgo) && '120m' || '40m' }} sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,CARGO_BUILD_JOBS,GITHUB_REPOSITORY,GITHUB_SHA python3 scripts/reproducibility.py --arch x86_64 --version '${{ needs.checks.outputs.version }}' --package '${{ matrix.package }}'
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always()
         with:

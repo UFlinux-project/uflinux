@@ -4,6 +4,7 @@ mod capture;
 mod devices;
 mod display;
 mod network;
+mod rdp;
 mod session;
 mod vpn;
 fn main() {

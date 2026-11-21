@@ -1,0 +1,4 @@
+// Installed root is locked. Authenticate using an administrator's own password.
+polkit.addAdminRule(function(action, subject) {
+    if (action.id.indexOf("org.uflinux.rds.") === 0) return ["unix-group:wheel"];
+});

@@ -56,6 +56,10 @@ def collect(out, arch, version):
             if origin != 'uflinux-settings' or arch not in {'x86_64', 'aarch64'}:
                 raise ValueError('Unexpected Settings optimization shard')
             required.add('settings-pgo-profiles.tar.gz')
+        if record.get('rds_pgo'):
+            if origin != 'uflinux-rds' or arch not in {'x86_64', 'aarch64'}:
+                raise ValueError('Unexpected Remote Desktop optimization shard')
+            required.add('rds-pgo-profiles.tar.gz')
         if not required.issubset({p.name for p in inputs.glob('*.tar.gz')}):
             raise ValueError('Missing rebuild inputs for ' + origin)
         if arch == 'x86_64':

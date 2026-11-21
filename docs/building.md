@@ -201,6 +201,12 @@ the matching architecture, add `--settings-pgo` to the package-stage command.
 The compile artifact includes `settings-pgo-profiles.tar.gz`. The native x86_64
 clean rebuild replays that archive with a fresh compiler target directory.
 
+The Remote Desktop origin is optimized the same way, with `--rds-pgo`: its five
+executables are trained by starting the broker, logging in through the web
+gateway and opening a headless session. Its profiles travel as
+`rds-pgo-profiles.tar.gz` and replay identically. The two optimized origins
+never share a shard, so a job replays at most one profile set.
+
 Settings, the desktop shell and the screencapture tool share `settings/Cargo.lock`. Their UIs link GTK4;
 the session service and privileged helper do not. `cargo auditable` records dependency data.
 The nine Settings APKs split GUI, desktop shell, screencapture tool, installer UI,

@@ -24,7 +24,8 @@ def configuration(event, ref, full=False, device_builds=False):
                            "cargo_jobs": arches[arch]["jobs"]} for arch in selected]}
     packages = {"include": [{"arch": arch, "runner": arches[arch]["runner"], "package": package,
                              "cargo_jobs": arches[arch]["jobs"],
-                             "settings_pgo": release and package == "uflinux-settings" and arch in {"x86_64", "aarch64"}}
+                             "settings_pgo": release and package == "uflinux-settings" and arch in {"x86_64", "aarch64"},
+                             "rds_pgo": release and package == "uflinux-rds" and arch in {"x86_64", "aarch64"}}
                              for arch in selected for package in PACKAGE_NAMES]}
     # Only the x86_64 ISO is boot-tested, in both firmware modes, whatever the
     # build matrix covers. Other architectures are built but never started.
@@ -45,7 +46,7 @@ def main():
     # Cache dependencies across changes to our deterministic source bundle. Cargo's
     # fingerprints and package-scoped clean in prepare() still rebuild project code.
     dependencies = hashlib.sha256(json.dumps({k: lock[k] for k in ("alpine", "rootfs", "sources")}, sort_keys=True).encode())
-    for name in ("settings/Cargo.lock", "settings/Cargo.toml", "aports/connman/APKBUILD", "aports/gpu-screen-recorder/APKBUILD", "aports/uflinux-regreet/APKBUILD", "aports/uflinux-settings/APKBUILD", "aports/xdg-desktop-portal-gtk4/APKBUILD", "aports/simp1e-cursors/APKBUILD"):
+    for name in ("settings/Cargo.lock", "settings/Cargo.toml", "rds/Cargo.lock", "rds/Cargo.toml", "aports/connman/APKBUILD", "aports/gpu-screen-recorder/APKBUILD", "aports/uflinux-regreet/APKBUILD", "aports/uflinux-settings/APKBUILD", "aports/uflinux-rds/APKBUILD", "aports/xdg-desktop-portal-gtk4/APKBUILD", "aports/simp1e-cursors/APKBUILD"):
         dependencies.update((root / name).read_bytes().split(b'sha512sums=')[0])
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         for key, value in {**configuration(os.environ.get("EVENT", ""),os.environ.get("REF", ""),

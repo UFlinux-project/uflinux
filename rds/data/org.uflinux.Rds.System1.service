@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.uflinux.Rds.System1
+Exec=/usr/libexec/uflinux-rds-system
+User=root

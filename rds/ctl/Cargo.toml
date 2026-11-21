@@ -1,0 +1,22 @@
+[package]
+name = "uflinux-rds-ctl"
+description = "Command-line control for the UFLinux RDS broker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "uflinux-rdsctl"
+path = "src/main.rs"
+
+[dependencies]
+uflinux-rds-common.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"

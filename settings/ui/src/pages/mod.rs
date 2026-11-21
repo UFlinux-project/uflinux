@@ -3,6 +3,7 @@ mod displays;
 mod network;
 mod power;
 mod preferences;
+mod remote_desktop;
 mod screen_capture;
 use crate::{
     app::{App, Surface},
@@ -30,6 +31,7 @@ pub fn build(app: &Rc<App>, page: &str, parent: &gtk::Box) {
         "datetime" => preferences::datetime(app, parent),
         "appearance" => preferences::appearance(app, parent),
         "screen-capture" => screen_capture::page(app, parent),
+        "remote-desktop" => remote_desktop::page(app, parent),
         "about" => preferences::about(app, parent),
         _ => {}
     }

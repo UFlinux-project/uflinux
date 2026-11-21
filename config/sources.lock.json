@@ -77,7 +77,12 @@
     "url": "https://apps-repo.uflinux.org/apk/v3.24/uflinux-apps",
     "repository_key": "https://apps-repo.uflinux.org/apk/v3.24/uflinux-apps/uflinux3.ec384.pub",
     "repository_key_sha256": "1c97e84817f9928d0aa973d6ab8da406f0e66dccaa3a720d232caa36db9cc12e",
-    "arches": ["x86_64", "aarch64", "ppc64le", "riscv64"]
+    "arches": [
+      "x86_64",
+      "aarch64",
+      "ppc64le",
+      "riscv64"
+    ]
   },
   "aports_commit": "3db0a46d5ef507f6faaa9c0c0fc52181a277e9b7",
   "source_date_epoch": 1794068657,
@@ -147,5 +152,8 @@
   },
   "simp1e-cursors": {
     "version": "0_git20250312"
+  },
+  "uflinux-rds": {
+    "version": "0.1.0"
   }
 }

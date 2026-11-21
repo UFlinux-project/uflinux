@@ -1,0 +1,16 @@
+# Configuration for /etc/init.d/uflinux-rds
+#
+# Every variable below is optional; the broker falls back to its built-in
+# defaults. Un-comment and edit, then `rc-service uflinux-rds restart`.
+
+# H.264 video codec: auto | force | off
+#UFLINUX_RDS_H264=auto
+
+# TCP port for the native RDP listener (default: 3389)
+#UFLINUX_RDS_RDP_PORT=3389
+
+# TCP port for the embedded web gateway (default: 3390)
+#UFLINUX_RDS_WEB_PORT=3390
+
+# Command that starts the user session inside the broker (default: labwc)
+#UFLINUX_RDS_SESSION_COMMAND=labwc

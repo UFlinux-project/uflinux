@@ -58,6 +58,7 @@ pub const PAGES: &[(&str, &str)] = &[
     ("datetime", "Date & Time"),
     ("appearance", "Appearance"),
     ("screen-capture", "Screen Capture"),
+    ("remote-desktop", "Remote Desktop"),
     ("about", "About"),
 ];
 pub fn run() {
