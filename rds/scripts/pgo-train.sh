@@ -28,11 +28,38 @@ export HOME="$scratch/home" XDG_RUNTIME_DIR="$scratch/runtime" XDG_CONFIG_HOME="
 export XDG_DATA_HOME="$scratch/data" XDG_CACHE_HOME="$scratch/cache"
 export DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
 mkdir -m 700 "$HOME" "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
-# Nothing here needs a display, a GPU or root. Ports come from the process id
-# instead of a probe: the shards run one workload per binary, and a broker that
-# loses a race only logs a warning instead of binding its listener.
-rdp_port=$((20000 + $$ % 20000))
-web_port=$((rdp_port + 1))
+# Nothing here needs a display, a GPU or root.
+#
+# Ports come from the process id. Two rules matter: they stay below the kernel
+# ephemeral range, which starts at 32768, because a port inside it may already
+# belong to an unrelated outbound socket on the runner; and consecutive ids
+# pick blocks seven apart, because the shards run several workloads at once
+# with neighbouring process ids and adjacent pairs would overlap. The broker
+# tolerates a listener it cannot bind with a warning, but the web gateway
+# exits, and a workload that cannot reach it fails the build.
+port_busy() {
+    # The local address column is "ADDR:PORT" with a four digit uppercase port.
+    # A missing procfs counts as free, which is what we would do anyway.
+    port_hex=$(printf '%04X' "$1")
+    for table in /proc/net/tcp /proc/net/tcp6; do
+        cat "$table" 2>/dev/null || :
+    done | awk -v needle=":$port_hex\$" '$2 ~ needle { found = 1 } END { exit !found }'
+}
+slot=$(($$ % 2000))
+tries=0
+while :; do
+    rdp_port=$((10000 + slot * 7))
+    web_port=$((rdp_port + 1))
+    if ! port_busy "$rdp_port" && ! port_busy "$web_port"; then
+        break
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -ge 32 ]; then
+        echo "pgo-train: no free port pair found near $rdp_port" >&2
+        exit 1
+    fi
+    slot=$(( (slot + 911) % 2000 ))
+done
 socket=$scratch/control.sock
 config=$scratch/rds.json
 cat >"$config" <<CONFIG
