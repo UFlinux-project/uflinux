@@ -2,8 +2,8 @@
 //!
 //! Talks to `uflinux-rdsd` over the control socket using the shared
 //! [`Request`]/[`Reply`] protocol. Service persistence (`enable`, `disable`)
-//! shells out to OpenRC, so those verbs need root; the Settings UI reaches the
-//! same effect through the polkit helper instead.
+//! shells out to `rc-update`, so those verbs need root; the Settings UI reaches
+//! the same effect through the polkit helper instead.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -14,6 +14,8 @@ use std::time::Duration;
 use uflinux_rds_common::{BrokerState, Config, Reply, Request, SessionInfo, SystemAction};
 
 const SERVICE: &str = "uflinux-rds";
+/// Runlevel `enable` and `disable` operate on, matching the Settings helper.
+const RUNLEVEL: &str = "default";
 const USAGE: &str = "\
 Usage: uflinux-rdsctl [OPTIONS] <COMMAND>
 
@@ -103,10 +105,10 @@ fn run() -> Result<(), String> {
             println!("configuration applied");
             Ok(())
         }
-        Some("enable") => openrc(&["enable", SERVICE], true),
-        Some("disable") => openrc(&["disable", SERVICE], true),
-        Some("start") => openrc(&["start", SERVICE], false),
-        Some("stop") => openrc(&["stop", SERVICE], false),
+        Some("enable") => rc_update(&["add", SERVICE, RUNLEVEL], "enable"),
+        Some("disable") => rc_update(&["del", SERVICE, RUNLEVEL], "disable"),
+        Some("start") => service_toggle(&socket, true),
+        Some("stop") => service_toggle(&socket, false),
         Some(other) => Err(format!("unknown command {other}\n{USAGE}")),
     }
 }
@@ -249,22 +251,46 @@ fn expect_ok(reply: Reply) -> Result<(), String> {
     }
 }
 
-fn openrc(args: &[&str], root_only: bool) -> Result<(), String> {
-    if root_only && unsafe { libc::geteuid() } != 0 {
+/// Run `rc-update add|del` for the verbs that change the default runlevel;
+/// those need root, and the caller says which verb to name in the message.
+fn rc_update(args: &[&str], verb: &str) -> Result<(), String> {
+    if unsafe { libc::geteuid() } != 0 {
         return Err(format!(
-            "{} needs root (try: sudo uflinux-rdsctl {})",
-            args[0], args[0]
+            "{verb} needs root (try: sudo uflinux-rdsctl {verb})"
         ));
     }
-    let status = Command::new("rc-service")
+    openrc("rc-update", args)
+}
+
+/// `start` and `stop`: ask the broker to bring its own listeners down or up,
+/// since it owns the sockets and can do it without root. Only when no broker
+/// answers (the service really is stopped) does this fall back to the runscript,
+/// which needs root.
+fn service_toggle(socket: &Path, running: bool) -> Result<(), String> {
+    let verb = if running { "start" } else { "stop" };
+    let request = Request::Execute {
+        action: SystemAction::SetRunning { running },
+    };
+    match exchange(socket, request) {
+        Ok(reply) => expect_ok(reply),
+        // The broker is not reachable, so there is nothing to toggle in-place.
+        // The runscript is the only thing left that can change the state.
+        Err(_) => openrc("rc-service", &[SERVICE, verb]),
+    }
+}
+
+/// Run one OpenRC command, argv-only. `rc-service` takes the service name
+/// *before* the verb, so the arguments arrive already in that order.
+fn openrc(executable: &str, args: &[&str]) -> Result<(), String> {
+    let status = Command::new(executable)
         .args(args)
         .env("LC_ALL", "C")
         .status()
-        .map_err(|_| "cannot run rc-service".to_owned())?;
+        .map_err(|_| format!("cannot run {executable}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("rc-service {} failed", args.join(" ")))
+        Err(format!("{executable} {} failed", args.join(" ")))
     }
 }
 

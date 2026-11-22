@@ -27,6 +27,10 @@ use crate::state::State;
 /// OpenRC service name, matching `rds/ctl` and `rds/data/uflinux-rds.initd`.
 pub(crate) const SERVICE: &str = "uflinux-rds";
 
+/// Runlevel `enable` and `disable` operate on, matching `rds/ctl` and the
+/// Settings helper.
+const RUNLEVEL: &str = "default";
+
 /// How long a client may take to send its single request line.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long writing the reply may take before the client is forgotten.
@@ -236,6 +240,10 @@ async fn execute(action: SystemAction, state: &State, args: &Args) -> Reply {
 /// write leaves the running configuration untouched. The caller sends its own
 /// validated copy, but it is validated again here — the broker is the last
 /// place that can stop a nonsensical configuration from taking effect.
+///
+/// Applying a configuration that changes `enabled` also starts or stops the
+/// listeners (see [`State::replace_config`]), which is what the Settings switch
+/// promises; any other field is adopted without disturbing a running service.
 fn apply_config(state: &State, config: &Config) -> Reply {
     if let Err(error) = config.validate() {
         return Reply::Error {
@@ -276,8 +284,8 @@ fn set_running(state: &State, args: &Args, running: bool) -> Reply {
     if running_as_root() {
         let verb = if running { "start" } else { "stop" };
         tokio::spawn(async move {
-            if let Err(message) = openrc(&[verb, SERVICE]).await {
-                warn!("rc-service {verb} {SERVICE}: {message}");
+            if let Err(message) = openrc("rc-service", &[SERVICE, verb]).await {
+                warn!("rc-service {SERVICE} {verb}: {message}");
             }
         });
     }
@@ -291,17 +299,20 @@ fn set_running(state: &State, args: &Args, running: bool) -> Reply {
 /// Answer `set_enabled`, mirroring `uflinux-rdsctl enable|disable`: only root
 /// may change the default runlevel, and the broker says so instead of pretending.
 async fn set_enabled(state: &State, enabled: bool) -> Reply {
+    // Persistence lives in the runlevel, so this is `rc-update`, not
+    // `rc-service`; the latter has no enable/disable verb.
+    let verb = if enabled { "enable" } else { "disable" };
     if !running_as_root() {
         return Reply::Error {
-            message: format!(
-                "{} needs root (try: sudo uflinux-rdsctl {})",
-                if enabled { "enable" } else { "disable" },
-                if enabled { "enable" } else { "disable" }
-            ),
+            message: format!("{verb} needs root (try: sudo uflinux-rdsctl {verb})"),
         };
     }
-    let verb = if enabled { "enable" } else { "disable" };
-    match openrc(&[verb, SERVICE]).await {
+    let args = if enabled {
+        ["add", SERVICE, RUNLEVEL]
+    } else {
+        ["del", SERVICE, RUNLEVEL]
+    };
+    match openrc("rc-update", &args).await {
         Ok(()) => {
             state.set_enabled(enabled);
             state.notify_change();
@@ -320,9 +331,10 @@ fn running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-/// Run one `rc-service` verb, argv-only, exactly like `rds/ctl` does.
-async fn openrc(args: &[&str]) -> std::result::Result<(), String> {
-    let mut command = tokio::process::Command::new("rc-service");
+/// Run one OpenRC command, argv-only, exactly like `rds/ctl` does. `rc-service`
+/// wants the service name before the verb; `rc-update` wants verb, name, runlevel.
+async fn openrc(executable: &str, args: &[&str]) -> std::result::Result<(), String> {
+    let mut command = tokio::process::Command::new(executable);
     command
         .args(args)
         .env("LC_ALL", "C")
@@ -331,12 +343,12 @@ async fn openrc(args: &[&str]) -> std::result::Result<(), String> {
         .stderr(std::process::Stdio::null());
     let status = timeout(OPENRC_TIMEOUT, command.status())
         .await
-        .map_err(|_| format!("rc-service {} timed out", args.join(" ")))?
-        .map_err(|_| "cannot run rc-service".to_owned())?;
+        .map_err(|_| format!("{executable} {} timed out", args.join(" ")))?
+        .map_err(|_| format!("cannot run {executable}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("rc-service {} failed", args.join(" ")))
+        Err(format!("{executable} {} failed", args.join(" ")))
     }
 }
 

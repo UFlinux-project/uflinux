@@ -5,7 +5,34 @@ description="UFLinux Remote Desktop broker"
 
 command="/usr/bin/uflinux-rdsd"
 command_background=true
-pidfile="/run/uflinux-rds/uflinux-rdsd.pid"
+# The broker can quit itself after an idle window, which suits socket activation
+# but not OpenRC: nothing here would start it again, and a clean self-exit looks
+# like a crash to `rc-service status`. Stay resident instead. An idle broker is a
+# single small process with no listeners and no children, so this costs nothing.
+command_args="--resident"
+
+# OpenRC sources /etc/conf.d/uflinux-rds into this script but does not export its
+# variables, so the daemon would never see them. Forward the ones the conf.d file
+# documents; the broker reads every UFLINUX_RDS_* name from its own environment.
+for _rds_var in UFLINUX_RDS_CONFIG UFLINUX_RDS_CONTROL_SOCKET UFLINUX_RDS_SESSION_BINARY \
+	UFLINUX_RDS_WEB_BINARY UFLINUX_RDS_H264 UFLINUX_RDS_SESSION_COMMAND \
+	UFLINUX_RDS_RDP_PORT UFLINUX_RDS_WEB_PORT RUST_LOG; do
+	eval _rds_set=\${$_rds_var+yes}
+	[ "$_rds_set" = yes ] && export "$_rds_var"
+done
+unset _rds_var _rds_set
+
+# The socket directory doubles as the pidfile directory, and it must exist before
+# start-stop-daemon writes the pidfile. That happens before the broker runs, and
+# so before the broker's own mkdir; without it the start fails with "No such file
+# or directory" and OpenRC reports the service as crashed.
+: "${UFLINUX_RDS_CONTROL_SOCKET:=/run/uflinux-rds/control.sock}"
+rundir="${UFLINUX_RDS_CONTROL_SOCKET%/*}"
+pidfile="${rundir}/uflinux-rdsd.pid"
+
+start_pre() {
+	checkpath -q -d -m 0755 -o root:root "${rundir}"
+}
 
 extra_started_commands="reload"
 
@@ -16,5 +43,8 @@ reload() {
 }
 
 depend() {
-	need net
+	# Soft ordering only: the broker binds 0.0.0.0, which works before an
+	# address exists, so a network outage must not stop the service. elogind and
+	# D-Bus are used by PAM session setup, which happens on the first login.
+	after net localmount dbus elogind connman
 }

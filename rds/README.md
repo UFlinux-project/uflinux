@@ -43,9 +43,30 @@ uflinux-rdsctl apply /etc/uflinux/rds.json
 ```
 
 `uflinux-rdsctl status` and `uflinux-rdsctl sessions` report the listeners and
-roster, and `uflinux-rdsctl disconnect SESSION_ID` ends one session. `enable`,
-`disable`, `start` and `stop` are OpenRC passthroughs and need root — the
-Settings page reaches the same effect through the polkit helper.
+roster, and `uflinux-rdsctl disconnect SESSION_ID` ends one session. `start` and
+`stop` ask the running broker to open or close its listeners, so they work
+without root; if no broker answers they fall back to `rc-service uflinux-rds`,
+which does need root. `enable` and `disable` are `rc-update add`/`del`
+passthroughs and always need root. The Settings page reaches the same effect
+through the polkit helper.
+
+Applying a configuration that changes `enabled` also starts or stops the
+listeners — that is what the Settings switch promises — while any other field is
+adopted without disturbing a running service. Starting a disabled service is
+refused: enable it first.
+
+## Service
+
+`rc-service uflinux-rds start` runs the broker under OpenRC. The service creates
+its own socket and pidfile directory (`/run/uflinux-rds`, or the parent of
+`UFLINUX_RDS_CONTROL_SOCKET` if that is set in `/etc/conf.d/uflinux-rds`), and
+starts the broker with `--resident` so it never quits on idle: under OpenRC a
+self-exit would look like a crash and nothing would restart it. A resident
+broker that is disabled and idle holds no listeners and has no children, so it
+costs a few megabytes of RSS and nothing else.
+
+The web gateway writes its self-signed certificate into `/var/lib/uflinux-rds`,
+mode 0750, so the private key (0640) is not readable by ordinary users.
 
 ## How a connection is served
 

@@ -240,6 +240,13 @@ impl State {
     }
 
     /// Swap in a reloaded configuration and refresh the admission roster.
+    ///
+    /// An applied configuration that flips `enabled` also moves the desired
+    /// running state, so `apply_config` with the switch turned on brings the
+    /// listeners up and turning it off takes them down. Applying any other
+    /// field leaves the running state alone: changing a port must not stop a
+    /// running service, and a running service must not be started by an
+    /// unrelated edit.
     pub(crate) fn replace_config(&self, config: Config) {
         let mut shared = self
             .inner
@@ -247,7 +254,14 @@ impl State {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         shared.allowed_users = config.allowed_users.clone();
         shared.allowed_groups = config.allowed_groups.clone();
+        let was_enabled = shared.config.enabled;
         shared.config = config;
+        if shared.config.enabled != was_enabled {
+            shared.running = shared.config.enabled;
+            if shared.running {
+                shared.last_busy = Instant::now();
+            }
+        }
     }
 
     /// The file `apply_config` writes to.
@@ -769,6 +783,58 @@ mod tests {
         config.allowed_users.insert("panmourovaty".to_owned());
         state.replace_config(config);
         assert!(state.config().allowed_users.contains("panmourovaty"));
+    }
+
+    #[test]
+    fn applying_a_config_that_enables_the_service_also_starts_it() {
+        let state = state_with(false);
+        assert!(!state.desired_running());
+        state.replace_config(Config {
+            enabled: true,
+            ..Config::default()
+        });
+        assert!(
+            state.desired_running(),
+            "the switch turning on in an applied config must bring the listeners up"
+        );
+    }
+
+    #[test]
+    fn applying_a_config_that_disables_the_service_stops_it() {
+        let state = state_with(true);
+        assert!(state.desired_running());
+        state.replace_config(Config {
+            enabled: false,
+            ..Config::default()
+        });
+        assert!(!state.desired_running());
+    }
+
+    #[test]
+    fn applying_an_unrelated_field_leaves_the_running_state_alone() {
+        // A running service is not stopped by a port change ...
+        let state = state_with(true);
+        state.replace_config(Config {
+            enabled: true,
+            rdp_port: 3599,
+            ..Config::default()
+        });
+        assert!(state.desired_running());
+        assert_eq!(state.config().rdp_port, 3599);
+
+        // ... and a stopped-but-enabled service is not started by one.
+        let state = state_with(true);
+        state.set_desired_running(false);
+        assert!(!state.desired_running());
+        state.replace_config(Config {
+            enabled: true,
+            max_sessions: 8,
+            ..Config::default()
+        });
+        assert!(
+            !state.desired_running(),
+            "an explicit stop survives an unrelated config edit"
+        );
     }
 
     // ------------------------------------------------------------------

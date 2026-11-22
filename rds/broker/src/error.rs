@@ -14,7 +14,7 @@ use std::path::PathBuf;
 pub enum Error {
     /// I/O against the control socket, the RDP listener, a child pipe or the
     /// config file.
-    #[error("I/O error: {message}")]
+    #[error("I/O error while {action}: {message}")]
     Io {
         /// What was being attempted, e.g. "bind RDP listener".
         action: &'static str,

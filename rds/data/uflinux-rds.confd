@@ -1,7 +1,14 @@
 # Configuration for /etc/init.d/uflinux-rds
 #
 # Every variable below is optional; the broker falls back to its built-in
-# defaults. Un-comment and edit, then `rc-service uflinux-rds restart`.
+# defaults. Un-comment and edit, then `rc-service uflinux-rds restart`. The
+# init script forwards these to the daemon, so no `export` keyword is needed.
+# Anything set here wins over /etc/uflinux/rds.json, which is what the Remote
+# Desktop page in uflinux-settings writes.
+
+# Path of the control socket the broker listens on (default below). The service
+# pidfile is created next to it, so changing this moves the pidfile too.
+#UFLINUX_RDS_CONTROL_SOCKET=/run/uflinux-rds/control.sock
 
 # H.264 video codec: auto | force | off
 #UFLINUX_RDS_H264=auto
