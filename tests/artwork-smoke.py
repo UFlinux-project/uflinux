@@ -80,7 +80,8 @@ cursors = Path('/usr/share/icons/simp1e-cursors-adw-dark/cursors')
 for name in ('left_ptr', 'default', 'text', 'grabbing', 'not-allowed'):
     assert (cursors / name).is_file(), 'Missing cursor: ' + name
 theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
-for name in ('uflinux', 'org.uflinux.Settings', 'system-file-manager', 'preferences-system'):
+# Settings asks the theme for the generic gear name, so it has to resolve here.
+for name in ('uflinux', 'system-file-manager', 'preferences-system'):
     assert theme.has_icon(name), 'Missing icon: ' + name
     icon = theme.lookup_icon(name, None, 32, 1, Gtk.TextDirection.NONE, Gtk.IconLookupFlags.FORCE_REGULAR)
     assert icon.get_file() and icon.get_file().query_exists(None), 'Unresolvable icon: ' + name
@@ -92,8 +93,7 @@ for path in images:
     assert info and 0 < width * height <= 16_777_216 and path.stat().st_size <= 32 * 1024 * 1024, path
     preview = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 192, 108, True)
     assert preview.get_width() <= 192 and preview.get_height() <= 108
-for path in (Path('/usr/share/icons/hicolor/scalable/apps/uflinux.svg'),
-             Path('/usr/share/icons/hicolor/scalable/apps/org.uflinux.Settings.svg')):
+for path in (Path('/usr/share/icons/hicolor/scalable/apps/uflinux.svg'),):
     icon = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 32, 32, True)
     assert icon.get_width() == 32 and icon.get_height() == 32
 print('adw-gtk3 GTK3/GTK4 defaults and personal overrides, original artwork, Papirus-Dark lookup, simp1e cursor defaults and bounded wallpaper previews passed')

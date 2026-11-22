@@ -48,9 +48,10 @@ wallpaper also selects Dark Ivy. No GNOME desktop or settings daemon is needed.
 
 The simplified leaf logo is copied unchanged from the
 [UFLinux website](https://uflinux.org/assets/logo.svg) on 17 November 2026.
-It appears on the taskbar Start button, the Settings application icon, About,
-and the boot splash fallback. The imported SVGs are checked against the exact
-upstream bytes recorded in `config/artwork.lock.json`.
+It appears on the taskbar Start button and the boot splash fallback. The imported
+SVG is checked against the exact upstream bytes recorded in
+`config/artwork.lock.json`. Settings uses the theme's `preferences-system` gear
+icon instead of branded artwork, so its icon follows the user's icon theme.
 
 The GNOME 3.38.0 source archive URL and SHA-512 are pinned in
 `config/sources.lock.json` and APKBUILD. Its SHA-256 was also checked against
@@ -64,7 +65,7 @@ artwork notice. Dark Ivy is by Garrett LeSage; Endless Shapes and
 the Symbolics images are by Jakub Steiner, under CC BY-SA 3.0. Cold Warm is by
 invisiblepower and Road by Joshua Welch, under CC0. The exact GNOME attribution
 and license notice, GPL text and artwork notice are installed in
-`/usr/share/licenses/uflinux-defaults/`. Settings' copy of the logo has source attribution in `settings/README.md`.
+`/usr/share/licenses/uflinux-defaults/`.
 
 The package/desktop verification suite checks Papirus-Dark and branded icon lookup,
 SVG rendering, every bundled image's dimensions, bounded previews, the Start

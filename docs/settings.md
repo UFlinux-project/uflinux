@@ -2,7 +2,9 @@
 
 Settings is a Rust workspace using plain GTK4, application-local CSS and the
 user's GTK theme. It does not depend on libadwaita, GNOME Settings or GNOME
-Settings Daemon. Super+I opens the ten-page sidebar interface. Dynamic network
+Settings Daemon. Super+I opens the ten-page interface: the navigation sidebar stays
+visible and the header bar carries the settings search field plus minimize, maximize
+and close. Dynamic network
 lists use GtkListView; pages are constructed on demand and discarded when left.
 Image previews are bounded; arbitrary remote wallpapers are not downloaded.
 

@@ -146,6 +146,15 @@ for path in ("/etc/xdg/gtk-3.0/settings.ini", "/etc/xdg/gtk-4.0/settings.ini",
     assert f'install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir{path}"' in uflinux_apkbuild, \
         f"gtk-settings.ini must be installed to {path}"
 assert 'install -Dm644 "$srcdir/90-uflinux.gschema.override"' in uflinux_apkbuild
+# Settings owns the search field in its header bar, so it cannot rely on the
+# environment for its buttons either: a theme or window manager that ships the
+# built-in "menu:close" layout would hide minimize and maximize. The window pins
+# the same layout the desktop installs above.
+settings_app = (ROOT / "settings/ui/src/app.rs").read_text()
+assert 'header.set_decoration_layout(Some("icon:minimize,maximize,close"))' in settings_app, \
+    "The Settings header bar must pin all three window buttons"
+assert "set_show_title_buttons(true)" in settings_app, \
+    "The Settings header bar must show its window buttons"
 portal = (ROOT / "aports/xdg-desktop-portal-gtk4/APKBUILD").read_text()
 portal_source = lock["sources"]["xdg-desktop-portal-gtk4"]
 assert portal_source["sha512"] in portal

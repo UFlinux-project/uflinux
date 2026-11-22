@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-settings
 pkgver=0.1.0
-pkgrel=8
+pkgrel=9
 pkgdesc="UFLinux Settings, quick controls and resident Start menu"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
@@ -68,7 +68,6 @@ package() {
 	install -Dm644 data/org.uflinux.Settings.desktop "$pkgdir/usr/share/applications/org.uflinux.Settings.desktop"
 	install -Dm755 "$target/uflinux-screencapture" "$pkgdir/usr/bin/uflinux-screencapture"
 	install -Dm644 data/org.uflinux.ScreenCapture.desktop "$pkgdir/usr/share/applications/org.uflinux.ScreenCapture.desktop"
-	install -Dm644 data/org.uflinux.Settings.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.uflinux.Settings.svg"
 	install -Dm644 data/org.uflinux.Settings.service "$pkgdir/usr/share/dbus-1/services/org.uflinux.Settings.service"
 	install -Dm644 data/org.uflinux.Settings1.service "$pkgdir/usr/share/dbus-1/services/org.uflinux.Settings1.service"
 	install -Dm644 data/org.uflinux.Settings.System1.service "$pkgdir/usr/share/dbus-1/system-services/org.uflinux.Settings.System1.service"

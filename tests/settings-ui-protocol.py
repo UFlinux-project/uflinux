@@ -104,6 +104,13 @@ def window_size():
     frame=next(a for a in tree() if a.getRoleName()=='frame')
     return frame.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
 page('network')
+# The header bar owns the search field and the sidebar has no hide control, so the
+# navigation list stays reachable without clicking anything.
+search=wait(lambda:find('Search settings'),'The header search field is missing')
+assert search.getRoleName() in ('entry','text'),'Header search has an unexpected role: '+search.getRoleName()
+assert search.getState().contains(pyatspi.STATE_SHOWING),'Header search is not visible'
+assert not [a for a in tree() if 'Show or hide settings navigation' in (a.name, a.description)], \
+    'The removed sidebar toggle is still present'
 sizes=[]
 for label in network_tabs():
     click(tab(label));sizes.append(window_size())

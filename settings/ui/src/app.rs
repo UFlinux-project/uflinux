@@ -516,18 +516,24 @@ impl App {
             .title("Settings")
             .default_width(880)
             .default_height(640)
-            .icon_name("org.uflinux.Settings")
+            .icon_name("preferences-system")
             .build();
         window.add_css_class("uflinux-settings");
         let root = widgets::column();
         root.set_spacing(0);
         let header = gtk::HeaderBar::new();
-        let nav = gtk::ToggleButton::builder()
-            .icon_name("sidebar-show-symbolic")
-            .active(true)
-            .tooltip_text("Show or hide settings navigation")
-            .build();
-        header.pack_start(&nav);
+        let search = gtk::SearchEntry::new();
+        search.set_placeholder_text(Some("Search settings"));
+        search.set_width_request(200);
+        search.set_hexpand(true);
+        search.update_property(&[gtk::accessible::Property::Label("Search settings")]);
+        header.pack_start(&search);
+        // The navigation sidebar is permanent, so the header's start slot holds the
+        // search field. Pin the whole control set here instead of trusting the
+        // environment: a theme or window manager with a "menu:close" default would
+        // otherwise drop minimize and maximize.
+        header.set_show_title_buttons(true);
+        header.set_decoration_layout(Some("icon:minimize,maximize,close"));
         window.set_titlebar(Some(&header));
         let banner = widgets::description("");
         banner.add_css_class("error");
@@ -541,9 +547,6 @@ impl App {
         let sidebar = widgets::column();
         sidebar.set_width_request(180);
         sidebar.add_css_class("sidebar");
-        let search = gtk::SearchEntry::new();
-        search.set_placeholder_text(Some("Search settings"));
-        sidebar.append(&search);
         let stack = gtk::Stack::new();
         stack.set_hexpand(true);
         stack.set_vexpand(true);
@@ -558,12 +561,6 @@ impl App {
         navigation.set_stack(&stack);
         navigation.set_vexpand(true);
         sidebar.append(&navigation);
-        let target = sidebar.downgrade();
-        nav.connect_toggled(move |button| {
-            if let Some(sidebar) = target.upgrade() {
-                sidebar.set_visible(button.is_active());
-            }
-        });
         body.set_start_child(Some(&sidebar));
         body.set_end_child(Some(&stack));
         body.set_position(200);

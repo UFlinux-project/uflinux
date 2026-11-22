@@ -12,8 +12,7 @@
     "retrieved": "2026-11-17",
     "sha512": "2c4bc926abc85b818305af2c8fcba0aff27d8c307d59fea20415c60c0c47874b63efc3cceccc95ba569587d748d607f54b94c768b66b9642f4e8c6089e180d13",
     "copies": [
-      "aports/uflinux/uflinux-logo.svg",
-      "settings/data/org.uflinux.Settings.svg"
+      "aports/uflinux/uflinux-logo.svg"
     ]
   },
   "logotype": {

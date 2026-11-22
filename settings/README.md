@@ -65,7 +65,9 @@ the verified distribution source with `python3 scripts/settings-source.py --upda
 from the repository root after editing sources. Hardware and memory claims require
 the integration/VM tests; a successful compile is not hardware certification.
 
-The application icon uses the simplified UFLinux leaf logo copied unchanged from
-https://uflinux.org/assets/logo.svg on 17 November 2026. Source attribution and
-exact checksums are recorded in config/artwork.lock.json in the distro repository.
-The downloaded SVG contains no license notice; see aports/uflinux/artwork-NOTICE.
+The window keeps its navigation sidebar visible at all times and puts the settings
+search field in the header bar, where it also pins minimize, maximize and close.
+The application icon is the themed `preferences-system` gear, so it follows the
+user's icon theme (Papirus-Dark by default) instead of branded artwork; the UFLinux
+leaf logo remains on the taskbar Start button and the boot splash, with its source
+attribution in `config/artwork.lock.json` and aports/uflinux/artwork-NOTICE.

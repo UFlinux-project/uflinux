@@ -13,8 +13,10 @@ The simplified UFLinux leaf logo is copied without alteration from:
 https://uflinux.org/assets/logo.svg
 Retrieved from https://uflinux.org/ on 17 November 2026. Exact source bytes and
 SHA-512 are recorded in config/artwork.lock.json. The same SVG is used for the
-desktop panel and Settings application icon, and rasterized with rsvg-convert
+desktop panel icon, and rasterized with rsvg-convert
 for the Plymouth fallback logo. The downloaded SVG contains no license notice.
+UFLinux Settings does not copy this logo: it asks the icon theme for the generic
+preferences-system name, so its icon follows the user's theme.
 
 The boot logotype is the original UFLinux bootloader splash, copied without
 alteration from:

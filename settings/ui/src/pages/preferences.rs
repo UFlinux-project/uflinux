@@ -408,10 +408,10 @@ pub fn appearance(app: &Rc<App>, parent: &gtk::Box) {
     }));
 }
 pub fn about(app: &Rc<App>, parent: &gtk::Box) {
-    let logo = gtk::Image::from_icon_name("org.uflinux.Settings");
+    let logo = gtk::Image::from_icon_name("preferences-system");
     logo.set_pixel_size(48);
     logo.set_halign(gtk::Align::Start);
-    logo.update_property(&[gtk::accessible::Property::Label("UFLinux leaf logo")]);
+    logo.update_property(&[gtk::accessible::Property::Label("UFLinux Settings icon")]);
     parent.append(&logo);
     let summary = gtk::Label::new(None);
     summary.set_xalign(0.);
