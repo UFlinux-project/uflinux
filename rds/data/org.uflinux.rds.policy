@@ -4,11 +4,11 @@
   <vendor>UFLinux</vendor>
   <icon_name>org.uflinux.Settings</icon_name>
   <action id="org.uflinux.rds.configure">
-    <description>Enable or disable the Remote Desktop service</description>
-    <message>Authentication is required to change the Remote Desktop service state</message>
+    <description>Manage Remote Desktop settings and sessions</description>
+    <message>Administrator authentication is required to manage Remote Desktop</message>
     <defaults>
-      <allow_any>no</allow_any>
-      <allow_inactive>no</allow_inactive>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
   </action>
@@ -16,8 +16,8 @@
     <description>Install the Remote Desktop TLS certificate</description>
     <message>Authentication is required to change the Remote Desktop certificate</message>
     <defaults>
-      <allow_any>no</allow_any>
-      <allow_inactive>no</allow_inactive>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
   </action>

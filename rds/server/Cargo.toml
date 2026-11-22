@@ -42,16 +42,20 @@ ironrdp = { workspace = true, optional = true, features = ["core", "server", "gr
 ironrdp-server.workspace = true
 ironrdp-acceptor.workspace = true
 ironrdp-pdu.workspace = true
+ironrdp-core.workspace = true
+ironrdp-cliprdr.workspace = true
+ironrdp-rdpsnd.workspace = true
 ironrdp-egfx.workspace = true
 # Needed for the EGFX wire path: drain_output() yields DvcMessage, which has to
 # be wrapped into SvcMessage before it can be sent as EgfxServerMessage.
 ironrdp-svc.workspace = true
 ironrdp-dvc.workspace = true
+ironrdp-displaycontrol.workspace = true
 # BitmapUpdate::data is a bytes::Bytes.
 bytes = "1"
 # The RdpServerDisplay / CredentialValidator traits are #[async_trait].
 async-trait = "0.1"
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 tokio-rustls = { workspace = true, features = ["ring", "tls12", "logging"] }
 rustls = { workspace = true, features = ["ring"] }
 rustls-pemfile.workspace = true

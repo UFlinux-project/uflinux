@@ -27,6 +27,7 @@ pub(crate) struct Entry {
     pub(crate) id: u32,
     /// Process id of the child, used for `disconnect`.
     pub(crate) pid: u32,
+    pidfd: Option<std::sync::Arc<std::os::fd::OwnedFd>>,
     /// Latest known facts, merged from the child's status frames.
     pub(crate) username: String,
     /// `"rdp"` or `"web"`.
@@ -52,6 +53,7 @@ impl Entry {
         Self {
             id,
             pid,
+            pidfd: None,
             username: String::new(),
             transport: "rdp".to_owned(),
             codec: "unknown".to_owned(),
@@ -359,7 +361,9 @@ impl State {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = shared.next_id;
         shared.next_id = shared.next_id.wrapping_add(1).max(1);
-        shared.roster.push(Entry::new(id, pid, Instant::now()));
+        let mut entry = Entry::new(id, pid, Instant::now());
+        entry.pidfd = crate::session::open_pidfd(pid).ok().map(std::sync::Arc::new);
+        shared.roster.push(entry);
         shared.last_busy = Instant::now();
         id
     }
@@ -385,6 +389,11 @@ impl State {
     }
 
     /// The row for `id`, if it exists.
+    pub(crate) fn session_pidfd(&self, id: u32) -> Option<std::sync::Arc<std::os::fd::OwnedFd>> {
+        let shared = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        shared.roster.iter().find(|entry| entry.id == id)?.pidfd.clone()
+    }
+
     pub(crate) fn session_pid(&self, id: u32) -> Option<u32> {
         let shared = self
             .inner

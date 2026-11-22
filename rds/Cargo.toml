@@ -25,6 +25,9 @@ ironrdp-server = { git = "https://github.com/Devolutions/IronRDP", rev = "b13bef
 ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
 ironrdp-acceptor = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
 ironrdp-pdu = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-core = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-cliprdr = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-rdpsnd = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
 ironrdp-graphics = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
 ironrdp-input = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
 ironrdp-rdcleanpath = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
@@ -34,6 +37,7 @@ ironrdp-rdcleanpath = { git = "https://github.com/Devolutions/IronRDP", rev = "b
 # EgfxServerMessage::SendMessages.
 ironrdp-svc = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
 ironrdp-dvc = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+ironrdp-displaycontrol = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
 ironrdp-web = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec", default-features = false }
 
 tokio = { version = "1.52", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }

@@ -4,14 +4,26 @@ touch "$XDG_RUNTIME_DIR/uflinux-compositor-ready"
 # D-Bus activated applications need the compositor's environment.
 dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE LABWC_PID UFLINUX_RENDERER
 if [ -n "${GSK_RENDERER:-}" ]; then dbus-update-activation-environment GSK_RENDERER; fi
-/usr/libexec/pipewire-launcher &
+if [ "${UFLINUX_RDS_SESSION:-0}" = 1 ]; then
+	# Each remote desktop has its own runtime directory. Run only the
+	# routing policy here, leaving hardware and the local session alone.
+	/usr/bin/pipewire &
+	for attempt in 1 2 3 4 5 6 7 8 9 10; do
+		[ ! -S "$XDG_RUNTIME_DIR/pipewire-0" ] || break
+		sleep 0.1
+	done
+	XDG_STATE_HOME="$XDG_RUNTIME_DIR" /usr/bin/wireplumber -p policy &
+	/usr/bin/pipewire-pulse &
+else
+	/usr/libexec/pipewire-launcher &
+fi
 /usr/libexec/uflinux-theme-sync &
 mako &
 /usr/libexec/uflinux-settingsd &
 # The desktop supervises its own restarts, so the session needs no extra
 # interpreter to keep a window owner resident.
 uflinux-desktop --supervise &
-if [ -f /run/uflinux-live ] && [ ! -e "$XDG_RUNTIME_DIR/uflinux-installer-started" ]; then
+if [ "${UFLINUX_RDS_SESSION:-0}" != 1 ] && [ -f /run/uflinux-live ] && [ ! -e "$XDG_RUNTIME_DIR/uflinux-installer-started" ]; then
 	touch "$XDG_RUNTIME_DIR/uflinux-installer-started"
 	uflinux-installer &
 fi

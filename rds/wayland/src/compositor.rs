@@ -65,7 +65,7 @@ impl Compositor {
             }
             None => None,
         };
-        let env = child_env(&runtime_dir, target.as_ref());
+        let env = child_env(spec, target.as_ref());
         let args = [CString::new(command.as_str())
             .unwrap_or_else(|_| CString::new(DesktopSpec::DEFAULT_COMMAND).expect("static"))];
         let filename = CString::new(command.as_str())
@@ -312,12 +312,25 @@ fn prune_stale_sockets(runtime_dir: &Path) {
 /// Strip the parent display settings so the compositor can publish its own.
 /// Even an empty `WAYLAND_SOCKET` makes libwayland try to parse a file
 /// descriptor instead of connecting to the compositor's named socket.
-fn child_env(runtime_dir: &Path, target: Option<&TargetUser>) -> Vec<CString> {
+fn child_env(spec: &DesktopSpec, target: Option<&TargetUser>) -> Vec<CString> {
     let mut env: Vec<CString> = std::env::vars_os()
         .filter(|(key, _)| {
             !matches!(
                 key.to_str(),
-                Some("WAYLAND_DISPLAY" | "DISPLAY" | "WAYLAND_SOCKET")
+                Some(
+                    "WAYLAND_DISPLAY"
+                        | "DISPLAY"
+                        | "WAYLAND_SOCKET"
+                        | "DBUS_SESSION_BUS_ADDRESS"
+                        | "XDG_SESSION_ID"
+                        | "XDG_SEAT"
+                        | "XDG_VTNR"
+                        | "XDG_CONFIG_HOME"
+                        | "PIPEWIRE_RUNTIME_DIR"
+                        | "PIPEWIRE_REMOTE"
+                        | "PULSE_RUNTIME_PATH"
+                        | "PULSE_SERVER"
+                )
             )
         })
         .filter_map(|(key, value)| {
@@ -333,12 +346,17 @@ fn child_env(runtime_dir: &Path, target: Option<&TargetUser>) -> Vec<CString> {
     let overrides = [
         ("WLR_BACKENDS", "headless".to_string()),
         ("WLR_LIBINPUT_NO_DEVICES", "1".to_string()),
-        ("XDG_RUNTIME_DIR", runtime_dir.display().to_string()),
+        ("XDG_RUNTIME_DIR", spec.runtime_dir.display().to_string()),
+        ("UFLINUX_RDS_SESSION", "1".to_string()),
+        ("XDG_SESSION_TYPE", "wayland".to_string()),
     ];
     let mut overrides: Vec<(String, String)> = overrides
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
         .collect();
+    if let Some(session_id) = &spec.session_id {
+        overrides.push(("XDG_SESSION_ID".to_owned(), session_id.clone()));
+    }
     if let Some(target) = target {
         overrides.push((
             "USER".to_string(),
@@ -483,7 +501,7 @@ mod tests {
 
     #[test]
     fn env_overrides_replace_inherited_values() {
-        let env = child_env(Path::new("/run/user/1000"), None);
+        let env = child_env(&DesktopSpec::new("labwc", 640, 480, "/run/user/1000"), None);
         let text: Vec<String> = env
             .iter()
             .map(|e| e.to_string_lossy().into_owned())

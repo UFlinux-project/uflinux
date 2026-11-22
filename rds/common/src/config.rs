@@ -23,11 +23,8 @@ pub struct Config {
     pub rdp_port: u16,
     /// Bind address for the RDP listener. Loopback keeps RDS local-only.
     pub rdp_bind: String,
-    /// Require CredSSP/NLA. Off by default: answering CredSSP needs a copy of
-    /// the user's password, which a session host does not have (see
-    /// `rds/server/src/main.rs::session_security`). Clients that merely prefer
-    /// NLA connect anyway over server-authenticated TLS; clients that require
-    /// it are refused until there is a secret store to read a real one from.
+    /// Legacy NLA switch. Validation rejects true because this PAM service
+    /// accepts native RDP over server-authenticated TLS.
     pub nla_required: bool,
     /// Users allowed to open a session. Empty means every local user.
     pub allowed_users: BTreeSet<String>,
@@ -250,6 +247,11 @@ impl Config {
 
     /// Reject values that would make the service unusable at startup.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.nla_required {
+            return Err(ConfigError::Invalid(
+                "nla_required is unsupported for PAM accounts. Set it to false to use RDP over TLS.".to_owned(),
+            ));
+        }
         if self.rdp_port == 0 {
             return Err(ConfigError::Invalid("rdp_port must not be 0".to_owned()));
         }

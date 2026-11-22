@@ -26,6 +26,8 @@ pub struct DesktopSpec {
     /// Drop privileges to this user before executing the compositor.
     /// `None` inherits the credentials of the RDS process.
     pub user: Option<String>,
+    /// Remote login session registered by PAM, when available.
+    pub session_id: Option<String>,
     /// Per-session runtime directory. The private `WAYLAND_DISPLAY` socket is
     /// created in here, and the directory is exported as `XDG_RUNTIME_DIR`.
     pub runtime_dir: PathBuf,
@@ -55,6 +57,7 @@ impl DesktopSpec {
             width,
             height,
             user: None,
+            session_id: None,
             runtime_dir: runtime_dir.into(),
         }
     }

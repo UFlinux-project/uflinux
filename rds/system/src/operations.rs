@@ -5,13 +5,16 @@ use glib::variant::ToVariant;
 use std::{
     cell::Cell,
     collections::HashMap,
-    io::Read,
+    io::{BufRead, BufReader, Read, Write},
+    os::unix::net::UnixStream,
     os::unix::process::CommandExt,
     path::Path,
     process::{Command, Stdio},
     rc::Rc,
     time::{Duration, Instant},
 };
+
+use uflinux_rds_common::{BrokerState, Config, Reply, Request, SystemAction};
 
 const SERVICE: &str = "uflinux-rds";
 const RUNLEVEL: &str = "default";
@@ -176,7 +179,114 @@ async fn execute(operation: &RdpSystemOperation) -> Result<serde_json::Value> {
             }
         }
         RdpSystemOperation::Status => certificate::status(&certificate::Paths::system()),
+        RdpSystemOperation::BrokerState => broker(Request::GetState).await,
+        RdpSystemOperation::BrokerDisconnect { session } => {
+            broker(Request::Disconnect { session: *session }).await
+        }
+        RdpSystemOperation::BrokerConfigure { config } => {
+            let config = config.clone();
+            gio::spawn_blocking(move || configure_broker(&config))
+                .await
+                .map_err(|_| "System worker failed".to_owned())?
+        }
     }
+}
+
+/// Only the fields exposed by Settings may be changed through this endpoint.
+fn configure_broker(requested: &Config) -> Result<serde_json::Value> {
+    let path = uflinux_rds_common::config_file_path();
+    let mut current = Config::load(&path).map_err(|error| error.to_string())?;
+    current.rdp_port = requested.rdp_port;
+    current.web.enabled = requested.web.enabled;
+    current.web.port = requested.web.port;
+    current.web.https = requested.web.https;
+    current.web.certificate = requested.web.certificate.clone();
+    current.codec.h264 = requested.codec.h264;
+    current.codec.allow_remotefx = requested.codec.allow_remotefx;
+    current.max_sessions = requested.max_sessions;
+    current.validate().map_err(|error| error.to_string())?;
+    let request = Request::Execute {
+        action: SystemAction::ApplyConfig {
+            config: Box::new(current),
+        },
+    };
+    broker_exchange(&request)
+}
+
+async fn broker(request: Request) -> Result<serde_json::Value> {
+    gio::spawn_blocking(move || broker_exchange(&request))
+        .await
+        .map_err(|_| "System worker failed".to_owned())?
+}
+
+fn broker_exchange(request: &Request) -> Result<serde_json::Value> {
+    let socket = uflinux_rds_common::control_socket_path();
+    let mut stream = match UnixStream::connect(&socket) {
+        Ok(stream) => stream,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return offline_broker(request);
+        }
+        Err(error) => {
+            return Err(format!(
+                "Cannot reach the RDS broker at {}: {error}",
+                socket.display()
+            ));
+        }
+    };
+    let timeout = Some(Duration::from_secs(2));
+    stream
+        .set_read_timeout(timeout)
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(timeout)
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut stream, request).map_err(|error| error.to_string())?;
+    stream.write_all(b"\n").map_err(|error| error.to_string())?;
+    let mut line = String::new();
+    BufReader::new(stream)
+        .take(1024 * 1024)
+        .read_line(&mut line)
+        .map_err(|error| error.to_string())?;
+    let reply: Reply = serde_json::from_str(&line).map_err(|error| error.to_string())?;
+    match reply {
+        Reply::Error { message } => Err(message),
+        reply => serde_json::to_value(reply).map_err(|error| error.to_string()),
+    }
+}
+
+/// The control socket is absent while OpenRC has the broker stopped.
+fn offline_broker(request: &Request) -> Result<serde_json::Value> {
+    let path = uflinux_rds_common::config_file_path();
+    let config = match request {
+        Request::GetState => Config::load(&path).map_err(|error| error.to_string())?,
+        Request::Execute {
+            action: SystemAction::ApplyConfig { config },
+        } => {
+            config.save(&path).map_err(|error| error.to_string())?;
+            config.as_ref().clone()
+        }
+        _ => return Err("The RDS broker is stopped".into()),
+    };
+    let state = BrokerState {
+        enabled: config.enabled,
+        effective: config.clone(),
+        config,
+        running: false,
+        rdp_listening: false,
+        web_listening: false,
+        sessions: Vec::new(),
+        fault: None,
+    };
+    serde_json::to_value(Reply::Ok {
+        state: Some(Box::new(state)),
+        sessions: None,
+    })
+    .map_err(|error| error.to_string())
 }
 
 /// OpenRC through the same argv-only boundary as every other helper command.
@@ -270,7 +380,7 @@ async fn authorized(
     operation: &RdpSystemOperation,
 ) -> Result<()> {
     let action = match operation {
-        RdpSystemOperation::Status => return Ok(()),
+        RdpSystemOperation::Status | RdpSystemOperation::BrokerState => return Ok(()),
         RdpSystemOperation::ApplyCertificate { .. } => "org.uflinux.rds.certificate",
         _ => "org.uflinux.rds.configure",
     };

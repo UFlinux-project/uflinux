@@ -88,10 +88,6 @@ impl Authenticator for PamAuthenticator {
         client
             .conversation_mut()
             .set_credentials(username, password);
-        // `pam::Client` exposes authenticate() only; `pam_acct_mgmt` would have
-        // to come from `pam::functions` with a raw handle, and the account
-        // check is enforced by the broker's allow-list plus the session
-        // server's own admission policy.
         client.authenticate().map_err(|_| AuthError::Denied)?;
         Ok(())
     }
@@ -249,39 +245,61 @@ impl DesktopOwner {
 }
 
 /// The private directory one desktop gets for its Wayland socket.
-///
-/// `base` is the directory this session host owns: `$XDG_RUNTIME_DIR` when it
-/// is unprivileged, otherwise the shared state directory. A session host that
-/// runs as root serves whichever account authenticates, so the path is
-/// namespaced by uid — two users connecting at the same time must not share
-/// one directory. An unprivileged host only ever serves one account, so it
-/// needs no namespace and no ownership change.
-pub fn desktop_runtime_dir(base: &Path, uid: Option<u32>) -> PathBuf {
-    let mut path = match uid {
-        Some(uid) => base.join("sessions").join(uid.to_string()),
-        None => base.to_path_buf(),
-    };
-    path.push(format!("rdp-{}", std::process::id()));
-    path
+fn desktop_runtime_dir(base: &Path, uid: Option<u32>) -> PathBuf {
+    let pid = std::process::id();
+    match uid {
+        Some(uid) => base.join(format!("rdp-{uid}-{pid}")),
+        None => base.join(format!("rdp-{pid}")),
+    }
 }
 
-/// Creates [`desktop_runtime_dir`]'s directory as `0700` owned by `owner`.
-///
-/// Returns the path so the caller cannot use a directory it did not prepare.
-pub fn prepare_desktop_dir(path: &Path, owner: Option<&DesktopOwner>) -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
+/// Create a private runtime directory for one desktop. The shared root-owned
+/// base allows traversal, and only the authenticated account owns the leaf.
+pub fn prepare_desktop_dir(
+    base: &Path,
+    uid: Option<u32>,
+    owner: Option<&DesktopOwner>,
+) -> std::io::Result<PathBuf> {
+    use std::fs::{self, DirBuilder, Permissions};
+    use std::io::{Error, ErrorKind};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 
-    std::fs::create_dir_all(path)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-    if let Some(owner) = owner {
-        nix::unistd::chown(
-            path,
-            Some(nix::unistd::Uid::from_raw(owner.uid)),
-            Some(nix::unistd::Gid::from_raw(owner.gid)),
-        )
-        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    if uid.is_some() {
+        match DirBuilder::new().mode(0o711).create(base) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        let metadata = fs::symlink_metadata(base)?;
+        if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "unsafe RDS runtime directory",
+            ));
+        }
+        fs::set_permissions(base, Permissions::from_mode(0o711))?;
+    } else {
+        fs::create_dir_all(base)?;
     }
-    Ok(path.to_path_buf())
+
+    let path = desktop_runtime_dir(base, uid);
+    DirBuilder::new().mode(0o700).create(&path)?;
+    let prepared = fs::set_permissions(&path, Permissions::from_mode(0o700)).and_then(|()| {
+        if let Some(owner) = owner {
+            nix::unistd::chown(
+                &path,
+                Some(nix::unistd::Uid::from_raw(owner.uid)),
+                Some(nix::unistd::Gid::from_raw(owner.gid)),
+            )
+            .map_err(Error::from)?;
+        }
+        Ok(())
+    });
+    if let Err(error) = prepared {
+        let _ = fs::remove_dir(&path);
+        return Err(error);
+    }
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -409,19 +427,19 @@ mod tests {
     fn a_privileged_desktop_dir_is_namespaced_by_uid() {
         // The session host runs as root and serves whichever account
         // authenticates, so two users must not land in one directory.
-        let root = Path::new("/var/lib/uflinux-rds");
+        let root = Path::new("/run/uflinux-rds-desktops");
         let a = desktop_runtime_dir(root, Some(1000));
         let b = desktop_runtime_dir(root, Some(1001));
         assert_ne!(a, b);
         // `Path::starts_with` compares components, so compare text here.
         assert!(
             a.to_string_lossy()
-                .starts_with("/var/lib/uflinux-rds/sessions/1000/rdp-"),
+                .starts_with("/run/uflinux-rds-desktops/rdp-1000-"),
             "{a:?}"
         );
         assert!(
             b.to_string_lossy()
-                .starts_with("/var/lib/uflinux-rds/sessions/1001/rdp-"),
+                .starts_with("/run/uflinux-rds-desktops/rdp-1001-"),
             "{b:?}"
         );
     }
@@ -441,12 +459,12 @@ mod tests {
 
     #[test]
     fn the_desktop_dir_is_private_to_this_process() {
-        let path = desktop_runtime_dir(Path::new("/var/lib/uflinux-rds"), Some(1000));
+        let path = desktop_runtime_dir(Path::new("/run/uflinux-rds-desktops"), Some(1000));
         let name = path
             .file_name()
             .expect("a directory name")
             .to_string_lossy();
-        assert_eq!(name, format!("rdp-{}", std::process::id()));
+        assert_eq!(name, format!("rdp-1000-{}", std::process::id()));
     }
 
     #[test]
@@ -454,8 +472,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let base = std::env::temp_dir().join(format!("uflinux-rds-auth-{}", std::process::id()));
-        let path = base.join("rdp-0");
-        let prepared = prepare_desktop_dir(&path, None).expect("the directory is created");
+        let path = desktop_runtime_dir(&base, None);
+        let prepared = prepare_desktop_dir(&base, None, None).expect("the directory is created");
         assert_eq!(prepared, path);
         let mode = std::fs::metadata(&path)
             .expect("metadata")
@@ -470,5 +488,205 @@ mod tests {
         // Only the non-PAM stub can authenticate somebody who is not in the
         // password database; the caller treats `None` as "no privilege drop".
         assert!(DesktopOwner::lookup("uflinux-rds-no-such-user").is_none());
+    }
+}
+
+#[cfg(feature = "pam")]
+pub mod login {
+    use super::{AuthError, DesktopOwner, Policy, admit};
+    use pam::{PamFlag, PamHandle, PamItemType, PamReturnCode};
+    use std::ffi::{CStr, CString, c_int, c_void};
+
+    struct Credentials {
+        username: CString,
+        password: CString,
+    }
+
+    unsafe extern "C" fn converse(
+        count: c_int,
+        messages: *mut *const pam::PamMessage,
+        output: *mut *mut pam::PamResponse,
+        data: *mut c_void,
+    ) -> c_int {
+        if count <= 0 || messages.is_null() || output.is_null() || data.is_null() {
+            return PamReturnCode::Conv_Err as c_int;
+        }
+        // Linux PAM supplies an array of message pointers. It takes ownership
+        // of the response array and strings only when the callback succeeds.
+        unsafe {
+            let credentials = &*data.cast::<Credentials>();
+            let responses = libc::calloc(count as usize, size_of::<pam::PamResponse>())
+                .cast::<pam::PamResponse>();
+            if responses.is_null() {
+                return PamReturnCode::Buf_Err as c_int;
+            }
+            for index in 0..count as usize {
+                let message = *messages.add(index);
+                let source = message
+                    .as_ref()
+                    .and_then(|message| match message.msg_style {
+                        1 => Some(Some(&credentials.password)), // PAM_PROMPT_ECHO_OFF
+                        2 => Some(Some(&credentials.username)), // PAM_PROMPT_ECHO_ON
+                        3 | 4 => Some(None),                    // PAM_ERROR_MSG / PAM_TEXT_INFO
+                        _ => None,
+                    });
+                match source {
+                    Some(None) => continue,
+                    Some(Some(source)) => {
+                        let response = libc::strdup(source.as_ptr());
+                        if !response.is_null() {
+                            (*responses.add(index)).resp = response;
+                            continue;
+                        }
+                    }
+                    None => {}
+                }
+                for previous in 0..index {
+                    libc::free((*responses.add(previous)).resp.cast());
+                }
+                libc::free(responses.cast());
+                return PamReturnCode::Conv_Err as c_int;
+            }
+            *output = responses;
+        }
+        PamReturnCode::Success as c_int
+    }
+
+    /// Owns a PAM transaction on the worker that created it. The desktop
+    /// lease keeps that worker alive until the compositor has stopped.
+    pub struct Login {
+        handle: &'static mut PamHandle,
+        _credentials: Box<Credentials>,
+        tracked: bool,
+        established: bool,
+        status: PamReturnCode,
+        pub username: String,
+        pub session_id: Option<String>,
+    }
+
+    impl Login {
+        pub fn open(
+            service: &str,
+            username: String,
+            password: String,
+            peer: &str,
+            policy: &Policy,
+        ) -> Result<Self, AuthError> {
+            let mut credentials = Box::new(Credentials {
+                username: CString::new(username.as_str()).map_err(|_| AuthError::Denied)?,
+                password: CString::new(password).map_err(|_| AuthError::Denied)?,
+            });
+            let conversation = pam::ffi::pam_conv {
+                conv: Some(converse),
+                appdata_ptr: (&mut *credentials as *mut Credentials).cast(),
+            };
+            let service =
+                CString::new(service).map_err(|error| AuthError::Backend(error.to_string()))?;
+            let mut handle = std::ptr::null_mut();
+            // Keep the service name, username and conversation alive through
+            // pam_start. PAM copies the names and stores the callback data.
+            let status = unsafe {
+                pam::ffi::pam_start(
+                    service.as_ptr(),
+                    credentials.username.as_ptr(),
+                    &conversation,
+                    &mut handle,
+                )
+            };
+            let handle = match PamReturnCode::from(status) {
+                PamReturnCode::Success if !handle.is_null() => {
+                    // SAFETY: this transaction owns the handle until pam_end.
+                    unsafe { &mut *handle }
+                }
+                status => return Err(AuthError::Backend(format!("pam_start: {status:?}"))),
+            };
+            let mut login = Self {
+                handle,
+                _credentials: credentials,
+                tracked: false,
+                established: false,
+                status: PamReturnCode::Success,
+                username,
+                session_id: None,
+            };
+            let peer = peer.rsplit_once(" -> ").map_or(peer, |(_, peer)| peer);
+            let peer = peer
+                .parse::<std::net::SocketAddr>()
+                .map_or_else(|_| "rdp".to_owned(), |address| address.ip().to_string());
+            let peer = CString::new(peer).map_err(|_| AuthError::Denied)?;
+            // PAM copies PAM_RHOST during this call.
+            let status = unsafe {
+                pam::ffi::pam_set_item(
+                    login.handle,
+                    PamItemType::RHost as c_int,
+                    peer.as_ptr().cast(),
+                )
+            };
+            login.check(status.into())?;
+            let status = pam::authenticate(login.handle, PamFlag::None);
+            login.check(status).map_err(|_| AuthError::Denied)?;
+            let status = pam::acct_mgmt(login.handle, PamFlag::None);
+            login.check(status).map_err(|_| AuthError::Denied)?;
+
+            let mut item = std::ptr::null();
+            // PAM owns the username string. Copy it before the next PAM call.
+            let status = unsafe {
+                pam::ffi::pam_get_item(login.handle, PamItemType::User as c_int, &mut item)
+            };
+            login.check(status.into())?;
+            if item.is_null() {
+                return Err(AuthError::Denied);
+            }
+            login.username = unsafe { CStr::from_ptr(item.cast()) }
+                .to_str()
+                .map_err(|_| AuthError::Denied)?
+                .to_owned();
+            if DesktopOwner::lookup(&login.username).is_none() || !admit(policy, &login.username) {
+                return Err(AuthError::NotAllowed);
+            }
+
+            for entry in [
+                "XDG_SESSION_TYPE=wayland",
+                "XDG_SESSION_CLASS=user",
+                "XDG_SESSION_DESKTOP=labwc",
+                "XDG_SESSION_REMOTE=1",
+            ] {
+                pam::putenv(login.handle, entry)
+                    .map_err(|error| AuthError::Backend(error.to_string()))?;
+            }
+            let status = pam::setcred(login.handle, PamFlag::Establish_Cred);
+            login.check(status)?;
+            login.established = true;
+            let status = pam::open_session(login.handle, false);
+            login.check(status)?;
+            login.tracked = true;
+            login.session_id = pam::getenv(login.handle, "XDG_SESSION_ID")
+                .map_err(|error| AuthError::Backend(error.to_string()))?
+                .map(str::to_owned);
+            Ok(login)
+        }
+
+        fn check(&mut self, status: PamReturnCode) -> Result<(), AuthError> {
+            self.status = status;
+            if status == PamReturnCode::Success {
+                Ok(())
+            } else {
+                Err(AuthError::Backend(
+                    pam::strerror(self.handle, status).to_owned(),
+                ))
+            }
+        }
+    }
+
+    impl Drop for Login {
+        fn drop(&mut self) {
+            if self.tracked {
+                let _ = pam::close_session(self.handle, false);
+            }
+            if self.established {
+                let _ = pam::setcred(self.handle, PamFlag::Delete_Cred);
+            }
+            let _ = pam::end(self.handle, self.status);
+        }
     }
 }

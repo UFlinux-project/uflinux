@@ -21,8 +21,8 @@
 //!    it negotiates an empty `SecurityProtocol` and never starts a TLS
 //!    handshake, so the bytes spliced below are plain RDP.
 //! 5. Everything after that is spliced both ways. WebSocket binary messages are
-//!    an opaque byte stream in *both* directions: one message is never assumed
-//!    to be one RDP PDU.
+//!    a byte stream in both directions. The gateway reassembles server PDUs
+//!    across reads, including both TPKT and Fast-Path packets.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -44,7 +44,7 @@ use crate::tokens::TokenError;
 
 /// Maximum RDCleanPath handshake data the gateway is willing to buffer.
 pub const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
-/// Maximum number of whole TPKT frames buffered on the way to the browser.
+/// Maximum number of whole RDP packets buffered on the way to the browser.
 pub const MAX_PENDING_FRAMES: usize = 32;
 /// Size of a single read from the session host.
 const READ_CHUNK: usize = 16 * 1024;
@@ -240,7 +240,10 @@ where
                 if backend_open && pending.to_ws.len() < MAX_PENDING_FRAMES => {
                 match read {
                     Ok(0) => backend_open = false,
-                    Ok(n) => pending.ingest(&chunk[..n]),
+                    Ok(n) => pending.ingest(&chunk[..n]).map_err(|error| {
+                        tracing::debug!(%error, "invalid RDP packet from backend");
+                        Failure::Relay
+                    })?,
                     Err(error) => {
                         tracing::debug!(%error, "backend read failed");
                         return Err(Failure::Relay);
@@ -256,23 +259,26 @@ where
 struct Pending {
     /// Browser → session host. An opaque byte stream.
     to_backend: Vec<u8>,
-    /// Session host → browser, one whole TPKT frame per WebSocket message.
+    /// Session host → browser, one whole RDP packet per WebSocket message.
     to_ws: VecDeque<Vec<u8>>,
-    /// A TPKT frame that straddles two reads.
+    /// A packet that straddles two reads.
     partial: Vec<u8>,
 }
 
 impl Pending {
-    /// Absorb a backend read, emitting only whole TPKT frames so a frame is never
-    /// split across two WebSocket messages.
-    fn ingest(&mut self, bytes: &[u8]) {
+    /// Absorb a backend read, emitting only whole RDP packets.
+    fn ingest(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.partial.extend_from_slice(bytes);
-        while let Some(total) = tpkt_frame_len(&self.partial)
-            .filter(|total| *total >= 4 && self.partial.len() >= *total)
+        while let Some(packet) =
+            ironrdp_pdu::find_size(&self.partial).map_err(std::io::Error::other)?
         {
-            let frame = self.partial.drain(..total).collect();
+            if self.partial.len() < packet.length {
+                break;
+            }
+            let frame = self.partial.drain(..packet.length).collect();
             self.to_ws.push_back(frame);
         }
+        Ok(())
     }
 }
 
@@ -293,7 +299,7 @@ mod tests {
         let mut pending = Pending::default();
         let mut stream = vec![0x03u8, 0x00, 0x00, 0x08, 1, 2, 3, 4];
         stream.extend_from_slice(&[0x03, 0x00, 0x00, 0x07, 5, 6, 7]);
-        pending.ingest(&stream);
+        pending.ingest(&stream).unwrap();
         assert_eq!(pending.to_ws.len(), 2);
         assert_eq!(pending.to_ws[0].len(), 8);
         assert_eq!(pending.to_ws[1].len(), 7);
@@ -303,10 +309,10 @@ mod tests {
     #[test]
     fn a_tpkt_frame_split_across_reads_stays_in_one_message() {
         let mut pending = Pending::default();
-        pending.ingest(&[0x03, 0x00, 0x00, 0x0a, 1, 2]);
+        pending.ingest(&[0x03, 0x00, 0x00, 0x0a, 1, 2]).unwrap();
         assert_eq!(pending.to_ws.len(), 0, "nothing complete yet");
         assert_eq!(pending.partial.len(), 6, "partial frame is buffered");
-        pending.ingest(&[3, 4, 5, 6]);
+        pending.ingest(&[3, 4, 5, 6]).unwrap();
         assert_eq!(pending.to_ws.len(), 1);
         assert_eq!(
             pending.to_ws[0],
@@ -319,21 +325,32 @@ mod tests {
     fn a_trickle_feed_yields_exactly_one_message_per_frame() {
         let mut pending = Pending::default();
         let mut stream = vec![0x03u8, 0x00, 0x00, 0x07, 7, 8, 9];
-        stream.extend_from_slice(&[0x03, 0x00, 0x00, 0x05, 42]);
+        stream.extend_from_slice(&[0x03, 0x00, 0x00, 0x07, 42, 1, 2]);
         for byte in stream.chunks(1) {
-            pending.ingest(byte);
+            pending.ingest(byte).unwrap();
         }
         assert_eq!(pending.to_ws.len(), 2);
         assert_eq!(pending.to_ws[0].len(), 7);
-        assert_eq!(pending.to_ws[1].len(), 5);
+        assert_eq!(pending.to_ws[1].len(), 7);
     }
 
     #[test]
-    fn garbage_from_the_backend_is_buffered_not_dropped() {
+    fn a_fast_path_update_does_not_block_following_tpkt_packets() {
         let mut pending = Pending::default();
-        pending.ingest(&[0xff, 0xff]);
+        pending.ingest(&[0x00, 0x80]).unwrap();
         assert!(pending.to_ws.is_empty());
-        assert_eq!(pending.partial, vec![0xff, 0xff]);
+        pending
+            .ingest(&[0x05, 1, 2, 0x03, 0, 0, 7, 3, 4, 5])
+            .unwrap();
+        assert_eq!(pending.to_ws[0], [0x00, 0x80, 0x05, 1, 2]);
+        assert_eq!(pending.to_ws[1], [0x03, 0, 0, 7, 3, 4, 5]);
+    }
+
+    #[test]
+    fn invalid_packets_are_rejected() {
+        let mut pending = Pending::default();
+        assert!(pending.ingest(&[0xff, 0xff, 0, 0]).is_err());
+        assert!(pending.to_ws.is_empty());
     }
 
     #[test]

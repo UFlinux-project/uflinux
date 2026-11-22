@@ -151,15 +151,17 @@ pub fn decide(
     let tier = select_tier(&caps, &effective_hardware, policy, allow_remotefx)
         .map_err(|_| DecideError::NoEncoder)?;
 
+    let bitmap_fallback = || {
+        select_tier(&caps, &HardwareCaps::NONE, H264Policy::Off, allow_remotefx)
+            .map_err(|_| DecideError::NoEncoder)
+    };
+
     // The ladder's software rung is gated on the *codec* crate's `h264`
     // feature, which `h264-software` turns on; a server build that enables
     // egfx without an encoder must still not be handed an AVC tier it cannot
     // drive, so `h264_available` has the final say here.
     if !h264_available && tier.requires_h264() {
-        let mut fallback = tier;
-        while fallback.requires_h264() {
-            fallback = uflinux_rds_codec::downgrade(fallback);
-        }
+        let fallback = bitmap_fallback()?;
         return Ok(Decision {
             tier: fallback,
             device: None,
@@ -177,7 +179,7 @@ pub fn decide(
         if policy == H264Policy::Force {
             return Err(DecideError::NoEncoder);
         }
-        let fallback = uflinux_rds_codec::downgrade(CodecTier::Avc444);
+        let fallback = bitmap_fallback()?;
         return Ok(Decision {
             tier: fallback,
             device: None,
@@ -333,6 +335,8 @@ mod tests {
     fn a_build_without_an_encoder_falls_back_under_auto() {
         let decision = decide(&mstsc(), &hw(), H264Policy::Auto, true, false).expect("decide");
         assert_eq!(decision.tier, CodecTier::RemoteFx);
+        let decision = decide(&mstsc(), &hw(), H264Policy::Auto, false, false).expect("decide");
+        assert_eq!(decision.tier, CodecTier::Qoi);
     }
 
     #[test]

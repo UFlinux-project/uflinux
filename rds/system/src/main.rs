@@ -40,6 +40,16 @@ pub enum RdpSystemOperation {
     },
     /// Read-only status, no polkit check.
     Status,
+    /// Read the local broker's listener and session state.
+    BrokerState,
+    /// Apply the Settings panel's supported configuration fields.
+    BrokerConfigure {
+        config: Box<uflinux_rds_common::Config>,
+    },
+    /// End a remote session by its roster ID.
+    BrokerDisconnect {
+        session: u32,
+    },
 }
 
 fn main() {

@@ -33,6 +33,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
+use ironrdp_displaycontrol::pdu::{DisplayControlCapabilities, DisplayControlMonitorLayout};
 use ironrdp_server::{
     BitmapUpdate, DesktopSize, DisplayContext, DisplayUpdate, PixelFormat, RdpServerDisplay,
     RdpServerDisplayUpdates, ServerError, ServerErrorExt, ServerEvent, ServerResult,
@@ -131,6 +132,7 @@ pub type EventSenderSlot = Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<Ser
 pub struct DisplayShared {
     size: DesktopSize,
     max_size: DesktopSize,
+    awaiting_reactivation: bool,
     #[cfg(feature = "egfx")]
     gfx: Option<GfxServerHandle>,
     #[cfg(feature = "egfx")]
@@ -229,6 +231,7 @@ impl SessionDisplay {
             shared: Arc::new(std::sync::Mutex::new(DisplayShared {
                 size,
                 max_size: size,
+                awaiting_reactivation: false,
                 #[cfg(feature = "egfx")]
                 gfx: None,
                 #[cfg(feature = "egfx")]
@@ -322,41 +325,6 @@ impl SessionDisplay {
         self.lock().first_frame_sent
     }
 
-    /// Adopt a new desktop size: tell the compositor and remember it.
-    ///
-    /// Returns the size actually adopted, which the caller reports to the
-    /// broker. A zero dimension is rejected and a size above the negotiated
-    /// maximum is clamped rather than passed on.
-    pub fn request_size(
-        &self,
-        sender: &PumpSender,
-        width: u32,
-        height: u32,
-    ) -> Option<DesktopSize> {
-        if width == 0 || height == 0 {
-            return None;
-        }
-        let adopted = {
-            let mut shared = self.lock();
-            let wanted = clamp_size(width, height);
-            let adopted = clamp_size(
-                u32::from(wanted.width.min(shared.max_size.width)),
-                u32::from(wanted.height.min(shared.max_size.height)),
-            );
-            shared.size = adopted;
-            #[cfg(feature = "egfx")]
-            {
-                shared.surface = None;
-            }
-            adopted
-        };
-        let _ = sender.send(PumpCommand::Resize {
-            width: u32::from(adopted.width),
-            height: u32::from(adopted.height),
-        });
-        Some(adopted)
-    }
-
     /// Ask the encoder for an IDR, e.g. after a client that missed a key frame
     /// sends a RefreshRectangles.
     pub fn request_key_frame(&self, sender: &PumpSender) {
@@ -416,6 +384,7 @@ impl RdpServerDisplay for SessionDisplay {
         let mut shared = self.lock();
         shared.suppression = Some(Arc::clone(&ctx.display_suppressed));
         shared.suppressed_since = None;
+        shared.awaiting_reactivation = false;
         #[cfg(feature = "egfx")]
         {
             shared.gfx = ctx.gfx_handle.clone();
@@ -426,12 +395,25 @@ impl RdpServerDisplay for SessionDisplay {
         }))
     }
 
-    /// DisplayControl is not offered. Applying a monitor layout means resizing
-    /// the single nested compositor *and* telling the client the new size, and
-    /// MS-RDPEDISP has no "rejected" message: a client whose layout we ignore
-    /// waits forever (`ironrdp-server/src/display.rs:425-435`).
-    async fn offers_display_control(&mut self) -> bool {
-        false
+    fn request_layout(&mut self, layout: DisplayControlMonitorLayout) {
+        let [monitor] = layout.monitors() else {
+            return;
+        };
+        let (width, height) = monitor.dimensions();
+        if u64::from(width) * u64::from(height)
+            > DisplayControlCapabilities::single_monitor().max_monitor_area()
+        {
+            debug!(
+                width,
+                height, "client resize exceeds the advertised pixel budget"
+            );
+            return;
+        }
+        // The decoder validates the width. H.264 4:2:0 also needs an even height.
+        let height = height & !1;
+        if let Some(sender) = self.pump() {
+            let _ = sender.send(PumpCommand::Resize { width, height });
+        }
     }
 }
 
@@ -439,7 +421,9 @@ impl SessionDisplay {
     /// Resize without a pump command queue (initial negotiation only).
     fn request_size_no_pump(&self, client_size: DesktopSize) -> Option<DesktopSize> {
         let mut shared = self.lock();
-        if client_size.width == 0 || client_size.height == 0 {
+        // IronRDP also asks during reactivation. Keep the new geometry
+        // that the frame pump already supplied for that handshake.
+        if shared.suppression.is_some() || client_size.width == 0 || client_size.height == 0 {
             return None;
         }
         let adopted = clamp_size(
@@ -585,6 +569,10 @@ pub struct PumpConfig {
     pub pacer: Pacer,
     /// Tier to start with.
     pub tier: CodecTier,
+    /// Bitmap tier to report and use until H.264 is available.
+    pub bitmap_tier: CodecTier,
+    /// Disconnect if a native client cannot use H.264.
+    pub require_h264: bool,
     /// Encoder for the initial tier, when the tier needs one.
     pub encoder: Option<Box<dyn H264Backend>>,
     /// Builds replacement encoders for a downgrade.
@@ -646,13 +634,24 @@ impl FramePump {
     }
 }
 
+impl Drop for FramePump {
+    fn drop(&mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = self.sender.send(PumpCommand::Stop);
+            let _ = thread.join();
+        }
+    }
+}
+
 fn run(
     mut backend: DesktopBackend,
     receiver: std::sync::mpsc::Receiver<PumpCommand>,
     mut sink: Sink,
 ) -> Option<DesktopBackend> {
     let mut pending = None;
+    let mut resize_target = None;
     loop {
+        let mut requested = None;
         // Drain everything queued first: input must not wait behind a frame
         // wait, and a burst of input should cost one pass, not one per event.
         while let Ok(command) = receiver.try_recv() {
@@ -669,21 +668,34 @@ fn run(
                         return Some(backend);
                     }
                 }
-                PumpCommand::Resize { width, height } => {
-                    if let Err(error) = backend.resize(width, height) {
-                        sink.fail(&error);
-                        return Some(backend);
-                    }
-                    sink.invalidate_surface();
-                    pending = None;
-                }
+                PumpCommand::Resize { width, height } => requested = Some((width, height)),
                 PumpCommand::KeyFrame => sink.request_key_frame(),
                 PumpCommand::Stop => return Some(backend),
             }
         }
 
+        if let Some((width, height)) = requested
+            && resize_target != Some((width, height))
+            && (resize_target.is_some() || backend.size() != (width, height))
+        {
+            match backend.resize(width, height) {
+                Ok(()) => {
+                    resize_target = Some((width, height));
+                    pending = None;
+                    sink.resync = true;
+                }
+                Err(error) => warn!(width, height, %error, "compositor rejected desktop resize"),
+            }
+        }
+
         match backend.next_frame(POLL) {
             Ok(Some(frame)) => {
+                if let Some(target) = resize_target {
+                    if (frame.width, frame.height) != target {
+                        continue;
+                    }
+                    resize_target = None;
+                }
                 if pending.replace(frame).is_some() {
                     // The new damage is relative to the frame we still owe.
                     sink.resync = true;
@@ -714,6 +726,8 @@ struct Sink {
     events: EventSenderSlot,
     pacer: Pacer,
     tier: CodecTier,
+    bitmap_tier: CodecTier,
+    require_h264: bool,
     encoder: Option<Box<dyn H264Backend>>,
     // Only read by the AVC420 path, which exists solely in an egfx build.
     #[cfg_attr(not(feature = "egfx"), allow(dead_code))]
@@ -737,6 +751,8 @@ impl Sink {
             events: config.events,
             pacer: config.pacer,
             tier: config.tier,
+            bitmap_tier: config.bitmap_tier,
+            require_h264: config.require_h264,
             encoder: config.encoder,
             encoder_factory: config.encoder_factory,
             degrader: config.degrader,
@@ -750,14 +766,6 @@ impl Sink {
         self.shared
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn invalidate_surface(&mut self) {
-        self.resync = true;
-        #[cfg(feature = "egfx")]
-        {
-            self.lock().surface = None;
-        }
     }
 
     fn request_key_frame(&mut self) {
@@ -776,8 +784,41 @@ impl Sink {
         debug!(error = %error, "frame source stopped");
     }
 
+    /// Send the new geometry before publishing any pixels at that size.
+    /// IronRDP calls updates() again when the client is ready for those pixels.
+    fn prepare_frame(&mut self, frame: &Frame) -> bool {
+        let size = clamp_size(frame.width, frame.height);
+        let mut shared = self.lock();
+        if shared.awaiting_reactivation {
+            return false;
+        }
+        if shared.size == size {
+            return true;
+        }
+        if shared.suppression.is_none()
+            || self.updates.try_send(DisplayUpdate::Resize(size)).is_err()
+        {
+            return false;
+        }
+        shared.size = size;
+        shared.awaiting_reactivation = true;
+        #[cfg(feature = "egfx")]
+        {
+            shared.surface = None;
+        }
+        drop(shared);
+        if let Some(encoder) = self.encoder.as_mut() {
+            encoder.reset();
+        }
+        self.resync = true;
+        false
+    }
+
     /// Publishes one compositor frame.
     fn publish(&mut self, frame: &Frame) {
+        if !self.prepare_frame(frame) {
+            return;
+        }
         let now = Instant::now();
         {
             let mut shared = self.lock();
@@ -789,11 +830,25 @@ impl Sink {
         if !self.pacer.poll(now) {
             return;
         }
-        let tier = self.tier;
-
-        if tier == CodecTier::Avc420Hardware || tier == CodecTier::Avc420Software {
-            self.publish_avc420(frame, now);
-            return;
+        if self.tier.requires_h264() {
+            match self.client_supports_avc() {
+                Some(true) => {
+                    let mut shared = self.lock();
+                    let switched = shared.tier != self.tier;
+                    shared.tier = self.tier;
+                    drop(shared);
+                    self.resync |= switched;
+                    self.publish_avc420(frame, now);
+                    return;
+                }
+                capability if self.require_h264 => {
+                    if capability == Some(false) || now.duration_since(self.started) >= Duration::from_secs(5) {
+                        self.lock().failed = Some("The client did not negotiate H.264 AVC420".to_owned());
+                    }
+                    return;
+                }
+                _ => self.lock().tier = self.bitmap_tier,
+            }
         }
         match bitmap_updates(frame, self.resync) {
             Some(updates) => {
@@ -837,6 +892,18 @@ impl Sink {
             shared.first_frame_sent = true;
             debug!(elapsed = ?now.duration_since(self.started), "first frame delivered");
         }
+    }
+
+    #[cfg(feature = "egfx")]
+    fn client_supports_avc(&self) -> Option<bool> {
+        let handle = self.lock().gfx.clone()?;
+        let pipeline = handle.lock().ok()?;
+        pipeline.is_ready().then(|| pipeline.supports_avc420())
+    }
+
+    #[cfg(not(feature = "egfx"))]
+    fn client_supports_avc(&self) -> Option<bool> {
+        Some(false)
     }
 
     #[cfg(feature = "egfx")]
@@ -960,6 +1027,9 @@ impl Sink {
                 if matches!(error, CodecError::InvalidFrame(_)) {
                     return Ok(Vec::new());
                 }
+                if self.require_h264 {
+                    return Err(false);
+                }
                 match self.degrader.failure() {
                     DegradeAction::GiveUp { from } => {
                         warn!(tier = %from, "codec already at the lowest tier");
@@ -994,6 +1064,9 @@ impl Sink {
     /// The tier needs an encoder and we do not have one.
     #[cfg_attr(not(feature = "egfx"), allow(dead_code))]
     fn handle_encoder_missing(&mut self) -> bool {
+        if self.require_h264 {
+            return false;
+        }
         match self.degrader.failure() {
             DegradeAction::GiveUp { .. } => false,
             DegradeAction::DegradeTo(tier) => {
@@ -1004,9 +1077,16 @@ impl Sink {
     }
 
     fn give_up(&mut self) {
-        let mut shared = self.lock();
-        if shared.failed.is_none() {
-            shared.failed = Some(format!("no encoder available for {}", self.tier));
+        if self.require_h264 {
+            let mut shared = self.lock();
+            if shared.failed.is_none() {
+                shared.failed = Some(format!("no encoder available for {}", self.tier));
+            }
+        } else {
+            self.tier = self.bitmap_tier;
+            self.encoder = None;
+            self.resync = true;
+            self.lock().tier = self.bitmap_tier;
         }
     }
 
@@ -1264,8 +1344,9 @@ mod tests {
 
     fn shared() -> DisplayShared {
         DisplayShared {
-            size: clamp_size(1920, 1080),
+            size: clamp_size(64, 64),
             max_size: clamp_size(1920, 1080),
+            awaiting_reactivation: false,
             #[cfg(feature = "egfx")]
             gfx: None,
             #[cfg(feature = "egfx")]
@@ -1454,6 +1535,8 @@ mod tests {
             events: Arc::new(std::sync::Mutex::new(None)),
             pacer: Pacer::new(0, Instant::now()),
             tier: CodecTier::Qoi,
+            bitmap_tier: CodecTier::Qoi,
+            require_h264: false,
             encoder: None,
             encoder_factory: Box::new(|_| None),
             degrader: Degrader::new(CodecTier::Qoi),
@@ -1485,6 +1568,8 @@ mod tests {
             events: Arc::new(std::sync::Mutex::new(None)),
             pacer: Pacer::new(0, Instant::now()),
             tier: CodecTier::Qoi,
+            bitmap_tier: CodecTier::Qoi,
+            require_h264: false,
             encoder: None,
             encoder_factory: Box::new(|_| None),
             degrader: Degrader::new(CodecTier::Qoi),
@@ -1493,6 +1578,40 @@ mod tests {
         sink.publish(&frame(64, 64, vec![rect(0, 0, 8, 8)]));
         assert!(!sink.resync);
         assert!(rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn resize_is_sent_before_the_first_full_frame_at_the_new_size() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut state = shared();
+        state.suppression = Some(Arc::new(AtomicBool::new(false)));
+        let mut sink = Sink::new(PumpConfig {
+            shared: Arc::new(std::sync::Mutex::new(state)),
+            updates: tx,
+            events: Arc::new(std::sync::Mutex::new(None)),
+            pacer: Pacer::new(0, Instant::now()),
+            tier: CodecTier::Qoi,
+            bitmap_tier: CodecTier::Qoi,
+            require_h264: false,
+            encoder: None,
+            encoder_factory: Box::new(|_| None),
+            degrader: Degrader::new(CodecTier::Qoi),
+        });
+        let frame = frame(320, 240, vec![rect(0, 0, 8, 8)]);
+
+        sink.publish(&frame);
+        assert!(
+            matches!(rx.try_recv().unwrap(), DisplayUpdate::Resize(size) if size == clamp_size(320, 240))
+        );
+        sink.publish(&frame);
+        assert!(rx.try_recv().is_err());
+
+        sink.lock().awaiting_reactivation = false;
+        sink.publish(&frame);
+        assert!(
+            matches!(rx.try_recv().unwrap(), DisplayUpdate::Bitmap(bitmap)
+            if bitmap.width.get() == 320 && bitmap.height.get() == 240)
+        );
     }
 
     #[test]

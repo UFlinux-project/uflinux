@@ -275,7 +275,8 @@ fn unauthorized(message: &str) -> Response {
 }
 
 async fn state_json(State(state): State<AppState>) -> Json<Value> {
-    Json(broker_state(&state).await)
+    let broker = broker_state(&state).await;
+    Json(serde_json::json!({"running": broker["running"].as_bool().unwrap_or(false)}))
 }
 
 /// Ask the broker for its state; fall back to "disabled, no sessions" when the

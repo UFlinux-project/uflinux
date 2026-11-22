@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-rds
 pkgver=0.1.0
-pkgrel=6
+pkgrel=9
 pkgdesc="UFLinux Remote Desktop Services broker (IronRDP)"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
@@ -115,7 +115,7 @@ server() {
 	# policy cannot attach to the seat and logs an error on every login.
 	# Cross-package dependencies are unpinned: the versions belong to other
 	# recipes.
-	depends="$pkgname=$pkgver-r$pkgrel wayland labwc uflinux-defaults uflinux-settings-daemon dbus wireplumber-logind"
+	depends="$pkgname=$pkgver-r$pkgrel wayland labwc xkbcli wl-clipboard pulseaudio-utils uflinux-defaults uflinux-settings-daemon dbus wireplumber-logind"
 	amove usr/libexec/uflinux-rdp-session
 }
 web() {

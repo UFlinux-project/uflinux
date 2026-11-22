@@ -13,6 +13,7 @@
   var WASM_BIN = "/assets/uflinux_rds_web_bg.wasm";
   var RESIZE_DEBOUNCE_MS = 300;
   var MAX_CANVAS_PX = 4096;
+  var MAX_DESKTOP_AREA = 3840 * 2400;
 
   var canvas = document.getElementById("screen");
   var screenWrap = document.getElementById("screen-wrap");
@@ -73,21 +74,14 @@
 
   // --- canvas geometry ---------------------------------------------------
 
-  // Keeps the canvas backing store in step with its CSS box. Returns true when
-  // the store actually changed, i.e. when the server should hear about it.
-  function fitCanvas() {
+  function viewportSize() {
     var rect = canvas.getBoundingClientRect();
     var ratio = window.devicePixelRatio || 1;
     var width = Math.round(Math.max(1, rect.width) * ratio);
     var height = Math.round(Math.max(1, rect.height) * ratio);
-    width = Math.min(width, MAX_CANVAS_PX);
-    height = Math.min(height, MAX_CANVAS_PX);
-    if (canvas.width === width && canvas.height === height) {
-      return false;
-    }
-    canvas.width = width;
-    canvas.height = height;
-    return true;
+    width = Math.min(MAX_CANVAS_PX, Math.max(200, width)) & ~1;
+    height = Math.min(MAX_CANVAS_PX, Math.max(200, height), Math.floor(MAX_DESKTOP_AREA / width)) & ~1;
+    return { width: width, height: height };
   }
 
   // Maps a pointer event into canvas pixels, which are desktop coordinates.
@@ -320,7 +314,9 @@
       }
     };
 
-    fitCanvas(); // the initial desktop size is taken from the canvas
+    var size = viewportSize();
+    canvas.width = size.width;
+    canvas.height = size.height;
     say("Connecting…");
 
     var connected = await mod.connect(options);
@@ -341,6 +337,7 @@
     setState("connected", "connected");
     say("");
     canvas.focus();
+    scheduleResize();
   }
 
   // --- toolbar -----------------------------------------------------------
@@ -383,7 +380,6 @@
     pasteBtn.addEventListener("click", function () {
       if (client) {
         client.clipboard_paste();
-        notify("clipboard requested");
       }
     });
   }
@@ -410,9 +406,12 @@
   function scheduleResize() {
     window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(function () {
-      if (fitCanvas() && client) {
+      var size = viewportSize();
+      // IronRDP updates the backing store when the server confirms the size.
+      // Until then incoming frames and pointer coordinates still use the old one.
+      if (client && (canvas.width !== size.width || canvas.height !== size.height)) {
         attempt(function () {
-          client.resize(canvas.width, canvas.height);
+          client.resize(size.width, size.height);
         });
       }
     }, RESIZE_DEBOUNCE_MS);

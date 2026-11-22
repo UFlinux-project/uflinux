@@ -25,7 +25,7 @@
 //! session binary can re-read `/etc/uflinux/rds.json` for codec policy without
 //! knowing anything about the broker's internals.
 
-use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::Path;
 use std::process::Stdio;
 
@@ -353,64 +353,68 @@ pub(crate) async fn watch(mut spawned: Spawned, state: std::sync::Arc<State>, id
     state.remove_session(id);
 }
 
-/// Ask a session to leave: `SIGTERM`, escalating to `SIGKILL` after `grace`.
-///
-/// Returns `false` when the roster has no such id. The escalation runs in a
-/// detached task so the control socket can answer immediately. The row itself
-/// disappears when the reaper task for that child notices the exit.
+/// Keep a kernel reference to the child for delayed disconnect escalation.
+pub(crate) fn open_pidfd(pid: u32) -> std::io::Result<OwnedFd> {
+    let pid = i32::try_from(pid)
+        .ok().filter(|pid| *pid > 0)
+        .ok_or_else(|| std::io::Error::other("invalid session PID"))?;
+    // The child is still owned by the caller and has yet to be reaped.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0u32) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
+}
+
+fn signal_session(fd: &OwnedFd, signal: nix::sys::signal::Signal) -> std::io::Result<()> {
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd.as_raw_fd(),
+            signal as i32,
+            std::ptr::null::<libc::siginfo_t>(),
+            0u32,
+        )
+    };
+    if result == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+}
+
+/// Ask a session to leave and escalate only against the same process.
 pub(crate) fn disconnect(state: &State, id: u32, grace: std::time::Duration) -> bool {
-    let Some(pid) = state.session_pid(id) else {
+    let Some(target) = state.session_pidfd(id) else {
         return false;
     };
-    let target = nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap_or(-1));
-    if nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGTERM).is_err() {
-        // Already gone; the reaper task will drop the row.
-        state.remove_session(id);
-        return true;
-    }
+    let _ = signal_session(&target, nix::sys::signal::Signal::SIGTERM);
     tokio::spawn(async move {
         tokio::time::sleep(grace).await;
-        if nix::sys::signal::kill(target, nix::sys::signal::Signal::SIGKILL).is_ok() {
-            tracing::debug!(session = id, pid, "escalated disconnect to SIGKILL");
+        if signal_session(&target, nix::sys::signal::Signal::SIGKILL).is_ok() {
+            tracing::debug!(session = id, "escalated disconnect to SIGKILL");
         }
     });
     true
 }
 
-/// Send a signal to a child process, ignoring "already gone".
+/// Send a signal to the gateway child, ignoring "already gone".
 pub(crate) fn signal(pid: u32, signal: nix::sys::signal::Signal) {
-    let target = nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap_or(-1));
-    let _ = nix::sys::signal::kill(target, signal);
+    if let Ok(pid) = i32::try_from(pid) && pid > 0 {
+        let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal);
+    }
 }
 
 /// Terminate every session in the roster: SIGTERM, wait up to `grace`, SIGKILL.
-///
-/// Used on broker shutdown. The rows disappear on their own as the reaper
-/// tasks notice the exits, so this only has to wait and escalate.
 pub(crate) async fn terminate_all(state: &std::sync::Arc<State>, grace: std::time::Duration) {
-    let targets: Vec<(u32, u32)> = state
-        .sessions()
-        .into_iter()
-        .map(|row| (row.id, state.session_pid(row.id).unwrap_or(0)))
+    let targets: Vec<_> = state.sessions().into_iter()
+        .filter_map(|row| state.session_pidfd(row.id))
         .collect();
-    if targets.is_empty() {
-        return;
-    }
-    for (_, pid) in &targets {
-        signal(*pid, nix::sys::signal::Signal::SIGTERM);
+    for target in &targets {
+        let _ = signal_session(target, nix::sys::signal::Signal::SIGTERM);
     }
     let started = std::time::Instant::now();
     while state.session_count() > 0 && started.elapsed() < grace {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    if state.session_count() > 0 {
-        tracing::warn!(
-            "{} session(s) ignored SIGTERM; sending SIGKILL",
-            state.session_count()
-        );
-        for (_, pid) in &targets {
-            signal(*pid, nix::sys::signal::Signal::SIGKILL);
-        }
+    for target in &targets {
+        let _ = signal_session(target, nix::sys::signal::Signal::SIGKILL);
     }
 }
 

@@ -18,9 +18,16 @@ pub enum PointerEvent {
         /// Vertical position.
         y: u16,
     },
+    /// Move the cursor by the given deltas.
+    MoveRelative {
+        /// Horizontal displacement.
+        x: i32,
+        /// Vertical displacement.
+        y: i32,
+    },
     /// Press or release a button.
     Button {
-        /// X11 button number: 1 left, 2 middle, 3 right, 4 wheel up, 5 wheel down.
+        /// X11 button number for left, middle, right or a side button.
         button: u16,
         /// `true` for press, `false` for release.
         pressed: bool,
@@ -57,6 +64,22 @@ pub mod button {
     pub const WHEEL_UP: u16 = 4;
     /// Wheel down.
     pub const WHEEL_DOWN: u16 = 5;
+    /// First side button.
+    pub const SIDE: u16 = 8;
+    /// Second side button.
+    pub const EXTRA: u16 = 9;
+
+    /// The Linux BTN_* code expected by the virtual pointer protocol.
+    pub(crate) fn evdev(button: u16) -> Option<u32> {
+        Some(match button {
+            LEFT => 0x110,
+            RIGHT => 0x111,
+            MIDDLE => 0x112,
+            SIDE => 0x113,
+            EXTRA => 0x114,
+            _ => return None,
+        })
+    }
 }
 
 /// Linux input-event codes (`KEY_*`) understood by `zwp_virtual_keyboard_v1`.

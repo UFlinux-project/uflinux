@@ -55,7 +55,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::zwlr_virtual_pointer_v1:
 use crate::compositor::Compositor;
 use crate::error::BackendError;
 use crate::frame::{Frame, dirty_regions};
-use crate::input::{KeyboardEvent, KeyboardState, PointerEvent, event_time};
+use crate::input::{KeyboardEvent, KeyboardState, PointerEvent, button, event_time};
 use crate::spec::DesktopSpec;
 
 /// XKB keymap (US layout, evdev keycodes) handed to the compositor so it can
@@ -67,6 +67,95 @@ use crate::spec::DesktopSpec;
 /// directives are resolved by the compositor against the system xkb rules.
 const KEYMAP: &[u8] = include_bytes!("keymap/us.xkb");
 /// `zwp_virtual_keyboard_v1::keymap` format of an XKB text keymap
+/// Compile the labwc keyboard settings for the virtual keyboard. Read only
+/// assignment values and use the distro's XKB data directory.
+fn keymap(spec: &DesktopSpec) -> Vec<u8> {
+    use std::io::Read;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    const SETTINGS: [(&str, &str); 5] = [
+        ("XKB_DEFAULT_RULES", "--rules"),
+        ("XKB_DEFAULT_MODEL", "--model"),
+        ("XKB_DEFAULT_LAYOUT", "--layout"),
+        ("XKB_DEFAULT_VARIANT", "--variant"),
+        ("XKB_DEFAULT_OPTIONS", "--options"),
+    ];
+    let mut values = [const { None }; SETTINGS.len()];
+    let mut read_settings = |path: &std::path::Path, owner: u32| {
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+        else {
+            return;
+        };
+        if !file
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.uid() == owner)
+        {
+            return;
+        }
+        let mut input = String::new();
+        if file.take(65_537).read_to_string(&mut input).is_err() || input.len() > 65_536 {
+            return;
+        }
+        for line in input.lines() {
+            let Some((name, value)) = line.trim().split_once('=') else {
+                continue;
+            };
+            let Some(index) = SETTINGS.iter().position(|(key, _)| *key == name.trim()) else {
+                continue;
+            };
+            let value = value.trim();
+            if value.len() <= 256
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-,:".contains(&byte))
+            {
+                values[index] = Some(value.to_owned());
+            }
+        }
+    };
+
+    read_settings(std::path::Path::new("/etc/xdg/labwc/environment"), 0);
+    if let Some(user) = spec
+        .user
+        .as_deref()
+        .and_then(|name| nix::unistd::User::from_name(name).ok().flatten())
+    {
+        read_settings(
+            &user.dir.join(".config/labwc/environment"),
+            user.uid.as_raw(),
+        );
+    }
+    if values.iter().all(Option::is_none) {
+        return KEYMAP.to_vec();
+    }
+    let mut command = std::process::Command::new("/usr/bin/xkbcli");
+    command.env_clear().args([
+        "compile-keymap",
+        "--include",
+        "/usr/share/X11/xkb",
+        "--output-format",
+        "1",
+    ]);
+    for ((_, flag), value) in SETTINGS.iter().zip(values) {
+        if let Some(value) = value {
+            command.arg(flag).arg(value);
+        }
+    }
+    match command.output() {
+        Ok(mut output) if output.status.success() && output.stdout.starts_with(b"xkb_keymap") => {
+            output.stdout.push(0);
+            output.stdout
+        }
+        _ => {
+            tracing::warn!("could not compile the desktop keyboard layout; using US");
+            KEYMAP.to_vec()
+        }
+    }
+}
+
 /// (`XKB_KEYMAP_FORMAT_TEXT_V1`).
 const KEYMAP_FORMAT_XKB_V1: u32 = 1;
 /// How long the event loop blocks in `poll` before re-checking the command
@@ -74,12 +163,13 @@ const KEYMAP_FORMAT_XKB_V1: u32 = 1;
 const POLL_TIMEOUT_MS: i32 = 16;
 /// Depth of the frame rendezvous channel.
 const FRAME_CHANNEL_DEPTH: usize = 1;
+const OUTPUT_CONFIG_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Outbound messages from the API thread to the event-loop thread.
 enum Command {
     Keyboard(KeyboardEvent),
     Pointer(PointerEvent),
-    Resize(u32, u32),
+    Resize(u32, u32, Sender<Result<(), BackendError>>),
     Shutdown,
 }
 
@@ -184,6 +274,7 @@ struct Session {
     seat: Option<WlSeat>,
     keyboard: Option<ZwpVirtualKeyboardV1>,
     pointer: Option<ZwlrVirtualPointerV1>,
+    keymap: Vec<u8>,
     keymap_fd: Option<OwnedFd>,
     keyboard_state: KeyboardState,
     outputs: Vec<WlOutput>,
@@ -193,11 +284,12 @@ struct Session {
     shm_buf: Option<ShmBuffer>,
     scratch: Vec<u8>,
     previous: Bytes,
+    previous_size: (u32, u32),
     frames_tx: SyncSender<Frame>,
     shared: Arc<Shared>,
     finished: bool,
-    config_serial: u32,
-    pending_config: Option<ZwlrOutputConfigurationV1>,
+    config_serial: Option<u32>,
+    pending_config: Option<Sender<Result<(), BackendError>>>,
 }
 
 impl Session {
@@ -212,6 +304,7 @@ impl Session {
         pointer_manager: Option<ZwlrVirtualPointerManagerV1>,
         frames_tx: SyncSender<Frame>,
         shared: Arc<Shared>,
+        keymap: Vec<u8>,
     ) -> Self {
         let mut session = Self {
             globals,
@@ -224,6 +317,7 @@ impl Session {
             seat: None,
             keyboard: None,
             pointer: None,
+            keymap,
             keymap_fd: None,
             keyboard_state: KeyboardState::empty(),
             outputs: Vec::new(),
@@ -233,10 +327,11 @@ impl Session {
             shm_buf: None,
             scratch: Vec::new(),
             previous: Bytes::new(),
+            previous_size: (0, 0),
             frames_tx,
             shared,
             finished: false,
-            config_serial: 0,
+            config_serial: None,
             pending_config: None,
         };
         session.scan_globals();
@@ -313,8 +408,8 @@ impl Session {
                 return;
             }
         };
-        let len = KEYMAP.len();
-        if write_all(&fd, KEYMAP).is_err()
+        let len = self.keymap.len();
+        if write_all(&fd, &self.keymap).is_err()
             || nix::unistd::ftruncate(&fd, len as libc::off_t).is_err()
         {
             tracing::warn!("could not write the keymap memfd");
@@ -365,13 +460,19 @@ impl Session {
             PointerEvent::Move { x, y } => {
                 pointer.motion_absolute(time, x as u32, y as u32, extent_x, extent_y);
             }
+            PointerEvent::MoveRelative { x, y } => {
+                pointer.motion(time, f64::from(x), f64::from(y));
+            }
             PointerEvent::Button { button, pressed } => {
+                let Some(code) = button::evdev(button) else {
+                    return;
+                };
                 let state = if pressed {
                     ButtonState::Pressed
                 } else {
                     ButtonState::Released
                 };
-                pointer.button(time, button as u32, state);
+                pointer.button(time, code, state);
             }
             PointerEvent::Wheel { axis_x, axis_y } => {
                 if axis_y != 0 {
@@ -385,23 +486,28 @@ impl Session {
         pointer.frame();
     }
 
-    /// Ask the compositor to resize through wlr-output-management. When the
-    /// protocol or the heads are unavailable we still advertise the new size
-    /// so that [`DesktopBackend::size`] stays truthful.
-    fn apply_resize(&mut self, width: u32, height: u32) {
-        let manager = self.output_manager.clone();
-        let heads = self.heads.clone();
-        if let Some(manager) = manager.filter(|_| !heads.is_empty()) {
-            // The serial of the most recent `done` event, per the protocol.
-            let config = manager.create_configuration(self.config_serial, &self.qhandle, ());
-            for head in &heads {
-                let config_head = config.enable_head(head, &self.qhandle, ());
-                config_head.set_custom_mode(width as i32, height as i32, 0);
-            }
-            config.apply();
-            self.pending_config = Some(config);
+    fn apply_resize(&mut self, width: u32, height: u32, reply: Sender<Result<(), BackendError>>) {
+        if self.pending_config.is_some() {
+            let _ = reply.send(Err(BackendError::wayland(
+                "output configuration still pending",
+            )));
+            return;
         }
-        self.set_size(width, height);
+        let (Some(manager), Some(serial), [head]) = (
+            &self.output_manager,
+            self.config_serial,
+            self.heads.as_slice(),
+        ) else {
+            let _ = reply.send(Err(BackendError::wayland(
+                "single-output configuration unavailable",
+            )));
+            return;
+        };
+        let config = manager.create_configuration(serial, &self.qhandle, ());
+        let config_head = config.enable_head(head, &self.qhandle, ());
+        config_head.set_custom_mode(width as i32, height as i32, 0);
+        config.apply();
+        self.pending_config = Some(reply);
     }
 
     /// Diff the RGBA data the capture left in the scratch buffer against the
@@ -413,7 +519,12 @@ impl Session {
     /// instead of staying stale on the client.
     fn deliver(&mut self, width: u32, height: u32) {
         self.set_size(width, height);
-        let dirty = dirty_regions(&self.previous, &self.scratch, width, height);
+        let previous = if self.previous_size == (width, height) {
+            &self.previous[..]
+        } else {
+            &[]
+        };
+        let dirty = dirty_regions(previous, &self.scratch, width, height);
         if dirty.is_empty() {
             return;
         }
@@ -429,7 +540,10 @@ impl Session {
             }
         };
         match self.frames_tx.try_send(frame) {
-            Ok(()) => commit_frame(&mut self.previous, &mut self.scratch, pixels, true),
+            Ok(()) => {
+                self.previous_size = (width, height);
+                commit_frame(&mut self.previous, &mut self.scratch, pixels, true);
+            }
             // A frame is already queued; drop this one and keep the old
             // baseline so its damage rides along with the next frame.
             Err(TrySendError::Full(_)) => {
@@ -708,7 +822,7 @@ impl Dispatch<ZwlrOutputManagerV1, ()> for Session {
         _qhandle: &QueueHandle<Session>,
     ) {
         match event {
-            manager_evt::Event::Done { serial } => session.config_serial = serial,
+            manager_evt::Event::Done { serial } => session.config_serial = Some(serial),
             manager_evt::Event::Finished => session.heads.clear(),
             _ => {}
         }
@@ -755,14 +869,18 @@ impl Dispatch<ZwlrOutputConfigurationV1, ()> for Session {
         _conn: &Connection,
         _qhandle: &QueueHandle<Session>,
     ) {
-        match event {
-            cfg_evt::Event::Succeeded => tracing::debug!("output configuration applied"),
-            cfg_evt::Event::Failed => tracing::warn!("output configuration failed"),
-            cfg_evt::Event::Cancelled => tracing::warn!("output configuration cancelled"),
-            _ => {}
-        }
+        let result = match event {
+            cfg_evt::Event::Succeeded => Ok(()),
+            cfg_evt::Event::Failed => Err(BackendError::wayland("output configuration failed")),
+            cfg_evt::Event::Cancelled => {
+                Err(BackendError::wayland("output configuration cancelled"))
+            }
+            _ => return,
+        };
         proxy.destroy();
-        session.pending_config = None;
+        if let Some(reply) = session.pending_config.take() {
+            let _ = reply.send(result);
+        }
     }
 }
 
@@ -928,7 +1046,7 @@ fn event_loop(
                 Command::Shutdown => session.finished = true,
                 Command::Keyboard(event) => session.inject_keyboard(event),
                 Command::Pointer(event) => session.inject_pointer(event),
-                Command::Resize(width, height) => session.apply_resize(width, height),
+                Command::Resize(width, height, reply) => session.apply_resize(width, height, reply),
             }
         }
         if session.finished {
@@ -1045,7 +1163,7 @@ impl DesktopBackend {
             path: socket_path.clone(),
             reason: e.to_string(),
         })?;
-        let (globals, queue) =
+        let (globals, mut queue) =
             registry_queue_init::<Session>(&conn).map_err(BackendError::wayland)?;
         let qhandle = queue.handle();
 
@@ -1070,7 +1188,7 @@ impl DesktopBackend {
         let (frames_tx, frames) = sync_channel(FRAME_CHANNEL_DEPTH);
         let (commands, command_rx) = channel();
 
-        let session = Session::new(
+        let mut session = Session::new(
             globals,
             qhandle,
             shm,
@@ -1080,7 +1198,12 @@ impl DesktopBackend {
             pointer_manager,
             frames_tx,
             Arc::clone(&shared),
+            keymap(&spec),
         );
+        // Receive the output manager's initial heads and configuration serial.
+        queue
+            .roundtrip(&mut session)
+            .map_err(BackendError::wayland)?;
 
         let loop_shared = Arc::clone(&shared);
         let loop_thread = std::thread::Builder::new()
@@ -1120,15 +1243,21 @@ impl DesktopBackend {
         }
     }
 
-    /// Request a new desktop size.
-    ///
-    /// Asynchronous: it becomes visible on a later frame, while [`Self::size`]
-    /// updates as soon as the event loop picks the request up.
+    /// Apply a new desktop size and wait for the compositor's reply. The new
+    /// geometry becomes visible on a later frame.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), BackendError> {
-        if width == 0 || height == 0 {
-            return Err(BackendError::Input("resize to a zero dimension".to_owned()));
+        if width == 0 || height == 0 || width > i32::MAX as u32 || height > i32::MAX as u32 {
+            return Err(BackendError::Input("invalid resize dimensions".to_owned()));
         }
-        self.send(Command::Resize(width, height))
+        let (reply, result) = channel();
+        self.send(Command::Resize(width, height, reply))?;
+        match result.recv_timeout(OUTPUT_CONFIG_TIMEOUT) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => {
+                Err(BackendError::wayland("output configuration timed out"))
+            }
+            Err(RecvTimeoutError::Disconnected) => Err(self.terminal_error()),
+        }
     }
 
     /// Inject a key press or release, expressed as an X11 keysym.
@@ -1157,6 +1286,11 @@ impl DesktopBackend {
             .size
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The private socket used by clients of this desktop.
+    pub fn socket_path(&self) -> Option<&std::path::Path> {
+        self.compositor.as_ref().map(Compositor::socket_path)
     }
 
     /// The pid of the compositor child process, or `None` once shut down.
@@ -1505,6 +1639,25 @@ mod tests {
         assert_eq!(frame.width, 1280);
         assert_eq!(frame.height, 720);
         assert_eq!(frame.pixels.len(), 1280 * 720 * 4);
+
+        if command == "labwc" {
+            // The first resize changes the geometry while keeping the same
+            // pixel count. Even an unchanged background needs a new frame.
+            for (width, height) in [(960, 960), (1600, 900), (800, 600)] {
+                backend.resize(width, height).expect("apply output mode");
+                let deadline = std::time::Instant::now() + Duration::from_secs(3);
+                loop {
+                    let frame = backend
+                        .next_frame(deadline.saturating_duration_since(std::time::Instant::now()))
+                        .expect("capture after resize")
+                        .expect("timed out waiting for resized frame");
+                    if (frame.width, frame.height) == (width, height) {
+                        assert_eq!(backend.size(), (width, height));
+                        break;
+                    }
+                }
+            }
+        }
 
         backend
             .inject_pointer(PointerEvent::Move { x: 100, y: 100 })

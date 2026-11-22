@@ -184,7 +184,8 @@ pub fn run() -> Result<()> {
             probed.publish();
         });
         let probed=app.clone();glib::MainContext::default().spawn_local(async move{
-            probed.view.borrow_mut().rdp=rdp::query().await;
+            let state = rdp::query(&probed.system).await;
+            probed.view.borrow_mut().rdp=state;
             probed.publish();
         });
         let weak=Rc::downgrade(&app);
@@ -430,8 +431,9 @@ impl App {
     /// Sends one RDP mutation to the broker, then re-reads the published state
     /// so the panel refreshes without the UI asking for it.
     async fn rdp_apply(self: &Rc<Self>, request: serde_json::Value) -> Result<()> {
-        rdp::execute(request).await?;
-        self.view.borrow_mut().rdp = rdp::query().await;
+        rdp::execute(&self.system, request).await?;
+        let state = rdp::query(&self.system).await;
+        self.view.borrow_mut().rdp = state;
         self.publish();
         Ok(())
     }
@@ -679,7 +681,7 @@ impl App {
                 return Ok(value);
             }
             Action::RdpStatus => {
-                let rdp = rdp::query().await;
+                let rdp = rdp::query(&self.system).await;
                 let value = serde_json::to_value(&rdp).map_err(|_| "Invalid RDP state")?;
                 self.view.borrow_mut().rdp = rdp;
                 self.publish();
@@ -745,13 +747,13 @@ impl App {
                     _ => None,
                 };
                 let value = rdp::system(&self.system, operation, &current).await?;
-                let mut state = rdp::query().await;
+                let mut state = rdp::query(&self.system).await;
                 // The broker notices the rewritten file on SIGHUP and handles that
                 // signal asynchronously, so the first read can still carry the old
                 // flag. Read again before the panel is redrawn.
                 if expected.is_some_and(|want| state.enabled != want) {
                     let _ = glib::timeout_future(Duration::from_millis(600)).await;
-                    state = rdp::query().await;
+                    state = rdp::query(&self.system).await;
                 }
                 self.view.borrow_mut().rdp = state;
                 self.publish();

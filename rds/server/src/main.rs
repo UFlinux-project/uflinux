@@ -50,6 +50,9 @@
 //! logging in, and a packaged broker runs as root, so every unauthenticated
 //! connection would get a root-owned desktop.
 
+mod clipboard;
+mod sound;
+
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
@@ -81,9 +84,9 @@ use uflinux_rds_wayland::{
 };
 
 use uflinux_rds_server::args::{ArgError, Args, Transport};
-use uflinux_rds_server::auth::{
-    self, AuthError, Authenticator, Policy as AdmissionPolicy, StubAuthenticator,
-};
+use uflinux_rds_server::auth::{self, AuthError, Policy as AdmissionPolicy};
+#[cfg(not(feature = "pam"))]
+use uflinux_rds_server::auth::{Authenticator, StubAuthenticator};
 use uflinux_rds_server::caps::{self, Decision, Negotiation};
 use uflinux_rds_server::display::{
     EncoderFactory, FramePump, PumpCommand, PumpConfig, SessionDisplay,
@@ -102,7 +105,11 @@ const DESKTOP_WIDTH: u32 = 1280;
 const DESKTOP_HEIGHT: u32 = 720;
 
 /// PAM service name, matching `etc/pam.d/uflinux-rds` in the package.
+#[cfg(feature = "pam")]
 const PAM_SERVICE: &str = "uflinux-rds";
+
+/// A traversable runtime base, separate from the broker's private TLS state.
+const DESKTOP_RUNTIME_ROOT: &str = "/run/uflinux-rds-desktops";
 
 /// How often the idle watchdog runs.
 const WATCHDOG_PERIOD: Duration = Duration::from_secs(5);
@@ -155,11 +162,16 @@ impl Session {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
+        let tier = self.display.tier();
         let update = StatusUpdate {
             username,
             transport: Some(self.args.transport.as_str().to_owned()),
-            codec: Some(caps::codec_label(self.display.tier()).to_owned()),
-            codec_device: Some(self.codec_device.clone()),
+            codec: Some(caps::codec_label(tier).to_owned()),
+            codec_device: Some(if tier == CodecTier::Avc420Hardware {
+                self.codec_device.clone()
+            } else {
+                None
+            }),
             width,
             height,
             idle: None,
@@ -204,7 +216,8 @@ impl Session {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             *slot = Some(username);
         }
-        self.publish(None, None);
+        let size = self.display.size();
+        self.publish(Some(size.width), Some(size.height));
     }
 }
 
@@ -239,12 +252,16 @@ fn run(args: Args, env: &[(String, String)]) -> Result<(), String> {
     let (std_stream, peer) = client_stream(client_fd, args.transport)?;
 
     let hardware = detect_vaapi(config.codec.vaapi_device.as_deref());
-    let negotiation = planned_negotiation(&config);
+    let negotiation = planned_negotiation(&config, args.transport);
     let h264_available = encoder_present(&config, &hardware);
     let decision = caps::decide(
         &negotiation,
         &hardware,
-        config.codec.h264,
+        if args.transport == Transport::Web {
+            H264Policy::Off
+        } else {
+            config.codec.h264
+        },
         config.codec.allow_remotefx,
         h264_available,
     )
@@ -505,6 +522,8 @@ struct DesktopPlan {
     command: String,
     base: DesktopBase,
     pacer: Pacer,
+    bitmap_tier: CodecTier,
+    require_h264: bool,
     encoder: Option<Box<dyn H264Backend>>,
     encoder_factory: EncoderFactory,
 }
@@ -533,6 +552,9 @@ struct DesktopBase {
 struct DesktopLauncher {
     plan: Mutex<Option<DesktopPlan>>,
     pump: Mutex<Option<FramePump>>,
+    desktop_endpoint: clipboard::EndpointSlot,
+    #[cfg(feature = "pam")]
+    login: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     display: SessionDisplay,
     peer: String,
     tier: CodecTier,
@@ -551,6 +573,9 @@ impl DesktopLauncher {
         Self {
             plan: Mutex::new(Some(plan)),
             pump: Mutex::new(None),
+            desktop_endpoint: Default::default(),
+            #[cfg(feature = "pam")]
+            login: Mutex::new(None),
             display,
             peer,
             tier,
@@ -569,7 +594,11 @@ impl DesktopLauncher {
     /// Takes the plan out (so a second call cannot start a second desktop) and
     /// spawns the compositor as `username`, then the pump that feeds it to the
     /// client. Blocking: it forks, execs and waits for the compositor's socket.
-    fn start(&self, username: Option<&str>) -> Result<StartedDesktop, String> {
+    fn start(
+        &self,
+        username: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<StartedDesktop, String> {
         let plan = self
             .plan
             .lock()
@@ -595,16 +624,17 @@ impl DesktopLauncher {
         // A privileged host serves whichever account authenticates, so the
         // desktop directory is namespaced by that uid; an unprivileged host
         // already has a private base directory.
-        let dir = auth::desktop_runtime_dir(
+        let dir = auth::prepare_desktop_dir(
             &plan.base.root,
-            if plan.base.privileged {
-                Some(uid)
-            } else {
-                None
-            },
-        );
-        let dir = auth::prepare_desktop_dir(&dir, owner.as_ref())
-            .map_err(|e| format!("cannot prepare {}: {e}", dir.display()))?;
+            plan.base.privileged.then_some(uid),
+            owner.as_ref(),
+        )
+        .map_err(|e| {
+            format!(
+                "cannot prepare desktop under {}: {e}",
+                plan.base.root.display()
+            )
+        })?;
 
         // The client's own geometry is adopted a moment later, through
         // `request_initial_size` and the pump's `Resize`; this is the size the
@@ -614,14 +644,22 @@ impl DesktopLauncher {
             plan.command,
             u32::from(initial.width),
             u32::from(initial.height),
-            dir.join("wayland"),
+            dir,
         );
+        spec.session_id = session_id.map(str::to_owned);
         if let Some(owner) = &owner {
             spec = spec.with_user(owner.name.clone());
         }
         let backend = DesktopBackend::spawn(spec)
             .map_err(|e| format!("cannot start the desktop compositor: {e}"))?;
         let (width, height) = backend.size();
+        let endpoint = owner.as_ref().and_then(|owner| {
+            Some(clipboard::Endpoint::new(
+                backend.socket_path()?,
+                owner.uid,
+                owner.gid,
+            ))
+        });
 
         let (pump, sender) = FramePump::spawn(
             backend,
@@ -631,6 +669,8 @@ impl DesktopLauncher {
                 events: self.display.event_slot(),
                 pacer: plan.pacer,
                 tier: self.tier,
+                bitmap_tier: plan.bitmap_tier,
+                require_h264: plan.require_h264,
                 encoder: plan.encoder,
                 encoder_factory: plan.encoder_factory,
                 degrader: uflinux_rds_server::degrade::Degrader::new(self.tier),
@@ -640,6 +680,10 @@ impl DesktopLauncher {
 
         // Input events that arrived before this point were dropped; from here
         // on the bridge finds the pump through the display handler.
+        *self
+            .desktop_endpoint
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = endpoint;
         self.display.attach_pump(sender);
         *self
             .pump
@@ -697,11 +741,19 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
         config.codec.vaapi_device.as_deref(),
     );
     let factory_tier = EncoderFactoryBox::new(hardware.clone(), config.codec.vaapi_device.clone());
+    let session_transport = args.transport;
     let launcher = Arc::new(DesktopLauncher::new(
         DesktopPlan {
             command,
             base: desktop_base,
             pacer,
+            bitmap_tier: if config.codec.allow_remotefx {
+                CodecTier::RemoteFx
+            } else {
+                CodecTier::Qoi
+            },
+            require_h264: config.codec.h264 == H264Policy::Force
+                && session_transport == Transport::Rdp,
             encoder,
             encoder_factory: factory_tier.into_box(),
         },
@@ -725,11 +777,11 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
 
     // --- connection --------------------------------------------------------
     let security = session_security(config, runtime_dir, session.args.transport)?;
-    let security_is_hybrid = security.is_hybrid();
     let parts = ServerParts {
         security,
         display,
         bridge: InputBridge::new(Arc::clone(&session)),
+        desktop_endpoint: Arc::clone(&launcher.desktop_endpoint),
         codecs: advertised_codecs(config.codec.allow_remotefx, decision.tier),
         quant: remote_fx_quant(config.codec.rfx_quant),
         validator: validator(Arc::clone(&session), config, Arc::clone(&launcher)),
@@ -737,15 +789,9 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
         factory: Some(factory),
     };
     let mut server = build_server(parts);
-    if security_is_hybrid {
-        let credentials = hybrid_credentials(&session.args);
-        warn!(
-            username = %credentials.username,
-            "NLA is required but this session has no secret to answer CredSSP with; \
-             NLA-only clients will be refused with a logon failure"
-        );
-        server.set_credentials(Some(credentials));
-    }
+    let mut terminate =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .map_err(|error| format!("cannot watch for session termination: {error}"))?;
     let connection_events = server.event_sender().clone();
 
     let watchdog = tokio::spawn(idle_watchdog(Arc::clone(&session), connection_events));
@@ -757,10 +803,14 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
     } else {
         TransportTls::Managed
     };
-    let outcome = server.run_connection_with(stream, tls_mode).await;
+    let outcome = tokio::select! {
+        result = server.run_connection_with(stream, tls_mode) => result.map(|_| ()),
+        _ = terminate.recv() => Ok(()),
+    };
     watchdog.abort();
     if let Err(error) = &outcome {
         warn!(error = %error, "connection ended with an error");
+        debug!(?error, "RDP connection error detail");
     }
 
     // --- teardown ----------------------------------------------------------
@@ -781,6 +831,13 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
         ),
     }
 
+    #[cfg(feature = "pam")]
+    launcher
+        .login
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+
     outcome.map_err(|e| format!("session ended: {e}"))
 }
 
@@ -789,8 +846,6 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
 enum Security {
     /// Server-authenticated TLS.
     Tls(tokio_rustls::TlsAcceptor),
-    /// NLA: CredSSP on top of TLS, which needs the certificate's public key.
-    Hybrid(tokio_rustls::TlsAcceptor, Vec<u8>),
     /// Nothing: the gateway already terminated TLS and handed the connection
     /// over a private unix socket. X.224 then confirms with an empty security
     /// protocol, which is the only reading that matches what the browser's
@@ -798,35 +853,8 @@ enum Security {
     Web,
 }
 
-impl Security {
-    /// `true` when the session negotiated CredSSP, i.e. when the server needs
-    /// an identity of its own to answer the client's NTLM challenge.
-    fn is_hybrid(&self) -> bool {
-        matches!(self, Self::Hybrid(..))
-    }
-}
-
-/// The security layer for one connection.
-///
-/// The default is server-authenticated TLS, not NLA. IronRDP's CredSSP server
-/// verifies the client's NTLM Type-3 against a password held by *this* process,
-/// and a session host has none: it learns who the user is only from the
-/// credentials in the connection, which is exactly what PAM is there to check.
-/// Handing CredSSP a placeholder password therefore fails every NLA client with
-/// `LOGON_FAILURE`, so NLA stays off until there is a secret store to read a
-/// real one from. TLS still encrypts the session and still authenticates the
-/// server; the user simply authenticates in the Client Info PDU, which is where
-/// the web client already sends the login form.
-///
-/// A client that merely *prefers* NLA (the mstsc default) accepts the TLS
-/// fallback. A client configured to *require* NLA is refused by the negotiation,
-/// which the broker then reports as the session's failure reason.
-///
-/// A web connection is the exception and does not need an identity at all: the
-/// gateway terminated TLS in the browser's own TLS session, and the socket the
-/// session host was handed is a unix socket on a machine the client cannot
-/// reach. Generating a certificate for that would be work for a handshake
-/// nobody performs.
+/// The native listener uses TLS and PAM, and the private browser socket
+/// carries RDP after the gateway terminates TLS.
 fn session_security(
     config: &Config,
     runtime_dir: &Path,
@@ -845,25 +873,7 @@ fn session_security(
     let acceptor = identity
         .acceptor()
         .map_err(|e| format!("cannot build the session TLS acceptor: {e}"))?;
-    if config.nla_required {
-        Ok(Security::Hybrid(acceptor, identity.spki().to_owned()))
-    } else {
-        Ok(Security::Tls(acceptor))
-    }
-}
-
-/// The identity CredSSP answers with when NLA is required.
-///
-/// There is no secret to put in it, so the password is empty and the username
-/// is the session's fallback user. NTLM then rejects the client's Type-3 with a
-/// clean `LOGON_FAILURE` rather than the connection dying on
-/// "no credentials while doing credssp"; the warning below names the reason.
-fn hybrid_credentials(args: &Args) -> Credentials {
-    Credentials {
-        username: args.session_user().unwrap_or_default().to_owned(),
-        password: String::new(),
-        domain: None,
-    }
+    Ok(Security::Tls(acceptor))
 }
 
 /// The pieces `build_server` needs, taken by value because the builder states
@@ -872,6 +882,7 @@ struct ServerParts {
     security: Security,
     display: SessionDisplay,
     bridge: InputBridge,
+    desktop_endpoint: clipboard::EndpointSlot,
     codecs: BitmapCodecs,
     quant: Quant,
     validator: Arc<dyn CredentialValidator>,
@@ -895,6 +906,7 @@ fn build_server(parts: ServerParts) -> RdpServer {
         security,
         display,
         bridge,
+        desktop_endpoint,
         codecs,
         quant,
         validator,
@@ -905,12 +917,21 @@ fn build_server(parts: ServerParts) -> RdpServer {
     let started = RdpServer::builder().with_addr(addr);
     let secured = match security {
         Security::Tls(acceptor) => started.with_tls(acceptor),
-        Security::Hybrid(acceptor, public_key) => started.with_hybrid(acceptor, public_key),
         Security::Web => started.with_no_security(),
     };
+    let sound: Option<Box<dyn ironrdp_server::SoundServerFactory>> =
+        if bridge.session.args.transport == Transport::Rdp {
+            Some(Box::new(sound::Factory::new(Arc::clone(&desktop_endpoint))))
+        } else {
+            None
+        };
     let displayed = secured
         .with_input_handler(bridge)
-        .with_display_handler(display);
+        .with_display_handler(display)
+        .with_cliprdr_factory(Some(Box::new(clipboard::Factory::new(Arc::clone(
+            &desktop_endpoint,
+        )))))
+        .with_sound_factory(sound);
     #[cfg(feature = "egfx")]
     let displayed = displayed.with_gfx_factory(factory.map(|factory| {
         let boxed: Box<dyn GfxServerFactory> = Box::new(factory);
@@ -946,8 +967,11 @@ fn bind_addr() -> std::net::SocketAddr {
 /// which happens inside `run_connection`; the tier is therefore chosen
 /// optimistically from configuration plus hardware and corrected afterwards by
 /// the pump's degrader.
-fn planned_negotiation(config: &Config) -> Negotiation {
-    let egfx = if cfg!(feature = "egfx") && config.codec.h264 != H264Policy::Off {
+fn planned_negotiation(config: &Config, transport: Transport) -> Negotiation {
+    let egfx = if transport == Transport::Rdp
+        && cfg!(feature = "egfx")
+        && config.codec.h264 != H264Policy::Off
+    {
         Some(caps::EgxFacts {
             avc420: true,
             avc444: true,
@@ -1070,7 +1094,8 @@ impl EncoderFactoryBox {
 /// has been checked there is no user to run a compositor as, and IronRDP does
 /// not consult the display handler until after this has returned `Accept`.
 struct Admit {
-    authenticator: Arc<dyn Authenticator>,
+    #[cfg(not(feature = "pam"))]
+    authenticator: StubAuthenticator,
     policy: AdmissionPolicy,
     session: Arc<Session>,
     desktop: Arc<DesktopLauncher>,
@@ -1082,59 +1107,88 @@ impl CredentialValidator for Admit {
         &self,
         credentials: &Credentials,
     ) -> Result<CredentialDecision, CredentialValidationError> {
-        let authenticator = Arc::clone(&self.authenticator);
         let policy = self.policy.clone();
         let username = credentials.username.clone();
         let password = credentials.password.clone();
-        // PAM talks to the system over a blocking conversation, so it must not
-        // run on a runtime worker thread.
-        let outcome = tokio::task::spawn_blocking(move || {
-            authenticator
-                .authenticate(&username, &password)
-                .map(|()| auth::admit(&policy, &username))
-        })
-        .await;
-        match outcome {
-            Ok(Ok(true)) => {
-                // Forking, execing and waiting for the compositor's socket all
-                // block, so this runs on the same blocking thread as PAM.
-                let desktop = Arc::clone(&self.desktop);
-                let username = credentials.username.clone();
-                let started = tokio::task::spawn_blocking(move || {
-                    desktop
-                        .start(Some(&username))
-                        .map(|started| (started, username))
-                })
-                .await
-                .map_err(|join| CredentialValidationError::new(join))?;
-                match started {
-                    Ok((started, username)) => {
-                        info!(
-                            peer = %self.desktop.peer,
-                            width = started.width,
-                            height = started.height,
-                            user = started.user.as_deref().unwrap_or("<this process>"),
-                            tier = caps::codec_label(self.desktop.tier),
-                            "session started"
-                        );
-                        self.session.admit(username);
-                        Ok(CredentialDecision::Accept)
-                    }
-                    // There is no "the desktop could not start" reason in the
-                    // protocol at this point, so a refused login is the honest
-                    // answer the client can act on.
-                    Err(reason) => {
-                        warn!(reason, "desktop could not start; refusing the login");
-                        Ok(CredentialDecision::Reject)
-                    }
+        let desktop = Arc::clone(&self.desktop);
+        #[cfg(not(feature = "pam"))]
+        let authenticator = self.authenticator.clone();
+        #[cfg(feature = "pam")]
+        let (release, closed) = std::sync::mpsc::channel();
+        let (ready, outcome) = tokio::sync::oneshot::channel();
+
+        tokio::task::spawn_blocking(move || {
+            #[cfg(feature = "pam")]
+            let login = match auth::login::Login::open(
+                PAM_SERVICE,
+                username,
+                password,
+                &desktop.peer,
+                &policy,
+            ) {
+                Ok(login) => login,
+                Err(error) => {
+                    let _ = ready.send(Err(error));
+                    return;
                 }
+            };
+            #[cfg(feature = "pam")]
+            let (username, session_id) = (login.username.clone(), login.session_id.as_deref());
+            #[cfg(not(feature = "pam"))]
+            let (username, session_id) = {
+                let admitted = authenticator
+                    .authenticate(&username, &password)
+                    .and_then(|()| {
+                        auth::admit(&policy, &username)
+                            .then_some(())
+                            .ok_or(AuthError::NotAllowed)
+                    });
+                if let Err(error) = admitted {
+                    let _ = ready.send(Err(error));
+                    return;
+                }
+                (username, None)
+            };
+
+            let started = desktop.start(Some(&username), session_id);
+            let wait_for_close = started.is_ok();
+            drop(desktop);
+            let delivered = ready.send(Ok((started, username))).is_ok();
+            #[cfg(feature = "pam")]
+            if wait_for_close && delivered {
+                let _ = closed.recv();
             }
-            Ok(Ok(false)) => Ok(CredentialDecision::Reject),
-            Ok(Err(AuthError::Denied)) | Ok(Err(AuthError::NotAllowed)) => {
+            #[cfg(not(feature = "pam"))]
+            let _ = (wait_for_close, delivered);
+        });
+
+        match outcome.await.map_err(CredentialValidationError::new)? {
+            Ok((Ok(started), username)) => {
+                #[cfg(feature = "pam")]
+                {
+                    *self
+                        .desktop
+                        .login
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner()) = Some(release);
+                }
+                info!(
+                    peer = %self.desktop.peer,
+                    width = started.width,
+                    height = started.height,
+                    user = started.user.as_deref().unwrap_or("<this process>"),
+                    tier = caps::codec_label(self.desktop.tier),
+                    "session started"
+                );
+                self.session.admit(username);
+                Ok(CredentialDecision::Accept)
+            }
+            Ok((Err(reason), _)) => {
+                warn!(reason, "desktop could not start; refusing the login");
                 Ok(CredentialDecision::Reject)
             }
-            Ok(Err(other)) => Err(CredentialValidationError::new(other)),
-            Err(join) => Err(CredentialValidationError::new(join)),
+            Err(AuthError::Denied | AuthError::NotAllowed) => Ok(CredentialDecision::Reject),
+            Err(error) => Err(CredentialValidationError::new(error)),
         }
     }
 }
@@ -1144,17 +1198,9 @@ fn validator(
     config: &Config,
     desktop: Arc<DesktopLauncher>,
 ) -> Arc<dyn CredentialValidator> {
-    let authenticator: Arc<dyn Authenticator> = if cfg!(feature = "pam") {
-        Arc::new(auth::PamAuthenticator::new(PAM_SERVICE))
-    } else {
-        // Without PAM there is no password database to consult, so the only
-        // honest check is "the username the broker asked for".
-        Arc::new(StubAuthenticator::new(
-            session.args.session_user().map(str::to_owned),
-        ))
-    };
     Arc::new(Admit {
-        authenticator,
+        #[cfg(not(feature = "pam"))]
+        authenticator: StubAuthenticator::new(session.args.session_user().map(str::to_owned)),
         policy: AdmissionPolicy::from_config(config),
         session,
         desktop,
@@ -1177,33 +1223,22 @@ impl InputBridge {
     }
 
     fn send(&self, event: WlPointerEvent) {
+        self.session.mark_input();
         if let Some(pump) = self.session.display.pump() {
             let _ = pump.send(PumpCommand::Pointer(event));
         }
     }
 
-    fn key(&self, code: u8, extended: bool, pressed: bool) {
+    fn send_key(&self, keysym: Option<u32>, pressed: bool) {
         self.session.mark_input();
-        // An unmappable keysym is rejected by the backend and kills the
-        // session, so drop it here instead.
-        if let Some(keysym) = keysym_for(code, extended)
-            && let Some(pump) = self.session.display.pump()
-        {
-            let _ = pump.send(PumpCommand::Keyboard(WlKeyboardEvent { keysym, pressed }));
-        }
-    }
-
-    fn unicode(&self, value: u16, pressed: bool) {
-        self.session.mark_input();
-        // Latin-1 code points are their own X keysyms; anything else would need
-        // a Compose table the session does not have.
-        if value < 0x100
-            && let Some(pump) = self.session.display.pump()
-        {
-            let _ = pump.send(PumpCommand::Keyboard(WlKeyboardEvent {
-                keysym: u32::from(value),
-                pressed,
-            }));
+        // The virtual keyboard accepts only keysyms present in its keymap.
+        if let Some(keysym) = keysym {
+            let event = WlKeyboardEvent { keysym, pressed };
+            if event.keycode().is_some()
+                && let Some(pump) = self.session.display.pump()
+            {
+                let _ = pump.send(PumpCommand::Keyboard(event));
+            }
         }
     }
 }
@@ -1211,10 +1246,18 @@ impl InputBridge {
 impl RdpServerInputHandler for InputBridge {
     fn keyboard(&mut self, event: KeyboardEvent) {
         match event {
-            KeyboardEvent::Pressed { code, extended } => self.key(code, extended, true),
-            KeyboardEvent::Released { code, extended } => self.key(code, extended, false),
-            KeyboardEvent::UnicodePressed(value) => self.unicode(value, true),
-            KeyboardEvent::UnicodeReleased(value) => self.unicode(value, false),
+            KeyboardEvent::Pressed { code, extended } => {
+                self.send_key(keysym_for(code, extended), true)
+            }
+            KeyboardEvent::Released { code, extended } => {
+                self.send_key(keysym_for(code, extended), false)
+            }
+            KeyboardEvent::UnicodePressed(value) => {
+                self.send_key((value < 0x100).then_some(u32::from(value)), true)
+            }
+            KeyboardEvent::UnicodeReleased(value) => {
+                self.send_key((value < 0x100).then_some(u32::from(value)), false)
+            }
             KeyboardEvent::Synchronize(_) => {}
         }
     }
@@ -1222,6 +1265,7 @@ impl RdpServerInputHandler for InputBridge {
     fn mouse(&mut self, event: MouseEvent) {
         match event {
             MouseEvent::Move { x, y } => self.send(WlPointerEvent::Move { x, y }),
+            MouseEvent::RelMove { x, y } => self.send(WlPointerEvent::MoveRelative { x, y }),
             MouseEvent::Button {
                 x,
                 y,
@@ -1242,10 +1286,7 @@ impl RdpServerInputHandler for InputBridge {
                 button,
                 pressed,
             } => {
-                self.send(WlPointerEvent::Move {
-                    x: clamp_u16(x),
-                    y: clamp_u16(y),
-                });
+                self.send(WlPointerEvent::MoveRelative { x, y });
                 if let Some(code) = wl_button(button) {
                     self.send(WlPointerEvent::Button {
                         button: code,
@@ -1275,30 +1316,27 @@ fn wl_button(button: MouseButton) -> Option<u16> {
         MouseButton::Left => Some(button::LEFT),
         MouseButton::Right => Some(button::RIGHT),
         MouseButton::Middle => Some(button::MIDDLE),
-        // X1/X2 are the Wayland codes 8 and 9 (BTN_SIDE / BTN_EXTRA).
-        MouseButton::X1 => Some(8),
-        MouseButton::X2 => Some(9),
+        MouseButton::X1 => Some(button::SIDE),
+        MouseButton::X2 => Some(button::EXTRA),
         _ => None,
     }
 }
 
-fn clamp_u16(value: i32) -> u16 {
-    u16::try_from(value.max(0)).unwrap_or(u16::MAX)
-}
-
 /// Reports idleness and enforces `--idle-timeout`.
 async fn idle_watchdog(session: Arc<Session>, events: mpsc::UnboundedSender<ServerEvent>) {
-    let Some(limit) = session.idle_timeout else {
-        return;
-    };
-    let notice = limit.min(Duration::from_secs(60));
+    let limit = session.idle_timeout;
+    let notice = limit
+        .unwrap_or(Duration::from_secs(60))
+        .min(Duration::from_secs(60));
     let mut ticker = tokio::time::interval(WATCHDOG_PERIOD);
     let mut reported_idle = false;
     let mut reported_tier = session.display.tier();
+    let mut reported_size = session.display.size();
+    let mut reported_input = None;
     loop {
         ticker.tick().await;
         let idle_for = session.idle_for();
-        if idle_for >= limit {
+        if limit.is_some_and(|limit| idle_for >= limit) {
             info!(?idle_for, "idle timeout; ending the session");
             let _ = events.send(ServerEvent::Quit("idle timeout".to_owned()));
             // No pump when the client never authenticated: there is no desktop
@@ -1308,10 +1346,24 @@ async fn idle_watchdog(session: Arc<Session>, events: mpsc::UnboundedSender<Serv
             }
             return;
         }
+        if let Some(reason) = session.display.failure() {
+            let _ = events.send(ServerEvent::Quit(reason));
+            return;
+        }
         session.refresh_codec(&mut reported_tier);
+        let size = session.display.size();
+        if size != reported_size {
+            reported_size = size;
+            session.publish(Some(size.width), Some(size.height));
+        }
+        let last_input = *session
+            .last_input
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let idle = idle_for >= notice;
-        if idle != reported_idle {
+        if idle != reported_idle || (!idle && reported_input != Some(last_input)) {
             reported_idle = idle;
+            reported_input = Some(last_input);
             session.status.send_idle(idle);
         }
     }
@@ -1366,8 +1418,7 @@ fn state_runtime_base() -> PathBuf {
 /// as root (it has to: it drops the desktop to the authenticated account), and
 /// then `XDG_RUNTIME_DIR` is root's — mode `0700`, so a compositor that has
 /// dropped to another account could not even traverse it. A privileged host
-/// therefore uses the shared state directory, where every desktop additionally
-/// gets a `sessions/<uid>` level.
+/// therefore uses a shared base under `/run`, with private per-user session directories.
 fn desktop_runtime_base(env: &[(String, String)]) -> DesktopBase {
     // Safety: `geteuid` has no preconditions.
     desktop_base_for(unsafe { libc::geteuid() } == 0, env)
@@ -1377,7 +1428,7 @@ fn desktop_runtime_base(env: &[(String, String)]) -> DesktopBase {
 /// choice can be tested without running the test as root.
 fn desktop_base_for(privileged: bool, env: &[(String, String)]) -> DesktopBase {
     let root = if privileged {
-        PathBuf::from(STATE_DIR)
+        PathBuf::from(DESKTOP_RUNTIME_ROOT)
     } else {
         match env_value(env.to_vec(), "XDG_RUNTIME_DIR") {
             Some(dir) if Path::new(&dir).is_absolute() => PathBuf::from(dir),
@@ -1446,7 +1497,7 @@ mod tests {
         // the authenticated account could not traverse it.
         let env = [("XDG_RUNTIME_DIR".to_owned(), "/run/user/0".to_owned())];
         let base = desktop_base_for(true, &env);
-        assert_eq!(base.root, PathBuf::from(STATE_DIR));
+        assert_eq!(base.root, PathBuf::from(DESKTOP_RUNTIME_ROOT));
         assert!(base.privileged);
     }
 
@@ -1471,6 +1522,8 @@ mod tests {
                 privileged: false,
             },
             pacer: Pacer::new(30, Instant::now()),
+            bitmap_tier: CodecTier::Qoi,
+            require_h264: false,
             encoder: None,
             encoder_factory: Box::new(|_| None),
         };
@@ -1501,14 +1554,14 @@ mod tests {
         let base = std::env::temp_dir().join(format!("uflinux-rds-spawn-{}", std::process::id()));
         let launcher = launcher_for_test(&base);
         let error = launcher
-            .start(None)
+            .start(None, None)
             .expect_err("a compositor that exits immediately must fail");
         assert!(error.contains("compositor"), "{error}");
         assert!(!launcher.pending());
         assert!(launcher.take_pump().is_none());
         assert!(
             launcher
-                .start(None)
+                .start(None, None)
                 .expect_err("a second start must be refused")
                 .contains("already started")
         );

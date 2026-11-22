@@ -237,7 +237,7 @@ pub fn negotiation_error_pdu(server_x224_response: &[u8]) -> Vec<u8> {
         .unwrap_or_else(|_| error_pdu(GENERAL_ERROR_CODE))
 }
 
-/// Read one TPKT frame (RDP always uses the 4-byte TPKT header).
+/// Read the length of a TPKT-framed X.224 handshake message.
 ///
 /// Returns the frame length, or `None` when fewer than 4 bytes are available.
 pub fn tpkt_frame_len(src: &[u8]) -> Option<usize> {

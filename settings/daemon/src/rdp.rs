@@ -1,7 +1,6 @@
 //! Remote Desktop panel support.
 //!
-//! Talks to the `uflinux-rdsd` broker over its control socket and to the
-//! in-package privileged helper over the system bus. The daemon deliberately
+//! Talks to the RDS system-bus helper. The daemon deliberately
 //! does not link the rds workspace, so the wire shapes are mirrored here.
 //! The mirrors are permissive: unknown fields are ignored and every field has
 //! a fallback, so a newer or older broker never breaks the UI.
@@ -13,15 +12,15 @@ use settings_core::{
     CertificateMode, CodecTier, MAX_RDP_SESSIONS, Rdp, RdpCodecs, RdpSession, RdpSystemAction,
     Result, bus,
 };
+use std::path::PathBuf;
+#[cfg(test)]
 use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixStream,
-    path::{Path, PathBuf},
+    path::Path,
     time::Duration,
 };
 
-/// Broker control socket, matching `uflinux_rds_common::control_socket_path`.
-const CONTROL_SOCKET: &str = "/run/uflinux-rds/control.sock";
 /// On-disk broker configuration; it is patched through the broker, never written here.
 const CONFIG_PATH: &str = "/etc/uflinux/rds.json";
 /// Presence of the package. Nothing is probed while the binary is missing.
@@ -30,16 +29,10 @@ const BROKER_BINARY: &str = "/usr/bin/uflinux-rdsd";
 const RDS_SYSTEM_NAME: &str = "org.uflinux.Rds.System1";
 const RDS_SYSTEM_PATH: &str = "/org/uflinux/Rds/System1";
 /// The page must never wait on the broker: connect, write and read all stop here.
+#[cfg(test)]
 const TIMEOUT: Duration = Duration::from_millis(300);
+#[cfg(test)]
 const MAX_REPLY: usize = 1024 * 1024;
-
-/// Socket path, overridable for tests exactly like the broker's own helper.
-pub fn socket_path() -> PathBuf {
-    match std::env::var_os("UFLINUX_RDS_CONTROL_SOCKET") {
-        Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => PathBuf::from(CONTROL_SOCKET),
-    }
-}
 
 fn config_path() -> PathBuf {
     PathBuf::from(CONFIG_PATH)
@@ -51,30 +44,15 @@ fn broker_installed() -> bool {
 
 // ---------------------------------------------------------------- state query
 
-/// Builds the `Rdp` block of the published snapshot. Never blocks for long:
-/// the socket round trip is capped at [`TIMEOUT`] off the main context, and
-/// any failure is reported as "installed but not running" through `error`.
-pub async fn query() -> Rdp {
-    match gio::spawn_blocking(query_now).await {
-        Ok(rdp) => rdp,
-        Err(_) => unavailable("The RDS broker could not be queried".into()),
-    }
-}
-
-fn query_now() -> Rdp {
+/// Reads the broker through the distro's system-bus helper.
+pub async fn query(system: &gio::DBusConnection) -> Rdp {
     if !broker_installed() {
         return Rdp::default();
     }
-    match exchange(&json!({"op": "get_state"})) {
-        Ok(reply) => match reply.get("state") {
-            Some(state) => match serde_json::from_value::<BrokerState>(state.clone()) {
-                Ok(state) => state_to_rdp(state),
-                Err(_) => unavailable("The broker reported an unreadable state".into()),
-            },
-            None => Rdp {
-                installed: true,
-                ..Default::default()
-            },
+    match helper(system, &json!({"operation": "broker-state"})).await {
+        Ok(reply) => match serde_json::from_value::<BrokerState>(reply["state"].clone()) {
+            Ok(state) => state_to_rdp(state),
+            Err(_) => unavailable("The broker reported an unreadable state".into()),
         },
         Err(error) => unavailable(error),
     }
@@ -91,10 +69,7 @@ fn unavailable(error: String) -> Rdp {
 }
 
 /// One request, one reply, one line each way. Errors are user-facing strings.
-fn exchange(request: &Value) -> Result<Value> {
-    exchange_at(&socket_path(), request)
-}
-
+#[cfg(test)]
 fn exchange_at(path: &Path, request: &Value) -> Result<Value> {
     let stream = UnixStream::connect(path)
         .map_err(|_| format!("The RDS broker is not reachable at {}", path.display()))?;
@@ -124,12 +99,18 @@ fn exchange_at(path: &Path, request: &Value) -> Result<Value> {
     }
 }
 
-/// Sends one already-built broker request (mutation or disconnect).
-pub async fn execute(request: Value) -> Result<Value> {
-    match gio::spawn_blocking(move || exchange(&request)).await {
-        Ok(result) => result,
-        Err(_) => Err("The RDS broker could not be reached".into()),
-    }
+/// Apply a Settings update or disconnect through the authorized helper.
+pub async fn execute(system: &gio::DBusConnection, request: Value) -> Result<Value> {
+    let operation = match request["op"].as_str() {
+        Some("execute") => {
+            json!({"operation": "broker-configure", "config": request["action"]["config"]})
+        }
+        Some("disconnect") => {
+            json!({"operation": "broker-disconnect", "session": request["session"]})
+        }
+        _ => return Err("Unsupported broker operation".to_owned()),
+    };
+    helper(system, &operation).await
 }
 
 // ------------------------------------------------------------- privileged bus
@@ -142,8 +123,11 @@ pub async fn system(
     operation: &RdpSystemAction,
     current: &Rdp,
 ) -> Result<Value> {
-    let request = serde_json::to_string(&helper_request(operation, current))
-        .map_err(|_| "Cannot encode the rds operation")?;
+    helper(system, &helper_request(operation, current)).await
+}
+
+async fn helper(system: &gio::DBusConnection, request: &Value) -> Result<Value> {
+    let request = serde_json::to_string(request).map_err(|_| "Cannot encode the rds operation")?;
     let reply = bus::call(
         system,
         RDS_SYSTEM_NAME,
@@ -620,17 +604,6 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.contains("not reachable"), "{error}");
-    }
-
-    #[test]
-    fn an_absent_binary_short_circuits_to_not_installed() {
-        let rdp = Rdp::default();
-        assert!(!rdp.installed);
-        // query_now consults the real path; on a dev host without the package
-        // it must report "not installed" without touching the socket.
-        if !broker_installed() {
-            assert!(!query_now().installed);
-        }
     }
 
     #[test]

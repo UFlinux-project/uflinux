@@ -135,13 +135,18 @@ impl Tray {
                 .build()?;
             tray.registrations.borrow_mut().push(registration);
             let weak = Rc::downgrade(&tray);
-            let owner = gio::bus_own_name_on_connection(
-                &bus,
+            // The session bus can close during RDP logout. Use the callback
+            // that accepts a missing connection when the name is lost.
+            let owner = gio::bus_own_name(
+                gio::BusType::Session,
                 interface,
                 gio::BusNameOwnerFlags::NONE,
                 |_, _| {},
-                move |_, name| {
-                    if let Some(tray) = weak.upgrade() {
+                |_, _| {},
+                move |connection, name| {
+                    if connection.is_some()
+                        && let Some(tray) = weak.upgrade()
+                    {
                         tray.follow_watcher(name);
                     }
                 },

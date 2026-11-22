@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 uflinux-rds-common.workspace = true
 ironrdp-rdcleanpath.workspace = true
+ironrdp-pdu.workspace = true
 axum = { workspace = true, features = ["ws"] }
 tokio.workspace = true
 tokio-rustls = { workspace = true, features = ["ring", "tls12", "logging"] }

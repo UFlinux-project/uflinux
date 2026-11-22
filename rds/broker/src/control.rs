@@ -219,7 +219,9 @@ async fn disconnect(state: &State, session: u32) -> Reply {
             message: format!("no session {session}"),
         };
     }
-    session::disconnect(state, session, DISCONNECT_GRACE);
+    if !session::disconnect(state, session, DISCONNECT_GRACE) {
+        return Reply::Error { message: "Could not signal the session process".to_owned() };
+    }
     Reply::Ok {
         state: Some(Box::new(state.snapshot())),
         sessions: Some(state.sessions()),

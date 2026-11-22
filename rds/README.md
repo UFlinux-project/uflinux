@@ -27,8 +27,8 @@ connection and are torn down again when the last client leaves.
 overrides a few common values for people who prefer shell syntax. The keys are
 the ones the Remote Desktop page in `uflinux-settings` edits:
 
-* `enabled`, `rdp_port`, `rdp_bind`, `nla_required` (off by default; see the
-  note about CredSSP in `rds/server/src/main.rs`)
+* `enabled`, `rdp_port`, `rdp_bind`. Native clients must allow TLS security.
+  `nla_required` must be false because the PAM backend does not support CredSSP.
 * `allowed_users`, `allowed_groups`, `max_sessions`, `idle_timeout_secs`,
   `session_command` (`linger_secs` is still accepted and ignored)
 * `codec.h264` (`auto`/`force`/`off`), `codec.allow_remotefx`, `codec.rfx_quant`,
@@ -70,6 +70,8 @@ costs a few megabytes of RSS and nothing else.
 
 The web gateway writes its self-signed certificate into `/var/lib/uflinux-rds`,
 mode 0750, so the private key (0640) is not readable by ordinary users.
+The session host creates private desktop runtime directories under
+`/run/uflinux-rds-desktops` and removes them when the session ends.
 
 ## How a connection is served
 
@@ -77,9 +79,9 @@ mode 0750, so the private key (0640) is not readable by ordinary users.
    socket — and starts `uflinux-rdp-session` with the client's socket on fd 3.
    Nothing else has happened yet: no desktop, no encoder.
 2. The session host runs X.224 and TLS (or the web offload below), then runs
-   PAM (`/etc/pam.d/uflinux-rds`) and checks `allowed_users`/`allowed_groups`,
-   `max_sessions` and NLA. Only a validated credential reaches the next step;
-   until then the client is offered nothing but an access-denied.
+   PAM (`/etc/pam.d/uflinux-rds`) and checks `allowed_users`/`allowed_groups`.
+   The broker enforces `max_sessions`. The session host opens the PAM session
+   before starting the compositor and closes it during teardown.
 3. It then drops root to the *authenticated* account — setuid, setgid, that
    user's supplementary groups and a private `XDG_RUNTIME_DIR` owned by it —
    and starts the headless compositor for `session_command` (by default the
@@ -97,17 +99,30 @@ mode 0750, so the private key (0640) is not readable by ordinary users.
    client disconnects the session host exits. The desktop does not outlive its
    connection: a reconnect gets a fresh session host and a fresh desktop.
 
+## Dynamic resolution
+
+Clients with RDP Display Control can resize the session's single headless
+output while connected. Enable dynamic resolution in your native client. The
+browser console requests a new resolution when its viewport changes. Sizes
+stay within the advertised pixel budget and use even dimensions for H.264.
+
 ## Codecs
 
 `codec.h264 = "auto"` prefers a hardware encoder and falls back to software
-OpenH264, then to RemoteFX. Hardware encode runs `ffmpeg -c:v h264_vaapi` out of
+OpenH264, then to RemoteFX or basic bitmap updates based on client capabilities. Hardware encode runs `ffmpeg -c:v h264_vaapi` out of
 process, so a crash in the driver takes down one encoder rather than a session;
-install `uflinux-rds-vaapi` for it. `force` refuses to fall back, which is the
-way to check that the hardware path really is in use, and `off` disables H.264
-altogether.
+install `uflinux-rds-vaapi` for it. On native connections, `force` requires AVC
+support and an encoder. `off` disables H.264.
 
 Browser clients always receive QOI or RemoteFX: no browser decodes the H.264 RDP
 channel. H.264 is for native clients such as mstsc, FreeRDP and Remmina.
+
+## Clipboard and sound
+
+Clients that negotiate CLIPRDR can exchange plain Unicode text with the remote
+desktop clipboard. Native clients can also play audio from the remote desktop's
+private PipeWire output through RDPSND. The browser client supports text
+clipboard transfer and currently has no audio playback.
 
 ## Web client
 
