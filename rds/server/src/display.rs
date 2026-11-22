@@ -181,6 +181,11 @@ pub struct SessionDisplay {
     queue: UpdateQueue,
     updates: mpsc::Sender<DisplayUpdate>,
     events: EventSenderSlot,
+    /// The frame pump, once the desktop has been started. A session that is
+    /// still waiting for its user to authenticate has none: the desktop is
+    /// only started for someone who proved who they are, so the display
+    /// exists (and answers size queries) before anything is drawing into it.
+    pump: Arc<std::sync::Mutex<Option<PumpSender>>>,
 }
 
 impl Clone for SessionDisplay {
@@ -190,6 +195,7 @@ impl Clone for SessionDisplay {
             queue: Arc::clone(&self.queue),
             updates: self.updates.clone(),
             events: Arc::clone(&self.events),
+            pump: Arc::clone(&self.pump),
         }
     }
 }
@@ -208,6 +214,15 @@ impl SessionDisplay {
     /// New display for a backend that already reports its size.
     pub fn new(backend: &DesktopBackend, tier: CodecTier) -> Self {
         let (width, height) = backend.size();
+        Self::from_size(width, height, tier)
+    }
+
+    /// New display that starts out at `width` x `height` with no pump attached.
+    ///
+    /// This is what lets a session answer the client's size queries before the
+    /// desktop exists: the geometry is whatever the compositor is about to be
+    /// started at, so the first frame matches the advertised size.
+    pub fn from_size(width: u32, height: u32, tier: CodecTier) -> Self {
         let size = clamp_size(width, height);
         let (updates, receiver) = mpsc::channel(UPDATE_QUEUE_DEPTH);
         Self {
@@ -228,7 +243,27 @@ impl SessionDisplay {
             queue: Arc::new(AsyncMutex::new(receiver)),
             updates,
             events: Arc::new(std::sync::Mutex::new(None)),
+            pump: Arc::new(std::sync::Mutex::new(None)),
         }
+    }
+
+    /// The command queue, once the desktop has been started.
+    pub fn pump(&self) -> Option<PumpSender> {
+        self.pump.lock().ok()?.clone()
+    }
+
+    /// Hands the pump to the display, so a later client resize reaches the
+    /// compositor. Returns `false` if a pump was already attached.
+    pub fn attach_pump(&self, sender: PumpSender) -> bool {
+        let mut slot = match self.pump.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if slot.is_some() {
+            return false;
+        }
+        *slot = Some(sender);
+        true
     }
 
     /// The queue the pump pushes into and the display handler reads from.
@@ -356,11 +391,20 @@ impl RdpServerDisplay for SessionDisplay {
             current = %format!("{}x{}", current.width, current.height),
             "client asked for its own desktop size"
         );
-        // The pump is not running yet while the initial size is negotiated, so
-        // only record the size here; the session applies it to the compositor
-        // before starting the pump.
+        // The desktop is started from the credential path, so a pump may or may
+        // not be attached yet. Either way the size is recorded here; when a pump
+        // exists the compositor is resized too, and the pump repaints the whole
+        // surface after a resize, so the client's first frame is complete.
         match self.request_size_no_pump(client_size) {
-            Some(adopted) => adopted,
+            Some(adopted) => {
+                if let Some(sender) = self.pump() {
+                    let _ = sender.send(PumpCommand::Resize {
+                        width: u32::from(adopted.width),
+                        height: u32::from(adopted.height),
+                    });
+                }
+                adopted
+            }
             None => self.lock().size,
         }
     }
@@ -607,6 +651,7 @@ fn run(
     receiver: std::sync::mpsc::Receiver<PumpCommand>,
     mut sink: Sink,
 ) -> Option<DesktopBackend> {
+    let mut pending = None;
     loop {
         // Drain everything queued first: input must not wait behind a frame
         // wait, and a burst of input should cost one pass, not one per event.
@@ -630,6 +675,7 @@ fn run(
                         return Some(backend);
                     }
                     sink.invalidate_surface();
+                    pending = None;
                 }
                 PumpCommand::KeyFrame => sink.request_key_frame(),
                 PumpCommand::Stop => return Some(backend),
@@ -637,11 +683,23 @@ fn run(
         }
 
         match backend.next_frame(POLL) {
-            Ok(Some(frame)) => sink.publish(&frame),
+            Ok(Some(frame)) => {
+                if pending.replace(frame).is_some() {
+                    // The new damage is relative to the frame we still owe.
+                    sink.resync = true;
+                }
+            }
             Ok(None) => {}
             Err(error) => {
                 sink.fail(&error);
                 break;
+            }
+        }
+        if let Some(frame) = &pending {
+            let frames_sent = sink.frame_count;
+            sink.publish(frame);
+            if sink.frame_count != frames_sent && !sink.resync {
+                pending = None;
             }
         }
     }
@@ -739,6 +797,7 @@ impl Sink {
         }
         match bitmap_updates(frame, self.resync) {
             Some(updates) => {
+                let total = updates.len();
                 let mut sent = 0;
                 for update in updates {
                     if self.updates.try_send(update).is_err() {
@@ -751,7 +810,16 @@ impl Sink {
                     self.resync = true;
                     return;
                 }
-                self.resync = false;
+                // A partial send leaves the client with half a frame: keep the
+                // resync flag so the rectangles that never made it into the
+                // queue come back with the next update as a full refresh.
+                self.resync = sent < total;
+                if self.resync {
+                    trace!(
+                        sent,
+                        total, "display queue full mid-frame; next update resyncs"
+                    );
+                }
                 self.mark_sent(now);
             }
             None => debug!(
@@ -773,6 +841,18 @@ impl Sink {
 
     #[cfg(feature = "egfx")]
     fn publish_avc420(&mut self, frame: &Frame, now: Instant) {
+        let Some(handle) = self.lock().gfx.clone() else {
+            return;
+        };
+        let Ok(pipeline) = handle.lock() else {
+            self.give_up();
+            return;
+        };
+        if !pipeline.is_ready() || pipeline.should_backpressure() {
+            return;
+        }
+        drop(pipeline);
+
         let h264 = match self.encode(frame) {
             Ok(h264) => h264,
             Err(keep_running) => {
@@ -786,8 +866,10 @@ impl Sink {
         if h264.is_empty() {
             return;
         }
-        let regions: Vec<ironrdp_egfx::pdu::Avc420Region> =
-            avc_regions(frame, AVC_QUANTIZATION_PARAMETER).unwrap_or_else(|| {
+        let regions = (!self.resync)
+            .then(|| avc_regions(frame, AVC_QUANTIZATION_PARAMETER))
+            .flatten()
+            .unwrap_or_else(|| {
                 vec![ironrdp_egfx::pdu::Avc420Region::full_frame(
                     u16::try_from(frame.width).unwrap_or(u16::MAX),
                     u16::try_from(frame.height).unwrap_or(u16::MAX),
@@ -802,10 +884,6 @@ impl Sink {
         // runs its callbacks under the pipeline mutex, so holding `shared` across
         // a pipeline lock would invert the lock order with any callback that ever
         // takes it.
-        let Some(handle) = self.lock().gfx.clone() else {
-            debug!("no EGFX pipeline for this connection; frame dropped");
-            return;
-        };
         let Ok(mut pipeline) = handle.lock() else {
             self.give_up();
             return;
@@ -842,6 +920,8 @@ impl Sink {
             }
             None => {
                 shared.surface = None;
+                drop(shared);
+                self.request_key_frame();
                 debug!("EGFX surface not ready; frame dropped");
             }
         }
@@ -998,10 +1078,20 @@ fn ensure_surface(
     {
         return Some(surface);
     }
-    // Output dimensions describe the desktop, not the surface: EGFX pads the
-    // surface to a 16-pixel multiple, and telling it the real size is what keeps
-    // the client from showing the padding.
-    pipeline.set_output_dimensions(width, height);
+    // Send the single headless output as the primary monitor. Clients such
+    // as FreeRDP reject the implicit ResetGraphics with an empty monitor list.
+    use ironrdp_pdu::gcc::{Monitor, MonitorFlags};
+    pipeline.resize_with_monitors(
+        width,
+        height,
+        vec![Monitor {
+            left: 0,
+            top: 0,
+            right: i32::from(width) - 1,
+            bottom: i32::from(height) - 1,
+            flags: MonitorFlags::PRIMARY,
+        }],
+    );
     let id = pipeline.create_surface(width, height)?;
     let _ = pipeline.map_surface_to_output(id, 0, 0);
     Some(SurfaceState { id, width, height })
@@ -1015,13 +1105,13 @@ fn drain(
     let Some(channel_id) = pipeline.channel_id() else {
         return Vec::new();
     };
-    let messages = pipeline.drain_output();
-    if messages.is_empty() {
-        return Vec::new();
-    }
-    let payloads =
-        vec![Box::new(RawDvcPayload(concatenate(&messages))) as Box<dyn ironrdp_dvc::DvcEncode>];
-    match ironrdp_dvc::encode_dvc_messages(channel_id, payloads, ChannelFlags::empty()) {
+    // Each message is already wrapped in its own ZGFX segment. Keep those
+    // boundaries when the DVC encoder adds its transport framing.
+    match ironrdp_dvc::encode_dvc_messages(
+        channel_id,
+        pipeline.drain_output(),
+        ChannelFlags::empty(),
+    ) {
         Ok(svc) => svc,
         Err(error) => {
             warn!(error = %error, "cannot frame EGFX output");
@@ -1029,62 +1119,6 @@ fn drain(
         }
     }
 }
-
-/// Encodes each pipeline message and concatenates the result.
-///
-/// One `RawDvcPayload` per batch rather than one per message: the EGFX PDU
-/// stream is self-delimiting, and a single `DrdynvcDataPdu` per frame keeps the
-/// channel overhead at one header per frame.
-#[cfg(feature = "egfx")]
-fn concatenate(messages: &[Box<dyn ironrdp_dvc::DvcEncode>]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for message in messages {
-        // `ironrdp_core::encode` sizes the cursor from the caller's buffer and
-        // returns the number of bytes written. There is no `Encode` impl for
-        // `Box<dyn Encode>`, hence the dereference.
-        let mut buffer = vec![0u8; message.size()];
-        match ironrdp::core::encode(&**message, &mut buffer) {
-            Ok(written) => {
-                buffer.truncate(written);
-                out.extend_from_slice(&buffer);
-            }
-            Err(error) => warn!(error = %error, "EGFX message did not encode; dropped"),
-        }
-    }
-    out
-}
-
-/// A DVC payload that is already an encoded EGFX PDU batch.
-///
-/// `GraphicsPipelineServer::drain_output` returns `DvcMessage`s, but they have to
-/// be wrapped in the dynamic-channel framing before they can go through the
-/// event loop, and `encode_dvc_messages` takes `DvcMessage`s again. This type is
-/// the round-trip: it re-emits the bytes the pipeline produced inside one
-/// `DrdynvcDataPdu`. It mirrors the `RawDvcPayload` the IronRDP end-to-end tests
-/// use, which is test-local and so not reusable
-/// (`ironrdp-testsuite-extra/tests/e2e.rs:2009`).
-#[cfg(feature = "egfx")]
-pub struct RawDvcPayload(pub Vec<u8>);
-
-#[cfg(feature = "egfx")]
-impl ironrdp::core::Encode for RawDvcPayload {
-    fn encode(&self, dst: &mut ironrdp::core::WriteCursor<'_>) -> ironrdp::core::EncodeResult<()> {
-        ironrdp::core::ensure_size!(in: dst, size: self.0.len());
-        dst.write_slice(&self.0);
-        Ok(())
-    }
-
-    fn name(&self) -> &'static str {
-        "RawDvcPayload"
-    }
-
-    fn size(&self) -> usize {
-        self.0.len()
-    }
-}
-
-#[cfg(feature = "egfx")]
-impl ironrdp_dvc::DvcEncode for RawDvcPayload {}
 
 /// Turns a compositor frame into bitmap updates, one per dirty rectangle.
 ///
@@ -1096,46 +1130,76 @@ impl ironrdp_dvc::DvcEncode for RawDvcPayload {}
 fn bitmap_updates(frame: &Frame, resync: bool) -> Option<Vec<DisplayUpdate>> {
     let width = u16::try_from(frame.width).ok()?;
     let height = u16::try_from(frame.height).ok()?;
-    let stride = NonZeroUsize::new(usize::from(width) * 4)?;
-    let full = BitmapUpdate {
+    if resync {
+        return Some(vec![DisplayUpdate::Bitmap(full_frame_update(
+            frame, width, height,
+        )?)]);
+    }
+    let mut updates = Vec::with_capacity(frame.dirty.len().max(1));
+    for rect in &frame.dirty {
+        if let Some(update) = sub_update(frame, rect) {
+            updates.push(update);
+        }
+    }
+    if updates.is_empty() {
+        updates.push(DisplayUpdate::Bitmap(full_frame_update(
+            frame, width, height,
+        )?));
+    }
+    Some(updates)
+}
+
+/// The whole frame as one update. Cloning the pixels is a reference-count
+/// bump: the frame's buffer is shared with the capture path.
+fn full_frame_update(frame: &Frame, width: u16, height: u16) -> Option<BitmapUpdate> {
+    Some(BitmapUpdate {
         x: 0,
         y: 0,
         width: NonZeroU16::new(width)?,
         height: NonZeroU16::new(height)?,
         format: PixelFormat::RgbA32,
-        data: Bytes::from(frame.pixels.clone()),
-        stride,
-    };
-    if resync {
-        return Some(vec![DisplayUpdate::Bitmap(full)]);
-    }
-    let mut updates = Vec::with_capacity(frame.dirty.len().max(1));
-    for rect in &frame.dirty {
-        if let Some(update) = sub_update(&full, rect) {
-            updates.push(update);
-        }
-    }
-    if updates.is_empty() {
-        updates.push(DisplayUpdate::Bitmap(full));
-    }
-    Some(updates)
+        data: frame.pixels.clone(),
+        stride: NonZeroUsize::new(usize::from(width) * 4)?,
+    })
 }
 
-/// One dirty rectangle of a full-frame update.
+/// One dirty rectangle, copied straight out of the shared frame pixels.
 ///
-/// `BitmapUpdate::sub` bounds-checks with plain `u16` arithmetic, which panics on
-/// overflow in a debug build, so out-of-frame rectangles are rejected here rather
-/// than passed on.
-fn sub_update(full: &BitmapUpdate, rect: &DirtyRect) -> Option<DisplayUpdate> {
+/// Only the bytes inside the rectangle are copied, and the update carries that
+/// rectangle's own stride, so a cursor blink costs 64 bytes rather than a
+/// second desktop.
+///
+/// `BitmapUpdate::sub` is not used here: it bounds-checks with plain `u16`
+/// arithmetic, which panics on overflow in a debug build, and it inherits the
+/// parent stride, so a small rectangle would still ship a whole row of the
+/// desktop. Out-of-frame rectangles are rejected with `u32` math instead.
+fn sub_update(frame: &Frame, rect: &DirtyRect) -> Option<DisplayUpdate> {
     let width = NonZeroU16::new(rect.width)?;
     let height = NonZeroU16::new(rect.height)?;
-    if u32::from(rect.x) + u32::from(rect.width) > u32::from(full.width.get())
-        || u32::from(rect.y) + u32::from(rect.height) > u32::from(full.height.get())
+    if u32::from(rect.x) + u32::from(rect.width) > frame.width
+        || u32::from(rect.y) + u32::from(rect.height) > frame.height
     {
         return None;
     }
-    full.sub(rect.x, rect.y, width, height)
-        .map(DisplayUpdate::Bitmap)
+    let row_bytes = usize::from(rect.width) * 4;
+    let frame_stride = usize::try_from(frame.width).ok()?.checked_mul(4)?;
+    let left = usize::from(rect.x) * 4;
+    let mut data = Vec::with_capacity(usize::from(rect.height) * row_bytes);
+    for row in 0..usize::from(rect.height) {
+        let start = (usize::from(rect.y) + row)
+            .checked_mul(frame_stride)?
+            .checked_add(left)?;
+        data.extend_from_slice(frame.pixels.get(start..start + row_bytes)?);
+    }
+    Some(DisplayUpdate::Bitmap(BitmapUpdate {
+        x: rect.x,
+        y: rect.y,
+        width,
+        height,
+        format: PixelFormat::RgbA32,
+        data: Bytes::from(data),
+        stride: NonZeroUsize::new(row_bytes)?,
+    }))
 }
 
 /// Dirty rectangles as AVC420 regions, or `None` when they do not fit.
@@ -1170,7 +1234,21 @@ mod tests {
         Frame {
             width,
             height,
-            pixels: vec![0u8; (width as usize) * (height as usize) * 4],
+            pixels: Bytes::from(vec![0u8; (width as usize) * (height as usize) * 4]),
+            dirty,
+        }
+    }
+
+    /// A frame whose pixel `n` is `n % 251`, so a copied rectangle can be
+    /// checked byte by byte against the source.
+    fn patterned_frame(width: u32, height: u32, dirty: Vec<DirtyRect>) -> Frame {
+        let pixels: Vec<u8> = (0..(width as usize) * (height as usize) * 4)
+            .map(|n| (n % 251) as u8)
+            .collect();
+        Frame {
+            width,
+            height,
+            pixels: Bytes::from(pixels),
             dirty,
         }
     }
@@ -1222,14 +1300,79 @@ mod tests {
         };
         assert_eq!((first.x, first.y), (0, 0));
         assert_eq!(first.format, PixelFormat::RgbA32);
-        // A sub-rectangle keeps the parent stride, so it carries exactly its own
-        // rows of the parent's buffer.
-        assert_eq!(first.data.len(), 7 * (64 * 4) + 8 * 4);
+        // A rectangle carries its own tightly packed rows, not the desktop's
+        // stride: nothing outside the dirty region is sent.
+        assert_eq!(first.data.len(), 8 * (8 * 4));
+        assert_eq!(first.stride, NonZeroUsize::new(8 * 4).expect("non-zero"));
         let DisplayUpdate::Bitmap(second) = &updates[1] else {
             panic!("expected a bitmap update");
         };
         assert_eq!((second.x, second.y), (16, 8));
-        assert_eq!(second.stride, NonZeroUsize::new(64 * 4).expect("non-zero"));
+        assert_eq!(second.data.len(), 4 * (4 * 4));
+        assert_eq!(second.stride, NonZeroUsize::new(4 * 4).expect("non-zero"));
+    }
+
+    #[test]
+    fn a_rectangle_is_byte_identical_to_the_same_cut_of_the_full_frame() {
+        // The old path built a whole-frame update and asked IronRDP for the
+        // sub-rectangle; the new one copies the rows directly. Both must give
+        // the client the same pixels.
+        let frame = patterned_frame(64, 32, vec![rect(16, 8, 12, 6)]);
+        let rect_update = match sub_update(&frame, &rect(16, 8, 12, 6)).expect("in frame") {
+            DisplayUpdate::Bitmap(update) => update,
+            _ => panic!("expected a bitmap update"),
+        };
+        let full = full_frame_update(&frame, 64, 32).expect("expressible");
+        let reference = full
+            .sub(
+                16,
+                8,
+                NonZeroU16::new(12).expect("non-zero"),
+                NonZeroU16::new(6).expect("non-zero"),
+            )
+            .expect("in bounds");
+        assert_eq!((rect_update.x, rect_update.y), (reference.x, reference.y));
+        assert_eq!(
+            (rect_update.width, rect_update.height),
+            (reference.width, reference.height)
+        );
+        assert_eq!(rect_update.format, reference.format);
+        // `sub` keeps the parent stride, so compare row by row.
+        let parent_stride = reference.stride.get();
+        let row_bytes = usize::from(rect_update.width.get()) * 4;
+        assert_eq!(
+            rect_update.data.len(),
+            usize::from(rect_update.height.get()) * row_bytes
+        );
+        for row in 0..usize::from(rect_update.height.get()) {
+            let from = row * parent_stride;
+            assert_eq!(
+                &rect_update.data[row * row_bytes..row * row_bytes + row_bytes],
+                &reference.data[from..from + row_bytes],
+                "row {row}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_small_dirty_rect_copies_only_its_own_bytes() {
+        // 1280x720 desktop, 8x8 dirty: the update must be 256 bytes, not 3.5 MB.
+        let frame = patterned_frame(1280, 720, vec![rect(640, 360, 8, 8)]);
+        let updates = bitmap_updates(&frame, false).expect("expressible");
+        assert_eq!(updates.len(), 1);
+        let DisplayUpdate::Bitmap(update) = &updates[0] else {
+            panic!("expected a bitmap update");
+        };
+        assert_eq!(update.data.len(), 8 * 8 * 4);
+        let expected = &frame.pixels[(360 * 1280 + 640) * 4..(360 * 1280 + 640) * 4 + 4];
+        assert_eq!(&update.data[..4], expected);
+        // The last row of the rectangle, to prove the rows come from the right
+        // place and are tightly packed.
+        let last_row = (367 * 1280 + 640) * 4;
+        assert_eq!(
+            &update.data[7 * 32..7 * 32 + 4],
+            &frame.pixels[last_row..last_row + 4]
+        );
     }
 
     #[test]
@@ -1260,18 +1403,12 @@ mod tests {
     fn a_dirty_rect_outside_the_frame_is_dropped_rather_than_panicking() {
         // 60000 + 60000 overflows u16, which is what BitmapUpdate::sub would do
         // in a debug build if the rectangle were passed straight through.
-        let full = BitmapUpdate {
-            x: 0,
-            y: 0,
-            width: NonZeroU16::new(64).expect("non-zero"),
-            height: NonZeroU16::new(64).expect("non-zero"),
-            format: PixelFormat::RgbA32,
-            data: Bytes::from(vec![0u8; 64 * 64 * 4]),
-            stride: NonZeroUsize::new(64 * 4).expect("non-zero"),
-        };
-        assert!(sub_update(&full, &rect(60_000, 60_000, 60_000, 60_000)).is_none());
-        assert!(sub_update(&full, &rect(0, 0, 0, 4)).is_none());
-        assert!(sub_update(&full, &rect(56, 56, 8, 8)).is_some());
+        let frame = frame(64, 64, Vec::new());
+        assert!(sub_update(&frame, &rect(60_000, 60_000, 60_000, 60_000)).is_none());
+        assert!(sub_update(&frame, &rect(0, 0, 0, 4)).is_none());
+        assert!(sub_update(&frame, &rect(64, 0, 4, 4)).is_none());
+        assert!(sub_update(&frame, &rect(0, 64, 4, 4)).is_none());
+        assert!(sub_update(&frame, &rect(56, 56, 8, 8)).is_some());
     }
 
     #[test]
@@ -1279,10 +1416,11 @@ mod tests {
         let too_wide = Frame {
             width: 70_000,
             height: 8,
-            pixels: Vec::new(),
+            pixels: Bytes::new(),
             dirty: Vec::new(),
         };
         assert!(bitmap_updates(&too_wide, false).is_none());
+        assert!(bitmap_updates(&too_wide, true).is_none());
     }
 
     #[test]
@@ -1302,6 +1440,59 @@ mod tests {
         assert_eq!(regions.len(), 1);
         assert_eq!((regions[0].right, regions[0].bottom), (64, 32));
         assert!(avc_regions(&frame(64, 32, vec![rect(60, 0, 8, 4)]), 20).is_none());
+    }
+
+    #[test]
+    fn a_partial_send_keeps_the_resync_flag_set() {
+        // A queue that fills up mid-frame leaves the client with half a frame.
+        // Clearing the resync flag there loses every rectangle that never made
+        // it in, until those pixels happen to change again.
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut sink = Sink::new(PumpConfig {
+            shared: Arc::new(std::sync::Mutex::new(shared())),
+            updates: tx,
+            events: Arc::new(std::sync::Mutex::new(None)),
+            pacer: Pacer::new(0, Instant::now()),
+            tier: CodecTier::Qoi,
+            encoder: None,
+            encoder_factory: Box::new(|_| None),
+            degrader: Degrader::new(CodecTier::Qoi),
+        });
+        sink.resync = false;
+        let dirty = vec![rect(0, 0, 8, 8), rect(16, 16, 8, 8)];
+
+        sink.publish(&frame(64, 64, dirty.clone()));
+        assert_eq!(sink.resync, true, "the second rectangle was dropped");
+        assert!(rx.try_recv().is_ok(), "the first rectangle went out");
+
+        // The queue has room again: the next update must be a whole frame, not
+        // a diff of the rectangles that changed since the partial send.
+        sink.publish(&frame(64, 64, dirty.clone()));
+        let update = rx.try_recv().expect("an update");
+        let DisplayUpdate::Bitmap(bitmap) = update else {
+            panic!("expected a bitmap update");
+        };
+        assert_eq!(bitmap.data.len(), 64 * 64 * 4);
+        assert!(!sink.resync, "a complete send clears the flag");
+    }
+
+    #[test]
+    fn a_full_queue_resyncs_and_a_complete_send_clears_it() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let mut sink = Sink::new(PumpConfig {
+            shared: Arc::new(std::sync::Mutex::new(shared())),
+            updates: tx,
+            events: Arc::new(std::sync::Mutex::new(None)),
+            pacer: Pacer::new(0, Instant::now()),
+            tier: CodecTier::Qoi,
+            encoder: None,
+            encoder_factory: Box::new(|_| None),
+            degrader: Degrader::new(CodecTier::Qoi),
+        });
+        // The first frame is a resync and fits.
+        sink.publish(&frame(64, 64, vec![rect(0, 0, 8, 8)]));
+        assert!(!sink.resync);
+        assert!(rx.try_recv().is_ok());
     }
 
     #[test]

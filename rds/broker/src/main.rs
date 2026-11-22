@@ -1,10 +1,12 @@
 //! `uflinux-rdsd` — the resident UFLinux remote-desktop broker.
 //!
 //! The broker is the only always-on process in the RDS feature. It owns the
-//! control socket that the Settings tab and `uflinux-rdsctl` talk to, the TCP
-//! listener that accepts RDP connections, the roster of live sessions, and the
-//! `uflinux-rds-web` child process. It contains no RDP protocol code: each
-//! connection is handed to a freshly forked session binary (see [`session`]).
+//! control socket that the Settings tab and `uflinux-rdsctl` talk to, the two
+//! listeners that accept desktop connections — TCP for native RDP clients and a
+//! private unix socket for the web gateway — the roster of live sessions, and
+//! the `uflinux-rds-web` child process. It contains no RDP protocol code: each
+//! connection is handed to a freshly forked session binary (see [`session`]),
+//! which is told which listener the connection arrived on.
 //!
 //! Two properties matter more than anything else here. When the service is
 //! *disabled* the broker binds nothing at all — one unix socket and an idle
@@ -20,17 +22,19 @@ mod session;
 mod state;
 mod web;
 
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, UnixListener};
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{info, warn};
 
 use uflinux_rds_common::Config;
 
 use crate::cli::{Args, Env};
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::session::Transport;
 use crate::state::State;
 
 /// How long sessions and the web child may take their leave on shutdown.
@@ -177,9 +181,14 @@ async fn await_task(task: tokio::task::JoinHandle<()>) -> std::result::Result<()
 /// single condition that decides whether a port is open. When the answer is no,
 /// the socket is dropped here and the port is genuinely closed — that is what
 /// makes the disabled state cost nothing.
+///
+/// The web backend socket is bound and closed by the same task for the same
+/// reason: it is the same listener seen from a different front end, and a
+/// disabled service must not leave either endpoint behind.
 async fn listeners(state: Arc<State>, args: Arc<Args>) {
     let mut wake = state.wake();
     let mut bound: Option<(TcpListener, String, u16)> = None;
+    let mut web: Option<WebListener> = None;
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -219,8 +228,31 @@ async fn listeners(state: Arc<State>, args: Arc<Args>) {
             state.set_rdp_listening(false);
         }
 
+        if want && web.is_none() {
+            match bind_web_listener() {
+                Ok(listener) => {
+                    info!(
+                        socket = %listener.path.display(),
+                        "web backend listener bound"
+                    );
+                    web = Some(listener);
+                }
+                Err(error) => {
+                    // Not fatal: native RDP clients still work, and the next
+                    // tick retries. The gateway reports a refused connection as
+                    // its own error.
+                    warn!("cannot bind the web backend socket: {error}");
+                    state.set_fault(Some(error.reply_message()));
+                }
+            }
+        } else if !want && web.is_some() {
+            info!("web backend listener closed");
+            web = None;
+        }
+
         tokio::select! {
             () = accept_into(&state, &args, &mut bound) => {}
+            () = accept_web_into(&state, &args, &mut web) => {}
             _ = wake.changed() => {}
             _ = tick.tick() => {}
             () = state.wait_shutdown() => break,
@@ -228,6 +260,44 @@ async fn listeners(state: Arc<State>, args: Arc<Args>) {
     }
 
     state.set_rdp_listening(false);
+}
+
+/// A bound web backend socket, unlinked when dropped.
+struct WebListener {
+    listener: UnixListener,
+    path: std::path::PathBuf,
+}
+
+impl Drop for WebListener {
+    fn drop(&mut self) {
+        session::remove_socket(&self.path);
+    }
+}
+
+/// Bind the unix socket the web gateway relays browser connections into.
+///
+/// A stale file from a killed broker is replaced — nothing else can be holding
+/// the socket, because the broker is the only process that binds it and it is
+/// single-instance behind the control socket. Mode 0600: relaying into a user's
+/// desktop is not something an unrelated local process should get to do.
+fn bind_web_listener() -> Result<WebListener> {
+    let path = uflinux_rds_common::web_socket_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| Error::io("create socket directory", &error))?;
+    }
+    if path.symlink_metadata().is_ok() {
+        std::fs::remove_file(&path).map_err(|error| Error::io("remove stale socket", &error))?;
+    }
+    let listener =
+        UnixListener::bind(&path).map_err(|error| Error::io("bind web backend socket", &error))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|error| {
+        // The socket is already bound; leaving it world-writable is worse than
+        // not having it, so unlink before reporting.
+        let _ = std::fs::remove_file(&path);
+        Error::io("protect web backend socket", &error)
+    })?;
+    Ok(WebListener { listener, path })
 }
 
 /// Accept one RDP connection when a listener is bound, otherwise wait forever.
@@ -241,13 +311,41 @@ async fn accept_into(
         return;
     };
     match listener.accept().await {
-        Ok((stream, peer)) => accept(state, args, stream, peer),
+        Ok((stream, peer)) => accept(state, args, stream, peer.to_string(), Transport::Rdp),
         Err(error) => warn!("RDP accept failed: {error}"),
     }
 }
 
-/// One accepted RDP connection: gate it, then hand it to a session binary.
-fn accept(state: &Arc<State>, args: &Arc<Args>, stream: TcpStream, peer: std::net::SocketAddr) {
+/// Accept one relayed browser connection, same rule as [`accept_into`].
+async fn accept_web_into(state: &Arc<State>, args: &Arc<Args>, web: &mut Option<WebListener>) {
+    let Some(web) = web else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    match web.listener.accept().await {
+        Ok((stream, _)) => {
+            // A unix socket has no address worth showing; the gateway does not
+            // forward the browser's origin, so the row says where it came from.
+            accept(
+                state,
+                args,
+                stream,
+                "web gateway".to_owned(),
+                Transport::Web,
+            );
+        }
+        Err(error) => warn!("web backend accept failed: {error}"),
+    }
+}
+
+/// One accepted connection: gate it, then hand it to a session binary.
+///
+/// `stream` is either kind of listener's connection; only the descriptor
+/// matters, and the child learns the family from the socket itself.
+fn accept<S>(state: &Arc<State>, args: &Arc<Args>, stream: S, peer: String, transport: Transport)
+where
+    S: session::ClientSocket,
+{
     let config = state.config();
     if state.session_count() >= config.max_sessions {
         // Dropping the socket without reading is honest: the client sees the
@@ -277,6 +375,7 @@ fn accept(state: &Arc<State>, args: &Arc<Args>, stream: TcpStream, peer: std::ne
         &config_path,
         &config.session_command,
         stream,
+        transport,
     ) {
         Ok(spawned) => {
             let pid = session::pid_of(&spawned.child);

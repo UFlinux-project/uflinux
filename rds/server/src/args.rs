@@ -95,11 +95,6 @@ pub struct Args {
     pub session_command: Option<String>,
     /// Overrides `Config::idle_timeout_secs`.
     pub idle_timeout: Option<u64>,
-    /// Overrides `Config::linger_secs`.
-    pub linger: Option<u64>,
-    /// Keep serving after the client goes away instead of exiting. Used by the
-    /// developer smoke test; the broker never sets it.
-    pub resident: bool,
     /// `-h`/`--help` was given.
     pub help: bool,
 }
@@ -114,8 +109,6 @@ impl Default for Args {
             transport: Transport::Rdp,
             session_command: None,
             idle_timeout: None,
-            linger: None,
-            resident: false,
             help: false,
         }
     }
@@ -127,6 +120,7 @@ const ENV_STATUS_FD: &str = "UFLINUX_RDS_STATUS_FD";
 const ENV_CONFIG: &str = "UFLINUX_RDS_CONFIG";
 const ENV_SESSION_COMMAND: &str = "UFLINUX_RDS_SESSION_COMMAND";
 const ENV_SESSION_USER: &str = "UFLINUX_RDS_SESSION_USER";
+const ENV_TRANSPORT: &str = "UFLINUX_RDS_TRANSPORT";
 
 /// The first non-empty value for `key`, preferring the command line.
 fn env_value(env: &[(String, String)], key: &str) -> Option<String> {
@@ -155,6 +149,12 @@ impl Args {
             status_fd: env_value(&env, ENV_STATUS_FD).and_then(|v| v.trim().parse().ok()),
             user: env_value(&env, ENV_SESSION_USER),
             session_command: env_value(&env, ENV_SESSION_COMMAND),
+            // An unrecognised value in the environment is ignored rather than
+            // fatal: the environment is the fallback, and a stray variable
+            // should not stop a session that the command line describes.
+            transport: env_value(&env, ENV_TRANSPORT)
+                .and_then(|value| Transport::parse(&value))
+                .unwrap_or(Transport::Rdp),
             ..Self::default()
         };
         if args.config.as_os_str().is_empty() {
@@ -165,7 +165,6 @@ impl Args {
         while let Some(flag) = items.next() {
             match flag.as_str() {
                 "-h" | "--help" => args.help = true,
-                "--resident" => args.resident = true,
                 "--config" => args.config = PathBuf::from(text(&mut items, &flag)?),
                 "--client-fd" | "--socket-fd" => {
                     args.client_fd = Some(descriptor(&mut items, &flag)?);
@@ -179,7 +178,6 @@ impl Args {
                 }
                 "--session-command" => args.session_command = Some(text(&mut items, &flag)?),
                 "--idle-timeout" => args.idle_timeout = Some(number(&mut items, &flag)?),
-                "--linger" => args.linger = Some(number(&mut items, &flag)?),
                 other => return Err(ArgError::Unknown(other.to_owned())),
             }
         }
@@ -213,10 +211,9 @@ Options:
   --user <name>            user to run as when PAM is not built in
                            ($UFLINUX_RDS_SESSION_USER)
   --transport rdp|web      front end that forwarded the connection
+                           ($UFLINUX_RDS_TRANSPORT)
   --session-command <cmd>  desktop to start ($UFLINUX_RDS_SESSION_COMMAND)
   --idle-timeout <secs>    override idle_timeout_secs from the config
-  --linger <secs>          override linger_secs from the config
-  --resident               stay up after the client disconnects
   -h, --help               print this help
 ";
 }
@@ -269,7 +266,6 @@ mod tests {
         assert_eq!(args.client_fd, None);
         assert_eq!(args.status_fd, None);
         assert_eq!(args.transport, Transport::Rdp);
-        assert!(!args.resident);
         assert!(!args.help);
     }
 
@@ -290,9 +286,6 @@ mod tests {
             "labwc --session foo",
             "--idle-timeout",
             "0",
-            "--linger",
-            "120",
-            "--resident",
         ])
         .expect("full command line");
         assert_eq!(args.config, PathBuf::from("/tmp/rds.json"));
@@ -302,8 +295,6 @@ mod tests {
         assert_eq!(args.transport, Transport::Web);
         assert_eq!(args.session_command.as_deref(), Some("labwc --session foo"));
         assert_eq!(args.idle_timeout, Some(0));
-        assert_eq!(args.linger, Some(120));
-        assert!(args.resident);
     }
 
     #[test]
@@ -345,8 +336,8 @@ mod tests {
             Err(ArgError::InvalidTransport("vnc".to_owned()))
         );
         assert_eq!(
-            parse(&["--linger"]),
-            Err(ArgError::MissingValue("--linger".to_owned()))
+            parse(&["--idle-timeout"]),
+            Err(ArgError::MissingValue("--idle-timeout".to_owned()))
         );
         assert_eq!(
             parse(&["--nope"]),

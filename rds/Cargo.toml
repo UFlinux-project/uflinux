@@ -52,6 +52,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 thiserror = "2.0"
 base64 = "0.22"
 rand = "0.9"
+bytes = "1"
 
 # Only the privileged helper needs these; it mirrors the Settings system helper.
 glib = { version = "0.22", features = ["v2_80"] }

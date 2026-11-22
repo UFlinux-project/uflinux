@@ -309,12 +309,17 @@ fn prune_stale_sockets(runtime_dir: &Path) {
 /// Build the compositor's environment: ours, plus the headless backend and
 /// the private runtime directory.
 ///
-/// `WAYLAND_DISPLAY` is deliberately *removed*: the compositor creates its
-/// socket via `wl_display_add_socket_auto`, which picks its own `wayland-N`
-/// name inside `XDG_RUNTIME_DIR`, and a leftover value would point clients at
-/// the parent session's display.
+/// Strip the parent display settings so the compositor can publish its own.
+/// Even an empty `WAYLAND_SOCKET` makes libwayland try to parse a file
+/// descriptor instead of connecting to the compositor's named socket.
 fn child_env(runtime_dir: &Path, target: Option<&TargetUser>) -> Vec<CString> {
     let mut env: Vec<CString> = std::env::vars_os()
+        .filter(|(key, _)| {
+            !matches!(
+                key.to_str(),
+                Some("WAYLAND_DISPLAY" | "DISPLAY" | "WAYLAND_SOCKET")
+            )
+        })
         .filter_map(|(key, value)| {
             let key = key.to_string_lossy();
             let value = value.to_string_lossy();
@@ -329,10 +334,6 @@ fn child_env(runtime_dir: &Path, target: Option<&TargetUser>) -> Vec<CString> {
         ("WLR_BACKENDS", "headless".to_string()),
         ("WLR_LIBINPUT_NO_DEVICES", "1".to_string()),
         ("XDG_RUNTIME_DIR", runtime_dir.display().to_string()),
-        // A nested compositor must not inherit a parent display.
-        ("WAYLAND_DISPLAY", String::new()),
-        ("DISPLAY", String::new()),
-        ("WAYLAND_SOCKET", String::new()),
     ];
     let mut overrides: Vec<(String, String)> = overrides
         .into_iter()
@@ -489,16 +490,9 @@ mod tests {
             .collect();
         assert!(text.iter().any(|e| e == "WLR_BACKENDS=headless"));
         assert!(text.iter().any(|e| e == "XDG_RUNTIME_DIR=/run/user/1000"));
-        // The compositor picks its own socket name; a stale inherited one
-        // would point clients at the parent session's display.
-        assert!(text.iter().any(|e| e == "WAYLAND_DISPLAY="));
-        assert_eq!(
-            text.iter()
-                .filter(|e| e.starts_with("WAYLAND_DISPLAY="))
-                .count(),
-            1,
-            "overrides must not duplicate an inherited variable: {text:?}"
-        );
+        for name in ["WAYLAND_DISPLAY=", "DISPLAY=", "WAYLAND_SOCKET="] {
+            assert!(text.iter().all(|entry| !entry.starts_with(name)));
+        }
     }
 
     #[test]

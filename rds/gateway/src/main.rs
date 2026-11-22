@@ -70,7 +70,7 @@ fn run(args: &Args, env: &BTree) -> Result<()> {
         .enable_all()
         .build()
         .map_err(|e| Error::other(format!("cannot start tokio: {e}")))?;
-    runtime.block_on(serve(config, state_dir))
+    runtime.block_on(serve(args, env, config, state_dir))
 }
 
 fn install_tracing() {
@@ -82,7 +82,12 @@ fn install_tracing() {
         .try_init();
 }
 
-async fn serve(config: Config, state_dir: std::path::PathBuf) -> Result<()> {
+async fn serve(
+    args: &Args,
+    env: &BTree,
+    config: Config,
+    state_dir: std::path::PathBuf,
+) -> Result<()> {
     let authenticator: Arc<dyn Authenticator> = Arc::new(PamAuthenticator::new(pam_service()));
     let control_socket = uflinux_rds_common::control_socket_path();
     let state = AppState::new(
@@ -119,9 +124,16 @@ async fn serve(config: Config, state_dir: std::path::PathBuf) -> Result<()> {
 
     // `tap_io` gives axum the connect-info plumbing for a custom listener.
     let listener = server.into_listener().tap_io(|_| ());
-    let app = http::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let app =
+        http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    // The shutdown future must be `'static`, so the signal handler gets its own
+    // copy of what a reload needs rather than a borrow of `run`'s arguments.
+    let reload_hint = ReloadHint {
+        args: args.clone(),
+        env: env.clone(),
+    };
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(reload_hint, state))
         .await
         .map_err(|e| Error::other(format!("server error: {e}")))
 }
@@ -131,8 +143,17 @@ fn pam_service() -> String {
     std::env::var("UFLINUX_RDS_PAM_SERVICE").unwrap_or_else(|_| DEFAULT_PAM_SERVICE.to_string())
 }
 
-/// Resolve on SIGINT or SIGTERM.
-async fn shutdown_signal() {
+/// Resolve on SIGINT or SIGTERM; reload the configuration on SIGHUP.
+///
+/// A reload re-reads the same file the gateway started from (same path
+/// resolution, same environment overrides, same argument overrides) and swaps
+/// the state's configuration view. The environment is the snapshot taken at
+/// startup: a changed `Environment=` needs a restart, not a signal. The state
+/// directory is re-derived but ignored — the self-signed certificate already
+/// written there belongs to the running listener. Disabling the gateway in the
+/// file is reported and takes effect on restart; a bad file is logged and the
+/// previous configuration stays in force.
+async fn shutdown_signal(hint: ReloadHint, state: AppState) {
     use tokio::signal::unix::{SignalKind, signal};
 
     let Ok(mut interrupt) = signal(SignalKind::interrupt()) else {
@@ -143,8 +164,55 @@ async fn shutdown_signal() {
         tracing::warn!("cannot listen for SIGTERM");
         return;
     };
-    tokio::select! {
-        _ = interrupt.recv() => tracing::info!("SIGINT received, shutting down"),
-        _ = terminate.recv() => tracing::info!("SIGTERM received, shutting down"),
+    let Ok(mut hangup) = signal(SignalKind::hangup()) else {
+        tracing::warn!("cannot listen for SIGHUP, configuration reload is unavailable");
+        tokio::select! {
+            _ = interrupt.recv() => tracing::info!("SIGINT received, shutting down"),
+            _ = terminate.recv() => tracing::info!("SIGTERM received, shutting down"),
+        }
+        return;
+    };
+
+    loop {
+        tokio::select! {
+            _ = interrupt.recv() => {
+                tracing::info!("SIGINT received, shutting down");
+                return;
+            }
+            _ = terminate.recv() => {
+                tracing::info!("SIGTERM received, shutting down");
+                return;
+            }
+            _ = hangup.recv() => reload(&hint, &state),
+        }
+    }
+}
+
+/// What a SIGHUP reload needs: the parsed command line and the environment
+/// snapshot taken at startup.
+struct ReloadHint {
+    /// The gateway's own arguments (`--config`, `--port`, `--bind`).
+    args: Args,
+    /// The environment the gateway started with.
+    env: BTree,
+}
+
+/// One SIGHUP: re-read the configuration and swap the view new logins use.
+fn reload(hint: &ReloadHint, state: &AppState) {
+    let path = Args::config_path(&hint.env, &hint.args);
+    match config::resolve(&hint.args, &hint.env) {
+        Ok(resolved) => {
+            if !resolved.config.enabled || !resolved.config.web.enabled {
+                tracing::warn!(
+                    "{} disables the web gateway; the running server keeps serving \
+                     until it is restarted",
+                    path.display()
+                );
+            }
+            state.reload(resolved.config);
+        }
+        Err(error) => {
+            tracing::error!("SIGHUP: keeping the running configuration: {error}");
+        }
     }
 }

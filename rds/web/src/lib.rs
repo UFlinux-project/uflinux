@@ -298,6 +298,15 @@ pub async fn connect(options: ConnectOptions) -> Result<Client, JsValue> {
     let ext = Extension::create("display_control".to_owned(), JsValue::TRUE);
     b = call_method(&b, "extension", &[ext.into()])?;
 
+    // The gateway's backend transport is already confidential, so the session
+    // host answers X.224 with an empty SecurityProtocol and there is no TLS
+    // handshake inside the connection. IronRDP only offers that "standard RDP
+    // security" when it is asked for, and the wasm builder has no setter for
+    // it, so it goes in as a raw extension. Without it the client sends a
+    // request that only advertises TLS and the server refuses the negotiation.
+    let rdp_security = Extension::create("enable_standard_rdp_security".to_owned(), JsValue::TRUE);
+    b = call_method(&b, "extension", &[rdp_security.into()])?;
+
     let connect_result = call_method(&b, "connect", &[])?;
     let session = JsFuture::from(connect_result.dyn_into::<js_sys::Promise>()?)
         .await

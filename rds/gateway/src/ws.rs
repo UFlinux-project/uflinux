@@ -7,13 +7,19 @@
 //!    size the frame, so the reader keeps buffering until
 //!    `RDCleanPathPdu::detect` is decisive.
 //! 2. `proxy_auth` is validated against the single-use token store.
-//! 3. The gateway connects to the RDP listener the token points at and forwards
-//!    the **unwrapped** X.224 connect request (raw TPKT, no DER wrapper).
+//! 3. The gateway connects to the broker's **web backend socket** — the unix
+//!    socket whose connections are served with TLS already terminated — and
+//!    forwards the **unwrapped** X.224 connect request (raw TPKT, no DER
+//!    wrapper). `session.target` names the session for the response and the
+//!    log, not the address we dial: the browser's RDP listener is the broker's
+//!    TCP port, which the gateway deliberately does not use.
 //! 4. Exactly one binary message comes back: `RDCleanPathPdu::new_response`
 //!    carrying the server's X.224 confirm. The certificate chain is empty for
 //!    v1 — in this mode the browser does not validate the TLS of the inner
 //!    channel, because the gateway terminates TLS on the outer connection and
-//!    the client trusts that instead.
+//!    the client trusts that instead. The session host on the other end agrees:
+//!    it negotiates an empty `SecurityProtocol` and never starts a TLS
+//!    handshake, so the bytes spliced below are plain RDP.
 //! 5. Everything after that is spliced both ways. WebSocket binary messages are
 //!    an opaque byte stream in *both* directions: one message is never assumed
 //!    to be one RDP PDU.
@@ -26,8 +32,8 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
 use axum::response::Response;
 use ironrdp_rdcleanpath::GENERAL_ERROR_CODE;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::UnixStream;
 
 use crate::rdcleanpath::{
     FrameBuffer, FrameError, Request, error_pdu, expired_token_pdu, invalid_token_pdu,
@@ -40,7 +46,7 @@ use crate::tokens::TokenError;
 pub const MAX_HANDSHAKE_BYTES: usize = 64 * 1024;
 /// Maximum number of whole TPKT frames buffered on the way to the browser.
 pub const MAX_PENDING_FRAMES: usize = 32;
-/// Size of a single read from the RDP listener.
+/// Size of a single read from the session host.
 const READ_CHUNK: usize = 16 * 1024;
 
 /// Why a session ended in an error PDU.
@@ -115,10 +121,10 @@ async fn read_request(
     }
 }
 
-/// Token check, TCP connect, X.224 relay, splice.
+/// Token check, backend connect, X.224 relay, splice.
 async fn serve(socket: &mut WebSocket, state: &AppState, request: &Request) -> Result<(), Failure> {
     // The token is consumed before anything is forwarded: a second use of the
-    // same token must not reach the RDP listener.
+    // same token must not reach the session host.
     let session = state
         .tokens()
         .consume_detailed(&request.proxy_auth, Instant::now())
@@ -134,19 +140,27 @@ async fn serve(socket: &mut WebSocket, state: &AppState, request: &Request) -> R
         "RDCleanPath token accepted"
     );
 
-    let mut tcp = TcpStream::connect(&session.target)
-        .await
-        .map_err(|_| Failure::Unreachable)?;
+    // Every browser session arrives on the same unix socket, and the broker
+    // decides the session from the connection itself, not from an address.
+    let backend = uflinux_rds_common::web_socket_path();
+    let mut backend = match UnixStream::connect(&backend).await {
+        Ok(backend) => backend,
+        Err(error) => {
+            tracing::debug!(%error, socket = %backend.display(), "web backend unreachable");
+            return Err(Failure::Unreachable);
+        }
+    };
 
-    tcp.write_all(&request.x224_connection_request)
+    backend
+        .write_all(&request.x224_connection_request)
         .await
         .map_err(|_| Failure::Relay)?;
 
-    let confirm = match read_x224(&mut tcp).await {
+    let confirm = match read_x224(&mut backend).await {
         Ok(confirm) => confirm,
         Err(error) => {
             tracing::debug!(%error, target = session.target, "no usable X.224 confirm");
-            // The listener answered, but not with a confirm we can relay.
+            // The session host answered, but not with a confirm we can relay.
             let _ = send(socket, &negotiation_error_pdu(&[])).await;
             return Err(Failure::Relay);
         }
@@ -155,38 +169,41 @@ async fn serve(socket: &mut WebSocket, state: &AppState, request: &Request) -> R
     let response = response_pdu(&session.target, &confirm, &[]).map_err(|_| Failure::Relay)?;
     send(socket, &response).await.map_err(|_| Failure::Relay)?;
 
-    splice(socket, tcp).await
+    splice(socket, backend).await
 }
 
 /// Read one TPKT-framed X.224 confirm.
-async fn read_x224(tcp: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+async fn read_x224<B: AsyncRead + Unpin>(backend: &mut B) -> std::io::Result<Vec<u8>> {
     let mut frame = vec![0u8; 4];
-    tcp.read_exact(&mut frame).await?;
+    backend.read_exact(&mut frame).await?;
     let total = match tpkt_frame_len(&frame) {
         Some(len) if len >= 4 => len,
-        _ => return Err(std::io::Error::other("listener reply is not a TPKT frame")),
+        _ => return Err(std::io::Error::other("backend reply is not a TPKT frame")),
     };
     frame.resize(total, 0);
-    tcp.read_exact(&mut frame[4..]).await?;
+    backend.read_exact(&mut frame[4..]).await?;
     Ok(frame)
 }
 
 /// Splice in both directions until either side closes.
-async fn splice(socket: &mut WebSocket, mut tcp: TcpStream) -> Result<(), Failure> {
+async fn splice<B>(socket: &mut WebSocket, mut backend: B) -> Result<(), Failure>
+where
+    B: AsyncRead + AsyncWrite + Unpin,
+{
     let mut pending = Pending::default();
     let mut chunk = vec![0u8; READ_CHUNK];
-    let mut tcp_open = true;
+    let mut backend_open = true;
     let mut ws_open = true;
 
     loop {
         // Drain whatever is queued before waiting again: a burst of small reads
         // still ends up as few WebSocket messages as possible.
-        if ws_open && !pending.to_tcp.is_empty() {
-            let n = pending.to_tcp.len().min(READ_CHUNK);
-            match tcp.write_all(&pending.to_tcp[..n]).await {
-                Ok(()) => pending.to_tcp.drain(..n),
+        if ws_open && !pending.to_backend.is_empty() {
+            let n = pending.to_backend.len().min(READ_CHUNK);
+            match backend.write_all(&pending.to_backend[..n]).await {
+                Ok(()) => pending.to_backend.drain(..n),
                 Err(error) => {
-                    tracing::debug!(%error, "listener write failed");
+                    tracing::debug!(%error, "backend write failed");
                     return Err(Failure::Relay);
                 }
             };
@@ -198,7 +215,7 @@ async fn splice(socket: &mut WebSocket, mut tcp: TcpStream) -> Result<(), Failur
             }
             continue;
         }
-        if !tcp_open || !ws_open {
+        if !backend_open || !ws_open {
             return Ok(());
         }
 
@@ -206,7 +223,7 @@ async fn splice(socket: &mut WebSocket, mut tcp: TcpStream) -> Result<(), Failur
             biased;
 
             received = socket.recv(), if ws_open => match received {
-                Some(Ok(Message::Binary(bytes))) => pending.to_tcp.extend_from_slice(&bytes),
+                Some(Ok(Message::Binary(bytes))) => pending.to_backend.extend_from_slice(&bytes),
                 Some(Ok(Message::Ping(bytes))) => {
                     let _ = socket.send(Message::Pong(bytes)).await;
                 }
@@ -219,13 +236,13 @@ async fn splice(socket: &mut WebSocket, mut tcp: TcpStream) -> Result<(), Failur
                 None => ws_open = false,
             },
 
-            read = tcp.read(&mut chunk),
-                if tcp_open && pending.to_ws.len() < MAX_PENDING_FRAMES => {
+            read = backend.read(&mut chunk),
+                if backend_open && pending.to_ws.len() < MAX_PENDING_FRAMES => {
                 match read {
-                    Ok(0) => tcp_open = false,
+                    Ok(0) => backend_open = false,
                     Ok(n) => pending.ingest(&chunk[..n]),
                     Err(error) => {
-                        tracing::debug!(%error, "listener read failed");
+                        tracing::debug!(%error, "backend read failed");
                         return Err(Failure::Relay);
                     }
                 }
@@ -237,16 +254,16 @@ async fn splice(socket: &mut WebSocket, mut tcp: TcpStream) -> Result<(), Failur
 /// Pending bytes in both directions of a splice.
 #[derive(Debug, Default)]
 struct Pending {
-    /// Browser → listener. An opaque byte stream.
-    to_tcp: Vec<u8>,
-    /// Listener → browser, one whole TPKT frame per WebSocket message.
+    /// Browser → session host. An opaque byte stream.
+    to_backend: Vec<u8>,
+    /// Session host → browser, one whole TPKT frame per WebSocket message.
     to_ws: VecDeque<Vec<u8>>,
     /// A TPKT frame that straddles two reads.
     partial: Vec<u8>,
 }
 
 impl Pending {
-    /// Absorb a TCP read, emitting only whole TPKT frames so a frame is never
+    /// Absorb a backend read, emitting only whole TPKT frames so a frame is never
     /// split across two WebSocket messages.
     fn ingest(&mut self, bytes: &[u8]) {
         self.partial.extend_from_slice(bytes);
@@ -272,7 +289,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn one_tcp_read_becomes_one_message_per_tpkt_frame() {
+    fn one_backend_read_becomes_one_message_per_tpkt_frame() {
         let mut pending = Pending::default();
         let mut stream = vec![0x03u8, 0x00, 0x00, 0x08, 1, 2, 3, 4];
         stream.extend_from_slice(&[0x03, 0x00, 0x00, 0x07, 5, 6, 7]);
@@ -312,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn garbage_from_the_listener_is_buffered_not_dropped() {
+    fn garbage_from_the_backend_is_buffered_not_dropped() {
         let mut pending = Pending::default();
         pending.ingest(&[0xff, 0xff]);
         assert!(pending.to_ws.is_empty());
@@ -323,8 +340,8 @@ mod tests {
     fn inbound_bytes_accumulate_as_a_byte_stream() {
         let mut pending = Pending::default();
         for chunk in [b"abc".as_slice(), b"def", b"ghi"] {
-            pending.to_tcp.extend_from_slice(chunk);
+            pending.to_backend.extend_from_slice(chunk);
         }
-        assert_eq!(pending.to_tcp, b"abcdefghi");
+        assert_eq!(pending.to_backend, b"abcdefghi");
     }
 }

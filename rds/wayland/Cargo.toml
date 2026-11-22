@@ -19,6 +19,7 @@ wayland-protocols-wlr.workspace = true
 wayland-protocols-misc.workspace = true
 nix.workspace = true
 libc.workspace = true
+bytes.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 

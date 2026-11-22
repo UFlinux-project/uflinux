@@ -43,6 +43,13 @@ const PROBE_EVERY: Duration = Duration::from_secs(2);
 ///
 /// `PartialEq` is what lets a configuration reload be a no-op: applying the
 /// same web settings again does not bounce a live browser session.
+///
+/// The fields beyond `web` are the ones that change how the child behaves
+/// after a login: the RDP target it dials and the admission allow-list. They
+/// are compared by value rather than by hash so the comparison stays cheap and
+/// total; a change here bounces the child, which is what a moved port or a
+/// narrowed allow-list needs when the child is supervised. A child started by
+/// systemd reloads itself on SIGHUP instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Goal {
     /// Web access is wanted: the service is enabled, started, and `web.enabled`.
@@ -51,6 +58,14 @@ struct Goal {
     web: WebConfig,
     /// Certificate material lives outside `web`, but changing it matters.
     certificate: String,
+    /// Port of the RDP host the child dials after a successful login.
+    rdp_port: u16,
+    /// Address the RDP host listens on; only its value matters to the child.
+    rdp_bind: String,
+    /// Users allowed to log in.
+    allowed_users: std::collections::BTreeSet<String>,
+    /// Groups allowed to log in.
+    allowed_groups: std::collections::BTreeSet<String>,
 }
 
 /// Derive the supervisor's goal from a configuration snapshot.
@@ -68,6 +83,10 @@ fn goal(config: &Config, running: bool) -> Goal {
                 .map(|device| device.to_string_lossy().into_owned())
                 .unwrap_or_default()
         ),
+        rdp_port: config.rdp_port,
+        rdp_bind: config.rdp_bind.clone(),
+        allowed_users: config.allowed_users.clone(),
+        allowed_groups: config.allowed_groups.clone(),
     }
 }
 
@@ -361,6 +380,42 @@ mod tests {
         let mut moved = config.clone();
         moved.web.port = 3491;
         assert_ne!(before, goal(&moved, true));
+    }
+
+    #[test]
+    fn a_moved_rdp_target_or_a_new_allow_list_is_a_change() {
+        let config = Config {
+            enabled: true,
+            ..Config::default()
+        };
+        let before = goal(&config, true);
+
+        // The child dials `rdp_port` after a login, so a moved host must bounce
+        // it even though nothing under `web` changed.
+        let mut moved = config.clone();
+        moved.rdp_port = 3391;
+        assert_ne!(before, goal(&moved, true), "RDP port moved");
+
+        let mut moved = config.clone();
+        moved.rdp_bind = "192.168.1.20".to_owned();
+        assert_ne!(before, goal(&moved, true), "RDP bind moved");
+
+        let mut narrowed = config.clone();
+        narrowed.allowed_users = ["alice".to_owned()].into_iter().collect();
+        let goal_narrowed = goal(&narrowed, true);
+        assert_ne!(before, goal_narrowed, "allow-list narrowed");
+
+        let mut grouped = narrowed.clone();
+        grouped.allowed_groups = ["rdp".to_owned()].into_iter().collect();
+        assert_ne!(
+            goal_narrowed,
+            goal(&grouped, true),
+            "group allow-list is part of the goal"
+        );
+
+        // The same values again is not a change: a reload that touches nothing
+        // relevant must not bounce a live browser session.
+        assert_eq!(goal_narrowed, goal(&narrowed.clone(), true));
     }
 
     #[tokio::test]

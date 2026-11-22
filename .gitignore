@@ -35,6 +35,7 @@
 /rds/web/dist/
 /rds/*/test-tmp/
 /.podman-target/
+/.podman-target-*/
 __pycache__/
 *.pyc
 uflinux.ec

@@ -4308,6 +4308,7 @@ dependencies = [
 name = "uflinux-rds-wayland"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "libc",
  "nix",
  "thiserror",

@@ -9,6 +9,7 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -86,7 +87,11 @@ impl Broker {
         // discards assignments made before it, so the socket goes in after.
         cmd.env_clear()
             .env("PATH", "/usr/bin:/bin")
-            .env("HOME", &dir);
+            .env("HOME", &dir)
+            // The broker also binds the web backend socket, and `/run` is not
+            // writable for an unprivileged test. Without this the bind fails
+            // and the broker correctly reports a fault.
+            .env(uflinux_rds_common::ENV_WEB_SOCKET, dir.join("web.sock"));
         if use_env {
             cmd.env("UFLINUX_RDS_CONTROL_SOCKET", &socket);
         }
@@ -160,6 +165,17 @@ impl Broker {
     /// Ask the broker to stop the way a service manager does, and check it
     /// cleaned up after itself.
     fn stop(mut self) {
+        self.terminate();
+        assert!(
+            !self.socket.exists(),
+            "the control socket is removed on shutdown"
+        );
+        std::fs::remove_dir_all(&self.dir).expect("scratch directory removed");
+    }
+
+    /// SIGTERM the broker and wait for it to exit, leaving the scratch
+    /// directory in place so a test can inspect what was cleaned up.
+    fn terminate(&mut self) {
         let pid = i32::try_from(self.child.id()).expect("a 32-bit pid");
         // SAFETY: signalling our own child with a valid pid.
         let sent = unsafe { libc::kill(pid, libc::SIGTERM) };
@@ -179,11 +195,6 @@ impl Broker {
                 }
             }
         }
-        assert!(
-            !self.socket.exists(),
-            "the control socket is removed on shutdown"
-        );
-        std::fs::remove_dir_all(&self.dir).expect("scratch directory removed");
     }
 }
 
@@ -265,6 +276,38 @@ fn the_control_socket_path_can_come_from_the_environment() {
     assert_eq!(state["enabled"], serde_json::json!(true));
     assert_eq!(state["rdp_listening"], serde_json::json!(true));
     broker.stop();
+}
+
+#[test]
+fn the_web_backend_socket_is_bound_while_enabled_and_removed_after() {
+    // The gateway dials this socket for every browser session, so it has to
+    // exist exactly as long as the service is enabled — and must not survive
+    // as a stale file the next broker would have to guess about.
+    let mut broker = Broker::start("web-socket", test_config(), false);
+    let path = broker.dir.join("web.sock");
+
+    let deadline = Instant::now() + WAIT;
+    while UnixStream::connect(&path).is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "no web backend socket at {path:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Only the broker may relay into a user's desktop.
+    let mode = std::fs::metadata(&path)
+        .expect("the socket is there")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600, "the socket is owner-only");
+
+    broker.terminate();
+    assert!(
+        !path.exists(),
+        "the web backend socket is removed on shutdown"
+    );
+    assert!(!broker.socket.exists(), "the control socket too");
+    std::fs::remove_dir_all(&broker.dir).expect("scratch directory removed");
 }
 
 #[test]

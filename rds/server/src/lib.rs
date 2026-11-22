@@ -17,14 +17,12 @@
 //! - [`pacing`] — frames-per-second limiting.
 //! - [`degrade`] — codec downgrade state machine.
 //! - [`status`] — newline-delimited JSON status updates for the broker.
-//! - [`linger`] — what to do with the desktop after the client goes away.
 
 pub mod args;
 pub mod auth;
 pub mod caps;
 pub mod degrade;
 pub mod display;
-pub mod linger;
 pub mod pacing;
 pub mod scancode;
 pub mod status;

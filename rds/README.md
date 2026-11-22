@@ -2,7 +2,7 @@
 
 An IronRDP-based remote desktop server for UFLinux with per-user sessions, a
 browser client, and a system helper that lets an ordinary user administer it.
-It is modelled on Windows Remote Desktop Services: one listener, one private
+It is modelled on Windows Remote Desktop Services: one broker, one private
 Wayland session per logged-in user, and no shared desktop.
 
 Everything is disabled by default. Until the service is enabled nothing listens
@@ -30,7 +30,7 @@ the ones the Remote Desktop page in `uflinux-settings` edits:
 * `enabled`, `rdp_port`, `rdp_bind`, `nla_required` (off by default; see the
   note about CredSSP in `rds/server/src/main.rs`)
 * `allowed_users`, `allowed_groups`, `max_sessions`, `idle_timeout_secs`,
-  `linger_secs`, `session_command`
+  `session_command` (`linger_secs` is still accepted and ignored)
 * `codec.h264` (`auto`/`force`/`off`), `codec.allow_remotefx`, `codec.rfx_quant`,
   `codec.max_fps`, `codec.vaapi_device`
 * `web.enabled`, `web.port`, `web.bind`, `web.https`, `web.certificate.source`
@@ -73,21 +73,29 @@ mode 0750, so the private key (0640) is not readable by ordinary users.
 
 ## How a connection is served
 
-1. `uflinux-rdsd` accepts the connection, runs PAM (`/etc/pam.d/uflinux-rds`)
-   and checks `allowed_users`/`allowed_groups`, `max_sessions` and NLA.
-2. It starts `uflinux-rdp-session` for that user. The session host drops root,
-   starts the headless compositor for `session_command` (by default the
+1. `uflinux-rdsd` accepts the connection — on the TCP port or on the web
+   socket — and starts `uflinux-rdp-session` with the client's socket on fd 3.
+   Nothing else has happened yet: no desktop, no encoder.
+2. The session host runs X.224 and TLS (or the web offload below), then runs
+   PAM (`/etc/pam.d/uflinux-rds`) and checks `allowed_users`/`allowed_groups`,
+   `max_sessions` and NLA. Only a validated credential reaches the next step;
+   until then the client is offered nothing but an access-denied.
+3. It then drops root to the *authenticated* account — setuid, setgid, that
+   user's supplementary groups and a private `XDG_RUNTIME_DIR` owned by it —
+   and starts the headless compositor for `session_command` (by default the
    `uflinux-session` launcher, so the session gets its own D-Bus session bus,
    `uflinux-compositor`, labwc and everything in `/etc/xdg/labwc/autostart`),
-   and attaches to it over Wayland
-   using the virtual-pointer, virtual-keyboard and screencopy protocols. Input
-   is injected rather than shared, so two users on one machine cannot see or
-   drive each other's desktop.
-3. Frames are encoded by the tier chosen in `codec`: H.264 when the client
+   attaching to it over Wayland using the virtual-pointer, virtual-keyboard and
+   screencopy protocols. Input is injected rather than shared, so two users on
+   one machine cannot see or drive each other's desktop. This is why the service
+   runs as root: the desktop must belong to whoever logged in, not to whoever
+   owns the daemon.
+4. Frames are encoded by the tier chosen in `codec`: H.264 when the client
    negotiated EGFX and an encoder is available, otherwise RemoteFX, otherwise
    raw bitmap updates. An idle session stops encoding entirely.
-4. When the client disconnects the session is suspended, and removed after
-   `idle_timeout_secs` (or kept for `linger_secs` so a reconnect resumes it).
+5. A client that goes silent for `idle_timeout_secs` is dropped, and when the
+   client disconnects the session host exits. The desktop does not outlive its
+   connection: a reconnect gets a fresh session host and a fresh desktop.
 
 ## Codecs
 
@@ -114,6 +122,30 @@ service, mints a short-lived one-time token (`web.token_ttl_minutes`), and hands
 the browser `session.html`. That page opens a WebSocket and drives the IronRDP
 wasm client, so the console in the browser speaks the same RDP protocol as a
 native client. Nothing about the session is stored server-side beyond the token.
+
+### How the browser reaches a session
+
+The gateway does not dial the public RDP port. It relays each WebSocket into a
+second, private listener of the broker: the unix socket `/run/uflinux-rds/web.sock`
+(`UFLINUX_RDS_WEB_SOCKET`), mode 0600, bound and unbound by the same task that
+owns the TCP port. Which front end a connection arrived on decides the
+transport, so nothing on the wire claims it:
+
+* TCP `rdp_port` → the session host is started with `--transport rdp` and
+  terminates TLS itself, exactly as before. mstsc, FreeRDP and Remmina see
+  `SSL` (or `HYBRID`) in the X.224 confirm and negotiate TLS inside the
+  connection.
+* the web socket → the host is started with `--transport web`, answers X.224
+  with an empty `SecurityProtocol` and skips the inner TLS handshake, because
+  the hop is already encrypted: TLS ended at the gateway's listener, and the
+  rest of the path is a root-owned unix socket plus a WebSocket. The wasm
+  client asks for this by enabling `enable_standard_rdp_security`.
+
+Relaying into a session host's own TCP port instead would mean a second TLS
+handshake inside a connection the browser already believes is secure, which is
+why the offload is explicit rather than inferred. The socket path is also why
+`web.sock` is not simply a port number: an unprivileged gateway could otherwise
+be pointed at any local RDP server.
 
 ## Building
 

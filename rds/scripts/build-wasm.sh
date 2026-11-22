@@ -87,6 +87,41 @@ fi
 mkdir -p "$out_dir" || exit 1
 "$WASM_BINDGEN" --target web --out-dir "$out_dir" "$wasm_input"
 
+# --- brotli ---------------------------------------------------------------
+#
+# The wasm module is several megabytes and dominates first paint, so each
+# served asset also gets a brotli-compressed sibling that the gateway serves
+# to a browser that offers `Accept-Encoding: br`.
+#
+# The .br files are generated, not committed (see gateway/assets/.gitignore):
+# they would bloat the source bundle that scripts/rds-source.py tars out of
+# this directory. A build without the brotli CLI therefore serves identity
+# only, which is why the gateway treats a missing .br as "no compressed
+# variant" rather than as an error.
+BROTLI_LEVEL=11
+ASSETS="app.css login.js console.js $lib_name.js ${lib_name}_bg.wasm"
+
+if command -v brotli >/dev/null 2>&1; then
+  for name in $ASSETS; do
+    file="$out_dir/$name"
+    if [ ! -f "$file" ]; then
+      echo "build-wasm: $name missing, skipping its brotli copy" >&2
+      continue
+    fi
+    before=$(wc -c <"$file")
+    if brotli -q "$BROTLI_LEVEL" -o "$file.br" "$file"; then
+      after=$(wc -c <"$file.br")
+      printf '  brotli %-28s %8d -> %8d bytes\n' "$name" "$before" "$after"
+    else
+      rm -f "$file.br"
+      echo "build-wasm: brotli failed for $name, serving it uncompressed" >&2
+    fi
+  done
+else
+  echo "build-wasm: brotli not found; assets will be served uncompressed" >&2
+  echo "build-wasm: install it (apk add brotli) to compress the wasm bundle" >&2
+fi
+
 # --- report ---------------------------------------------------------------
 
 echo "build-wasm: wrote into $out_dir"

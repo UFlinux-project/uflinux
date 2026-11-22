@@ -1,5 +1,7 @@
 //! Captured desktop frames and the software frame diff.
 
+use bytes::Bytes;
+
 use crate::error::BackendError;
 
 /// A rectangle of a [`Frame`] whose contents changed since the previous frame.
@@ -39,7 +41,11 @@ pub struct Frame {
     pub height: u32,
     /// RGBA8888, row-major, top-down, no padding, exactly `width * height * 4`
     /// bytes.
-    pub pixels: Vec<u8>,
+    ///
+    /// Reference-counted so that handing a frame to the encoder, the queue and
+    /// the log does not copy the desktop: cloning a 1280x720 frame shares these
+    /// 3.5 MB instead of duplicating them.
+    pub pixels: Bytes,
     /// Regions that differ from the previously delivered frame. An empty list
     /// means "nothing changed" and the frame can be skipped.
     pub dirty: Vec<DirtyRect>,
@@ -49,9 +55,10 @@ impl Frame {
     pub(crate) fn new(
         width: u32,
         height: u32,
-        pixels: Vec<u8>,
+        pixels: impl Into<Bytes>,
         dirty: Vec<DirtyRect>,
     ) -> Result<Self, BackendError> {
+        let pixels = pixels.into();
         let expected = (width as usize)
             .checked_mul(height as usize)
             .and_then(|n| n.checked_mul(4))

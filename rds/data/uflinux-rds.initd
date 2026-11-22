@@ -3,6 +3,12 @@
 
 description="UFLinux Remote Desktop broker"
 
+# No command_user on purpose: the broker must stay root. It forks a session host
+# per connection, and the host validates the RDP credentials and only then drops
+# the desktop it starts to that authenticated account — setuid, setgid and the
+# user's supplementary groups, plus a private runtime directory owned by it.
+# Running the service as an unprivileged user would leave every desktop owned by
+# whoever the service happens to run as.
 command="/usr/bin/uflinux-rdsd"
 command_background=true
 # The broker can quit itself after an idle window, which suits socket activation
@@ -14,9 +20,9 @@ command_args="--resident"
 # OpenRC sources /etc/conf.d/uflinux-rds into this script but does not export its
 # variables, so the daemon would never see them. Forward the ones the conf.d file
 # documents; the broker reads every UFLINUX_RDS_* name from its own environment.
-for _rds_var in UFLINUX_RDS_CONFIG UFLINUX_RDS_CONTROL_SOCKET UFLINUX_RDS_SESSION_BINARY \
-	UFLINUX_RDS_WEB_BINARY UFLINUX_RDS_H264 UFLINUX_RDS_SESSION_COMMAND \
-	UFLINUX_RDS_RDP_PORT UFLINUX_RDS_WEB_PORT RUST_LOG; do
+for _rds_var in UFLINUX_RDS_CONFIG UFLINUX_RDS_CONTROL_SOCKET UFLINUX_RDS_WEB_SOCKET \
+	UFLINUX_RDS_SESSION_BINARY UFLINUX_RDS_WEB_BINARY UFLINUX_RDS_H264 \
+	UFLINUX_RDS_SESSION_COMMAND UFLINUX_RDS_RDP_PORT UFLINUX_RDS_WEB_PORT RUST_LOG; do
 	eval _rds_set=\${$_rds_var+yes}
 	[ "$_rds_set" = yes ] && export "$_rds_var"
 done

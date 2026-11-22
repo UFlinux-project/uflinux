@@ -9,6 +9,7 @@ use std::fs;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::ptr::NonNull;
 use std::sync::mpsc::{
     Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError, channel, sync_channel,
 };
@@ -16,6 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use bytes::Bytes;
 use nix::errno::Errno;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
@@ -87,68 +89,88 @@ struct Shared {
     error: Mutex<Option<BackendError>>,
 }
 
+/// The shared-memory capture buffer, kept alive across frames.
+///
+/// Setting up a `wl_shm` buffer means a memfd, an `ftruncate`, a pool, a
+/// buffer and an `mmap`. The compositor only ever needs one buffer per
+/// capture, and the geometry rarely changes, so the fd and the mapping are
+/// reused for as long as width, height, stride and format stay the same.
+///
+/// `wl_shm_pool` is single-use in the protocol, so a fresh pool is created
+/// per buffer and destroyed right away; the expensive part (fd + mapping)
+/// survives.
+struct ShmBuffer {
+    fd: OwnedFd,
+    addr: NonNull<u8>,
+    map_len: usize,
+    width: u32,
+    height: u32,
+    stride: u32,
+    format: ShmFormat,
+    buffer: Option<WlBuffer>,
+}
+
+// The only non-`Send` member is the raw `mmap` pointer, which the event-loop
+// thread owns exclusively.
+unsafe impl Send for ShmBuffer {}
+
+impl ShmBuffer {
+    fn matches(&self, width: u32, height: u32, stride: u32, format: ShmFormat) -> bool {
+        self.width == width
+            && self.height == height
+            && self.stride == stride
+            && self.format == format
+    }
+
+    fn bytes(&self) -> &[u8] {
+        // SAFETY: `addr`/`map_len` come from a successful `mmap` of `fd` and
+        // are only invalidated when `ShmBuffer` is dropped.
+        unsafe { std::slice::from_raw_parts(self.addr.as_ptr(), self.map_len) }
+    }
+}
+
+impl Drop for ShmBuffer {
+    fn drop(&mut self) {
+        if let Some(buffer) = self.buffer.take() {
+            buffer.destroy();
+        }
+        // SAFETY: `addr`/`map_len` come from a successful `mmap` of `fd`.
+        unsafe {
+            libc::munmap(self.addr.as_ptr() as *mut libc::c_void, self.map_len);
+        }
+    }
+}
+
 /// An in-flight screencopy capture, from `capture_output` until `ready`.
 struct Capture {
+    /// Held so the frame proxy stays referenced for the lifetime of the
+    /// capture; dropping the last reference destroys it.
+    #[allow(dead_code)]
     frame: ZwlrScreencopyFrameV1,
-    buffer: Option<WlBuffer>,
-    shm_fd: Option<OwnedFd>,
-    addr: *mut u8,
-    map_len: usize,
     width: u32,
     height: u32,
     stride: u32,
     order: PixelOrder,
     inverted: bool,
+    ready: bool,
 }
-
-// The only non-`Send` member is the raw `mmap` pointer, which the event-loop
-// thread owns exclusively.
-unsafe impl Send for Capture {}
 
 impl Capture {
     fn new(frame: ZwlrScreencopyFrameV1) -> Self {
         Self {
             frame,
-            buffer: None,
-            shm_fd: None,
-            addr: std::ptr::null_mut(),
-            map_len: 0,
             width: 0,
             height: 0,
             stride: 0,
             order: [2, 1, 0],
             inverted: false,
-        }
-    }
-
-    fn is_ready_to_copy(&self) -> bool {
-        !self.addr.is_null()
-    }
-
-    fn unmap(&mut self) {
-        if !self.addr.is_null() {
-            // SAFETY: `addr`/`map_len` come from a successful `mmap` and are
-            // cleared immediately afterwards.
-            unsafe {
-                libc::munmap(self.addr as *mut libc::c_void, self.map_len);
-            }
-            self.addr = std::ptr::null_mut();
-            self.map_len = 0;
+            ready: false,
         }
     }
 }
 
-impl Drop for Capture {
-    fn drop(&mut self) {
-        self.unmap();
-        if let Some(buffer) = self.buffer.take() {
-            buffer.destroy();
-        }
-        // `frame` is dropped without an explicit `destroy()`; the compositor
-        // reaps the object when the capture is abandoned.
-        let _ = &self.frame;
-    }
-}
+// `frame` is dropped without an explicit `destroy()`; the compositor reaps
+// the object when the capture is abandoned.
 
 /// The user-data object dispatched on the event-loop thread.
 struct Session {
@@ -168,7 +190,9 @@ struct Session {
     bound_outputs: Vec<u32>,
     heads: Vec<ZwlrOutputHeadV1>,
     capture: Option<Capture>,
-    previous: Vec<u8>,
+    shm_buf: Option<ShmBuffer>,
+    scratch: Vec<u8>,
+    previous: Bytes,
     frames_tx: SyncSender<Frame>,
     shared: Arc<Shared>,
     finished: bool,
@@ -206,7 +230,9 @@ impl Session {
             bound_outputs: Vec::new(),
             heads: Vec::new(),
             capture: None,
-            previous: Vec::new(),
+            shm_buf: None,
+            scratch: Vec::new(),
+            previous: Bytes::new(),
             frames_tx,
             shared,
             finished: false,
@@ -378,22 +404,37 @@ impl Session {
         self.set_size(width, height);
     }
 
-    /// Diff a freshly captured frame against the previous one and queue it.
-    fn deliver(&mut self, rgba: Vec<u8>, width: u32, height: u32) {
+    /// Diff the RGBA data the capture left in the scratch buffer against the
+    /// previous frame and queue the result.
+    ///
+    /// The baseline only moves when the frame is actually queued. If the
+    /// queue is full the frame is dropped and the next capture diffs against
+    /// the *old* baseline, so the pixels of the skipped frame are still sent
+    /// instead of staying stale on the client.
+    fn deliver(&mut self, width: u32, height: u32) {
         self.set_size(width, height);
-        let dirty = dirty_regions(&self.previous, &rgba, width, height);
-        self.previous = rgba.clone();
+        let dirty = dirty_regions(&self.previous, &self.scratch, width, height);
         if dirty.is_empty() {
             return;
         }
-        let Ok(frame) = Frame::new(width, height, rgba, dirty) else {
-            return;
+        // `Bytes::from(Vec)` moves the scratch allocation into the frame, so
+        // a queued frame costs a reference count rather than a copy.
+        let pixels = Bytes::from(std::mem::take(&mut self.scratch));
+        let frame = match Frame::new(width, height, pixels.clone(), dirty) {
+            Ok(frame) => frame,
+            Err(err) => {
+                debug_assert!(false, "unexpected frame geometry: {err}");
+                commit_frame(&mut self.previous, &mut self.scratch, pixels, false);
+                return;
+            }
         };
         match self.frames_tx.try_send(frame) {
-            Ok(()) => {}
-            // A frame is already queued; drop this one. The receiver will get
-            // the next diff computed against this updated baseline.
-            Err(TrySendError::Full(_)) => {}
+            Ok(()) => commit_frame(&mut self.previous, &mut self.scratch, pixels, true),
+            // A frame is already queued; drop this one and keep the old
+            // baseline so its damage rides along with the next frame.
+            Err(TrySendError::Full(_)) => {
+                commit_frame(&mut self.previous, &mut self.scratch, pixels, false);
+            }
             Err(TrySendError::Disconnected(_)) => self.finished = true,
         }
     }
@@ -427,7 +468,12 @@ impl Session {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Allocate a shm buffer for the capture and issue `copy_with_damage`.
+    /// Make sure a shm buffer of the offered geometry exists and issue
+    /// `copy_with_damage`.
+    ///
+    /// The memfd and its mapping survive across frames: only a change of
+    /// width, height, stride or format (or a failed setup) tears them down.
+    /// The `wl_shm_pool` has to be new for every buffer, but it is cheap.
     fn setup_buffer(
         &mut self,
         proxy: &ZwlrScreencopyFrameV1,
@@ -445,23 +491,31 @@ impl Session {
         if size == 0 {
             return;
         }
-        let fd = match memfd("uflinux-rds-capture") {
-            Ok(fd) => fd,
-            Err(e) => {
-                tracing::warn!(error = %e, "capture memfd failed");
-                return;
-            }
-        };
-        if nix::unistd::ftruncate(&fd, size as libc::off_t).is_err() {
-            tracing::warn!("capture ftruncate failed");
+        if self
+            .shm_buf
+            .as_ref()
+            .is_none_or(|buf| !buf.matches(width, height, stride, format))
+        {
+            self.shm_buf = None;
+        }
+        if self.shm_buf.is_none() && !self.create_shm_buffer(width, height, stride, format, size) {
             return;
         }
+
         // `create_pool`/`create_buffer` only borrow `self.shm`/`self.qhandle`
-        // for the duration of the call, so the mutable borrow of
-        // `self.capture` below does not overlap them.
+        // for the duration of the call, so the mutable borrow of `self.shm_buf`
+        // below does not overlap them.
+        let Some(buf) = self.shm_buf.as_mut() else {
+            return;
+        };
+        // The compositor may still hold the previous buffer; drop it before
+        // handing out a new one that aliases the same memory.
+        if let Some(previous) = buf.buffer.take() {
+            previous.destroy();
+        }
         let pool = self
             .shm
-            .create_pool(fd.as_fd(), size as i32, &self.qhandle, ());
+            .create_pool(buf.fd.as_fd(), buf.map_len as i32, &self.qhandle, ());
         let buffer = pool.create_buffer(
             0,
             width as i32,
@@ -472,6 +526,45 @@ impl Session {
             (),
         );
         pool.destroy();
+        buf.buffer = Some(buffer.clone());
+        match self.capture.as_mut() {
+            Some(capture) => {
+                capture.width = width;
+                capture.height = height;
+                capture.stride = stride;
+                capture.order = order;
+                capture.ready = true;
+            }
+            None => {
+                buffer.destroy();
+                buf.buffer = None;
+                return;
+            }
+        }
+        proxy.copy_with_damage(&buffer);
+    }
+
+    /// (Re)create the capture memfd and its read-only mapping. Returns false
+    /// when the capture cannot be set up; the caller then skips the frame.
+    fn create_shm_buffer(
+        &mut self,
+        width: u32,
+        height: u32,
+        stride: u32,
+        format: ShmFormat,
+        size: usize,
+    ) -> bool {
+        let fd = match memfd("uflinux-rds-capture") {
+            Ok(fd) => fd,
+            Err(e) => {
+                tracing::warn!(error = %e, "capture memfd failed");
+                return false;
+            }
+        };
+        if nix::unistd::ftruncate(&fd, size as libc::off_t).is_err() {
+            tracing::warn!("capture ftruncate failed");
+            return false;
+        }
         // SAFETY: `fd` is a live file descriptor of length `size`.
         let addr = unsafe {
             libc::mmap(
@@ -485,26 +578,21 @@ impl Session {
         };
         if addr == libc::MAP_FAILED {
             tracing::warn!(error = %std::io::Error::last_os_error(), "capture mmap failed");
-            buffer.destroy();
-            return;
+            return false;
         }
-        match self.capture.as_mut() {
-            Some(capture) => {
-                capture.buffer = Some(buffer.clone());
-                capture.shm_fd = Some(fd);
-                capture.addr = addr as *mut u8;
-                capture.map_len = size;
-                capture.width = width;
-                capture.height = height;
-                capture.stride = stride;
-                capture.order = order;
-            }
-            None => {
-                buffer.destroy();
-                return;
-            }
-        }
-        proxy.copy_with_damage(&buffer);
+        // SAFETY: `mmap` returned a live mapping of `size` bytes.
+        let addr = unsafe { NonNull::new_unchecked(addr as *mut u8) };
+        self.shm_buf = Some(ShmBuffer {
+            fd,
+            addr,
+            map_len: size,
+            width,
+            height,
+            stride,
+            format,
+            buffer: None,
+        });
+        true
     }
 
     fn abandon_capture(&mut self, proxy: &ZwlrScreencopyFrameV1) {
@@ -570,27 +658,39 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for Session {
                 }
             }
             frame_evt::Event::Ready { .. } => {
-                let captured = match session.capture.as_mut() {
-                    Some(capture) if capture.is_ready_to_copy() => {
-                        // SAFETY: `addr`/`map_len` describe the readable mmap
-                        // installed by `setup_buffer`.
-                        let src =
-                            unsafe { std::slice::from_raw_parts(capture.addr, capture.map_len) };
-                        let rgba = pixels_to_rgba(
-                            src,
+                let geometry = session
+                    .capture
+                    .as_ref()
+                    .filter(|capture| capture.ready)
+                    .map(|capture| {
+                        (
                             capture.width,
                             capture.height,
                             capture.stride,
                             capture.inverted,
                             capture.order,
-                        );
-                        (rgba, capture.width, capture.height)
-                    }
-                    _ => return,
+                        )
+                    });
+                let Some((width, height, stride, inverted, order)) = geometry else {
+                    return;
                 };
+                let Some(buf) = session.shm_buf.as_ref() else {
+                    return;
+                };
+                pixels_to_rgba_into(
+                    &mut session.scratch,
+                    buf.bytes(),
+                    width,
+                    height,
+                    stride,
+                    inverted,
+                    order,
+                );
+                // The frame is done, but the shm buffer and its mapping stay
+                // around for the next capture.
                 session.capture = None;
                 proxy.destroy();
-                session.deliver(captured.0, captured.1, captured.2);
+                session.deliver(width, height);
             }
             frame_evt::Event::Failed => session.abandon_capture(proxy),
             _ => {}
@@ -705,21 +805,48 @@ fn pixel_order(format: ShmFormat) -> Option<PixelOrder> {
     Some(order)
 }
 
-fn pixels_to_rgba(
+/// Hand the captured pixels to the diff baseline and recover the scratch
+/// buffer.
+///
+/// `queued` says whether the frame actually reached the encoder: a frame that
+/// had to be dropped leaves the baseline alone, so its damage is still part of
+/// the next frame. Either way one of the two `Bytes` is turned back into a
+/// `Vec`; `Vec::from` reclaims the original allocation when nothing else holds
+/// a reference, so the next capture writes into the same memory.
+fn commit_frame(previous: &mut Bytes, scratch: &mut Vec<u8>, pixels: Bytes, queued: bool) {
+    let stale = if queued {
+        std::mem::replace(previous, pixels)
+    } else {
+        pixels
+    };
+    *scratch = Vec::from(stale);
+}
+
+/// Convert into a caller-owned scratch buffer that is reused across frames:
+/// it is resized in place and fully overwritten, so a steady-state frame costs
+/// no allocation.
+#[allow(clippy::too_many_arguments)]
+fn pixels_to_rgba_into(
+    out: &mut Vec<u8>,
     src: &[u8],
     width: u32,
     height: u32,
     stride: u32,
     flip: bool,
     order: PixelOrder,
-) -> Vec<u8> {
+) {
     let stride = stride as usize;
     let width = width as usize;
     let height = height as usize;
-    let mut out = vec![0u8; width * height * 4];
+    let out_len = width * height * 4;
     if src.len() < stride * height {
-        return out;
+        out.clear();
+        out.resize(out_len, 0);
+        return;
     }
+    // Grow in place; below this line every byte of `out` is overwritten, so
+    // a same-sized steady-state frame neither allocates nor re-zeroes.
+    out.resize(out_len, 0);
     let [red, green, blue] = order;
     for (out_row, row) in out.chunks_mut(width * 4).enumerate() {
         let src_row = if flip { height - 1 - out_row } else { out_row };
@@ -733,6 +860,19 @@ fn pixels_to_rgba(
             pixel[3] = 0xff;
         }
     }
+}
+
+#[cfg(test)]
+fn pixels_to_rgba(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+    flip: bool,
+    order: PixelOrder,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    pixels_to_rgba_into(&mut out, src, width, height, stride, flip, order);
     out
 }
 
@@ -1084,6 +1224,8 @@ impl Drop for DesktopBackend {
 mod tests {
     use super::*;
 
+    use crate::frame::DirtyRect;
+
     const XRGB: PixelOrder = [2, 1, 0];
 
     #[test]
@@ -1130,6 +1272,119 @@ mod tests {
     fn pixels_to_rgba_zeroes_undersized_input() {
         let out = pixels_to_rgba(&[0u8; 4], 2, 2, 8, false, XRGB);
         assert_eq!(out, vec![0u8; 2 * 2 * 4]);
+    }
+
+    #[test]
+    fn a_short_source_zeroes_the_whole_scratch() {
+        // A reused scratch must never keep stale pixels from the previous
+        // frame, even when the source is too short to cover it.
+        let mut scratch = vec![0u8; 64];
+        pixels_to_rgba_into(&mut scratch, &[7, 9, 11, 0], 2, 2, 4, false, XRGB);
+        assert_eq!(scratch, vec![0u8; 2 * 2 * 4]);
+    }
+
+    #[test]
+    fn the_scratch_buffer_survives_a_conversion() {
+        // The whole point of `pixels_to_rgba_into`: the same allocation is
+        // refilled frame after frame.
+        let mut scratch = vec![0u8; 4];
+        let before = scratch.as_ptr();
+        pixels_to_rgba_into(&mut scratch, &[7, 9, 11, 0], 1, 1, 4, false, XRGB);
+        assert_eq!(scratch, vec![11, 9, 7, 255]);
+        assert_eq!(before, scratch.as_ptr(), "no reallocation");
+    }
+
+    #[test]
+    fn a_capture_buffer_is_reused_only_for_the_same_geometry() {
+        let fd = memfd("uflinux-rds-test").unwrap();
+        nix::unistd::ftruncate(&fd, 64).unwrap();
+        let addr = unsafe {
+            // SAFETY: mapping the 64-byte memfd created above.
+            libc::mmap(
+                std::ptr::null_mut(),
+                64,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(addr, libc::MAP_FAILED);
+        let buf = ShmBuffer {
+            fd,
+            addr: unsafe {
+                // SAFETY: a successful mmap returns a non-null address.
+                NonNull::new_unchecked(addr as *mut u8)
+            },
+            map_len: 64,
+            width: 4,
+            height: 4,
+            stride: 16,
+            format: ShmFormat::Xrgb8888,
+            buffer: None,
+        };
+        assert!(buf.matches(4, 4, 16, ShmFormat::Xrgb8888));
+        assert!(!buf.matches(8, 4, 32, ShmFormat::Xrgb8888), "width changed");
+        assert!(
+            !buf.matches(4, 4, 16, ShmFormat::Abgr8888),
+            "format changed"
+        );
+        assert_eq!(buf.bytes().len(), 64);
+    }
+
+    #[test]
+    fn commit_frame_reuses_the_scratch_and_keeps_one_pixel_copy() {
+        // Delivered: the frame becomes the baseline, the old baseline becomes
+        // the next scratch, and the queued frame keeps its own reference.
+        let mut previous = Bytes::from(vec![1u8; 4]);
+        let mut scratch = Vec::new();
+        let pixels = Bytes::from(vec![2u8; 4]);
+        let queued = pixels.clone();
+        commit_frame(&mut previous, &mut scratch, pixels, true);
+        assert_eq!(&previous[..], &[2, 2, 2, 2]);
+        assert_eq!(scratch, vec![1, 1, 1, 1]);
+        assert_eq!(&queued[..], &[2, 2, 2, 2]);
+        assert_eq!(
+            previous.as_ptr(),
+            queued.as_ptr(),
+            "the baseline and the queued frame must share one allocation"
+        );
+    }
+
+    #[test]
+    fn a_dropped_frame_leaves_the_baseline_alone_and_its_pixels_become_the_scratch() {
+        // The bug: advancing the baseline for a frame nobody received hides
+        // that damage forever.
+        let mut previous = Bytes::from(vec![1u8; 4]);
+        let mut scratch = Vec::new();
+        let pixels = Bytes::from(vec![2u8; 4]);
+        commit_frame(&mut previous, &mut scratch, pixels, false);
+        assert_eq!(&previous[..], &[1, 1, 1, 1], "baseline must not move");
+        assert_eq!(scratch, vec![2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn damage_from_a_dropped_frame_survives_into_the_next_one() {
+        // Screen goes 0 -> 1 while the encoder is busy, then stays at 1. The
+        // dropped frame must not move the baseline, so the change is still
+        // visible in the diff of the *following* frame.
+        let mut previous = Bytes::from(vec![0u8; 16]);
+        let mut scratch = Vec::new();
+        let dropped = Bytes::from(vec![0xAA; 16]);
+        commit_frame(&mut previous, &mut scratch, dropped, false);
+
+        // Nothing new is captured yet: diffing the untouched scratch against
+        // the stale baseline must still report the whole screen.
+        let dirty = dirty_regions(&previous, &scratch, 2, 2);
+        assert_eq!(
+            dirty,
+            vec![DirtyRect {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2
+            }]
+        );
     }
 
     #[test]

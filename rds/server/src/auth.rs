@@ -13,6 +13,7 @@
 //!   after authentication and is a pure function over an injected group list.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 /// Why a logon was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +216,74 @@ pub fn admit(policy: &Policy, username: &str) -> bool {
     policy.is_allowed(username, &groups)
 }
 
+/// The account a desktop is started as.
+///
+/// The compositor drops its own privileges (see
+/// [`uflinux_rds_wayland::DesktopBackend`]), but the session host runs as root
+/// and has to prepare a private directory for the compositor's socket first,
+/// which needs the numeric ids.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopOwner {
+    /// Account name, as authenticated.
+    pub name: String,
+    /// Numeric user id.
+    pub uid: u32,
+    /// Primary numeric group id.
+    pub gid: u32,
+}
+
+impl DesktopOwner {
+    /// Resolves `username` in the password database.
+    ///
+    /// `None` means the account is unknown, which only happens with the
+    /// non-PAM stub authenticator; the caller then keeps the desktop at the
+    /// session host's own privileges.
+    pub fn lookup(username: &str) -> Option<Self> {
+        let user = nix::unistd::User::from_name(username).ok()??;
+        Some(Self {
+            name: username.to_owned(),
+            uid: user.uid.as_raw(),
+            gid: user.gid.as_raw(),
+        })
+    }
+}
+
+/// The private directory one desktop gets for its Wayland socket.
+///
+/// `base` is the directory this session host owns: `$XDG_RUNTIME_DIR` when it
+/// is unprivileged, otherwise the shared state directory. A session host that
+/// runs as root serves whichever account authenticates, so the path is
+/// namespaced by uid — two users connecting at the same time must not share
+/// one directory. An unprivileged host only ever serves one account, so it
+/// needs no namespace and no ownership change.
+pub fn desktop_runtime_dir(base: &Path, uid: Option<u32>) -> PathBuf {
+    let mut path = match uid {
+        Some(uid) => base.join("sessions").join(uid.to_string()),
+        None => base.to_path_buf(),
+    };
+    path.push(format!("rdp-{}", std::process::id()));
+    path
+}
+
+/// Creates [`desktop_runtime_dir`]'s directory as `0700` owned by `owner`.
+///
+/// Returns the path so the caller cannot use a directory it did not prepare.
+pub fn prepare_desktop_dir(path: &Path, owner: Option<&DesktopOwner>) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    if let Some(owner) = owner {
+        nix::unistd::chown(
+            path,
+            Some(nix::unistd::Uid::from_raw(owner.uid)),
+            Some(nix::unistd::Gid::from_raw(owner.gid)),
+        )
+        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    }
+    Ok(path.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +403,72 @@ mod tests {
             AuthError::NotAllowed.client_message(),
             "invalid credentials"
         );
+    }
+
+    #[test]
+    fn a_privileged_desktop_dir_is_namespaced_by_uid() {
+        // The session host runs as root and serves whichever account
+        // authenticates, so two users must not land in one directory.
+        let root = Path::new("/var/lib/uflinux-rds");
+        let a = desktop_runtime_dir(root, Some(1000));
+        let b = desktop_runtime_dir(root, Some(1001));
+        assert_ne!(a, b);
+        // `Path::starts_with` compares components, so compare text here.
+        assert!(
+            a.to_string_lossy()
+                .starts_with("/var/lib/uflinux-rds/sessions/1000/rdp-"),
+            "{a:?}"
+        );
+        assert!(
+            b.to_string_lossy()
+                .starts_with("/var/lib/uflinux-rds/sessions/1001/rdp-"),
+            "{b:?}"
+        );
+    }
+
+    #[test]
+    fn an_unprivileged_desktop_dir_stays_under_the_runtime_dir() {
+        // A session host that is already the user needs no uid namespace: its
+        // runtime directory is private to it already.
+        let base = Path::new("/run/user/1000");
+        let path = desktop_runtime_dir(base, None);
+        assert!(
+            path.to_string_lossy().starts_with("/run/user/1000/rdp-"),
+            "{path:?}"
+        );
+        assert!(!path.starts_with("/run/user/1000/sessions"));
+    }
+
+    #[test]
+    fn the_desktop_dir_is_private_to_this_process() {
+        let path = desktop_runtime_dir(Path::new("/var/lib/uflinux-rds"), Some(1000));
+        let name = path
+            .file_name()
+            .expect("a directory name")
+            .to_string_lossy();
+        assert_eq!(name, format!("rdp-{}", std::process::id()));
+    }
+
+    #[test]
+    fn a_prepared_desktop_dir_is_mode_0700() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir().join(format!("uflinux-rds-auth-{}", std::process::id()));
+        let path = base.join("rdp-0");
+        let prepared = prepare_desktop_dir(&path, None).expect("the directory is created");
+        assert_eq!(prepared, path);
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_desktop_owner_for_an_unknown_account_is_none() {
+        // Only the non-PAM stub can authenticate somebody who is not in the
+        // password database; the caller treats `None` as "no privilege drop".
+        assert!(DesktopOwner::lookup("uflinux-rds-no-such-user").is_none());
     }
 }

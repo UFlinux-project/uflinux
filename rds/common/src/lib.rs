@@ -34,5 +34,24 @@ pub fn control_socket_path() -> std::path::PathBuf {
 
 pub const CONTROL_SOCKET: &str = "/run/uflinux-rds/control.sock";
 
+/// Socket the broker listens on for web backends, i.e. the connections the
+/// gateway splices into.
+///
+/// A second listener rather than a flag on the TCP one: a browser session is
+/// already encrypted by the gateway, so the session host must not ask for a
+/// TLS handshake inside it, and the transport has to be decided by where a
+/// connection arrived rather than by what the client claims.
+pub fn web_socket_path() -> std::path::PathBuf {
+    match std::env::var_os(ENV_WEB_SOCKET) {
+        Some(path) if !path.is_empty() => std::path::PathBuf::from(path),
+        _ => std::path::Path::new(WEB_SOCKET).to_path_buf(),
+    }
+}
+
+pub const WEB_SOCKET: &str = "/run/uflinux-rds/web.sock";
+
+/// Override for [`WEB_SOCKET`], honoured by both the broker and the gateway.
+pub const ENV_WEB_SOCKET: &str = "UFLINUX_RDS_WEB_SOCKET";
+
 /// State directory used for generated certificates and logs.
 pub const STATE_DIR: &str = "/var/lib/uflinux-rds";

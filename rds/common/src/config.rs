@@ -37,8 +37,12 @@ pub struct Config {
     pub max_sessions: usize,
     /// Drop a session after this much client inactivity. Zero disables it.
     pub idle_timeout_secs: u64,
-    /// Keep the desktop alive this long after a disconnect so a reconnect can
-    /// reattach. Zero means the session dies with the connection.
+    /// Accepted and ignored. Sessions used to hold the desktop open for this
+    /// long after a disconnect; the desktop now dies with its connection and a
+    /// reconnect gets a fresh session host. The field keeps configs written by
+    /// older installs loading unchanged — `Config` rejects unknown keys — and
+    /// is never written back out.
+    #[serde(default, skip_serializing)]
     pub linger_secs: u64,
     /// Session program launched per connection, e.g. `uflinux-session`.
     /// Overridden by `UFLINUX_RDS_SESSION_COMMAND`.
@@ -393,6 +397,21 @@ mod tests {
     fn unknown_keys_are_rejected() {
         let err = serde_json::from_str::<Config>(r#"{"nope": 1}"#).unwrap_err();
         assert!(err.to_string().contains("nope"));
+    }
+
+    /// An upgraded host keeps the file it already had, and `rds.json` is
+    /// installed without `backup=!`, so a key the current build no longer uses
+    /// has to keep parsing rather than bricking the service.
+    #[test]
+    fn a_deprecated_linger_secs_still_loads_and_is_not_written_back() {
+        let config: Config =
+            serde_json::from_str(r#"{"linger_secs": 120, "max_sessions": 2}"#).unwrap();
+        assert_eq!(config.max_sessions, 2);
+        // The value is parsed and then ignored: nothing reads the field, so a
+        // machine that still says 120 behaves exactly like one that says 0.
+        assert_eq!(config.linger_secs, 120);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("linger_secs"), "{json}");
     }
 
     /// Scratch directory for the tests below, following the convention used by

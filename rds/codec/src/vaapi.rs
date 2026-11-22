@@ -9,12 +9,12 @@
 //! ([`EncoderProcess`]/[`EncoderSpawner`]) are separate so the state machine can
 //! be driven by a fake process in tests; nothing here requires ffmpeg or a GPU.
 
-use std::collections::VecDeque;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::convert::{RgbaFrame, write_nv12};
 use crate::probe::{DEFAULT_VAAPI_DEVICE, ffmpeg_on_path, is_char_device};
@@ -23,6 +23,9 @@ use crate::{CodecError, Result};
 /// VA-API encoders reject frames smaller than this; the caller should
 /// [`crate::downgrade`] instead of failing the session.
 pub const MIN_DIMENSION: u32 = 128;
+
+/// Bound the wait for a submitted frame if the driver stops producing output.
+const FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The encoder shape this crate expects from any H.264 backend.
 ///
@@ -95,6 +98,14 @@ fn ffmpeg_args(config: &VaapiConfig, width: u32, height: u32) -> Vec<String> {
         "format=nv12,hwupload".to_owned(),
         "-c:v".to_owned(),
         "h264_vaapi".to_owned(),
+        // A static desktop may submit only one frame. Encode and flush it
+        // without waiting for more input or for B-frame reordering.
+        "-async_depth".to_owned(),
+        "1".to_owned(),
+        "-bf".to_owned(),
+        "0".to_owned(),
+        "-flush_packets".to_owned(),
+        "1".to_owned(),
     ];
     if !config.preset.is_empty() {
         args.extend(["-preset".to_owned(), config.preset.clone()]);
@@ -111,7 +122,7 @@ pub trait EncoderProcess: Send {
     /// Feeds one NV12 frame to the helper.
     fn write_frame(&mut self, nv12: &[u8]) -> Result<()>;
 
-    /// Returns whatever Annex-B bytes are available right now without blocking.
+    /// Collects Annex-B output after submitting a frame.
     ///
     /// `Ok(None)` means the helper closed its stdout (it exited or was told to
     /// finish); `Ok(Some(empty))` means "nothing yet";
@@ -204,8 +215,6 @@ impl EncoderSpawner for FfmpegSpawner {
             stdin: Some(stdin),
             receiver,
             reader: Some(reader),
-            pending: VecDeque::new(),
-            dead: false,
         }))
     }
 }
@@ -217,26 +226,10 @@ struct FfmpegProcess {
     stdin: Option<ChildStdin>,
     receiver: Receiver<Vec<u8>>,
     reader: Option<JoinHandle<()>>,
-    pending: VecDeque<Vec<u8>>,
-    dead: bool,
-}
-
-impl FfmpegProcess {
-    fn notice_death(&mut self) {
-        self.dead = true;
-        if let Some(reader) = self.reader.take() {
-            // The reader exits on EOF once the child is gone; detaching is fine,
-            // the channel is already closed.
-            drop(reader);
-        }
-    }
 }
 
 impl EncoderProcess for FfmpegProcess {
     fn write_frame(&mut self, nv12: &[u8]) -> Result<()> {
-        if self.dead {
-            return Err(CodecError::BackendDied);
-        }
         let Some(stdin) = self.stdin.as_mut() else {
             return Err(CodecError::BackendDied);
         };
@@ -246,35 +239,29 @@ impl EncoderProcess for FfmpegProcess {
                 // A closed pipe means the helper died, most often because the
                 // driver rejected the frame.
                 tracing::debug!(%error, "VA-API helper stdin failed");
-                self.notice_death();
+                self.shutdown();
                 Err(CodecError::BackendDied)
             }
         }
     }
 
     fn poll_output(&mut self) -> Result<Option<Vec<u8>>> {
-        loop {
-            match self.receiver.try_recv() {
-                Ok(chunk) => self.pending.push_back(chunk),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    if !self.dead {
-                        self.notice_death();
-                    }
-                    break;
-                }
+        let mut out = match self.receiver.recv_timeout(FRAME_TIMEOUT) {
+            Ok(chunk) => chunk,
+            Err(RecvTimeoutError::Disconnected) => {
+                self.shutdown();
+                return Ok(None);
             }
-        }
-
-        if !self.pending.is_empty() {
-            let mut out = Vec::new();
-            while let Some(chunk) = self.pending.pop_front() {
-                out.extend_from_slice(&chunk);
+            Err(RecvTimeoutError::Timeout) => {
+                tracing::debug!("VA-API helper timed out waiting for a frame");
+                self.shutdown();
+                return Err(CodecError::BackendDied);
             }
-            return Ok(Some(out));
+        };
+        for chunk in self.receiver.try_iter() {
+            out.extend_from_slice(&chunk);
         }
-        // Nothing buffered: the helper is either idle or gone.
-        Ok(if self.dead { None } else { Some(Vec::new()) })
+        Ok(Some(out))
     }
 
     fn shutdown(&mut self) {
@@ -287,7 +274,6 @@ impl EncoderProcess for FfmpegProcess {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
-        self.dead = true;
     }
 }
 
@@ -564,6 +550,7 @@ fn start_code_len(buffer: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     fn frame_of(width: u32, height: u32) -> Vec<u8> {
@@ -583,6 +570,9 @@ mod tests {
             "-i pipe:0",
             "-vf format=nv12,hwupload",
             "-c:v h264_vaapi",
+            "-async_depth 1",
+            "-bf 0",
+            "-flush_packets 1",
             "-g 60",
             "-f h264 pipe:1",
         ] {
@@ -954,14 +944,11 @@ mod tests {
             }
         };
         let data = frame_of(256, 256);
-        // ffmpeg needs a few frames before it emits anything.
-        for _ in 0..8 {
-            let _ = enc.encode(&RgbaFrame::new(&data, 256, 256));
-        }
         let out = enc.encode(&RgbaFrame::new(&data, 256, 256)).unwrap();
         assert!(
-            out.windows(3).any(|w| w == [0x00, 0x00, 0x01]) || out.is_empty(),
-            "helper produced no Annex-B"
+            out.windows(4)
+                .any(|bytes| bytes[..3] == [0, 0, 1] && bytes[3] & 0x1f == 5),
+            "first submitted frame did not produce an Annex-B IDR"
         );
     }
 }

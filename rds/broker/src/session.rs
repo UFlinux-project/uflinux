@@ -6,7 +6,9 @@
 //! fork/execs the session binary and hands it exactly two descriptors:
 //!
 //! * **fd 3** — the accepted client socket, in blocking mode. The child speaks
-//!   RDP on it and must not assume anything about the listening socket.
+//!   RDP on it and must not assume anything about the listening socket: it is a
+//!   TCP socket for a native RDP connection and an `AF_UNIX` socket for one the
+//!   web gateway relayed.
 //! * **fd 4** — one end of an `AF_UNIX` `SOCK_DGRAM` socketpair. The other end
 //!   stays with the broker. Writes are optional: a child that never writes
 //!   still appears in the roster, just with less detail.
@@ -23,16 +25,13 @@
 //! session binary can re-read `/etc/uflinux/rds.json` for codec policy without
 //! knowing anything about the broker's internals.
 
-use std::os::fd::AsRawFd;
-use std::os::fd::FromRawFd;
-use std::os::fd::RawFd;
+use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
 use std::path::Path;
 use std::process::Stdio;
 
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::io::Interest;
-use tokio::net::TcpStream;
 use tokio::net::UnixDatagram;
 use tokio::process::Command;
 
@@ -41,6 +40,28 @@ use crate::state::State;
 
 /// Size of the buffer used to read child status frames.
 const FRAME_MAX: usize = 4096;
+
+/// Which listener a connection arrived on, told to the child as `--transport`.
+///
+/// The labels are the same strings the roster and the Settings UI use, and the
+/// same ones the session binary's own `Transport` parses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Transport {
+    /// The TCP RDP listener: the session host terminates TLS itself.
+    Rdp,
+    /// The unix socket the web gateway relays into: TLS is already done.
+    Web,
+}
+
+impl Transport {
+    /// The label passed to the child and shown in the roster.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rdp => "rdp",
+            Self::Web => "web",
+        }
+    }
+}
 
 /// One status frame from a session child.
 ///
@@ -127,12 +148,37 @@ pub(crate) struct Spawned {
     pub(crate) status: UnixDatagram,
 }
 
+/// An accepted connection the broker can hand a child: either listener's
+/// socket, since the child only ever sees a descriptor.
+///
+/// A trait rather than an enum because the two tokio socket types share no
+/// constructor, and the broker needs nothing from them but the descriptor.
+pub(crate) trait ClientSocket: Send + 'static {
+    /// Detach from the reactor and give up ownership of the descriptor.
+    fn into_client_fd(self) -> std::io::Result<RawFd>;
+}
+
+impl ClientSocket for tokio::net::TcpStream {
+    fn into_client_fd(self) -> std::io::Result<RawFd> {
+        self.into_std().map(IntoRawFd::into_raw_fd)
+    }
+}
+
+impl ClientSocket for tokio::net::UnixStream {
+    fn into_client_fd(self) -> std::io::Result<RawFd> {
+        self.into_std().map(IntoRawFd::into_raw_fd)
+    }
+}
+
 /// Fork/exec the session binary for an already-accepted connection.
 ///
 /// `config_path` is passed through so the child can read the codec policy
 /// itself; `session_command` is the program the child should put on the
-/// display, forwarded verbatim. The caller registers the child in the roster
-/// using the returned pid and then hands the whole bundle to [`watch`].
+/// display, forwarded verbatim; `transport` names the listener the connection
+/// arrived on, which is the only thing the child cannot learn from the socket
+/// itself and what decides whether it terminates TLS. The caller registers the
+/// child in the roster using the returned pid and then hands the whole bundle
+/// to [`watch`].
 ///
 /// # File descriptors
 ///
@@ -140,14 +186,20 @@ pub(crate) struct Spawned {
 /// are installed with `dup2` inside `pre_exec`, which tokio runs after the
 /// stdio redirections, so stdin/stdout/stderr stay inherited from the broker
 /// (i.e. the daemon's log) and only the two protocol descriptors are added.
-pub(crate) fn spawn(
+pub(crate) fn spawn<S>(
     binary: &Path,
     config_path: &Path,
     session_command: &str,
-    stream: TcpStream,
-) -> Result<Spawned> {
-    let client = stream
-        .into_std()
+    stream: S,
+    transport: Transport,
+) -> Result<Spawned>
+where
+    S: ClientSocket,
+{
+    // The accepted socket leaves the tokio reactor here and becomes a plain
+    // descriptor for the child.
+    let client_fd = stream
+        .into_client_fd()
         .map_err(|e| Error::io("hand off client socket", &e))?;
 
     let mut pair = [0 as RawFd; 2];
@@ -186,15 +238,17 @@ pub(crate) fn spawn(
         .arg(config_path)
         .arg("--session-command")
         .arg(session_command)
+        .arg("--transport")
+        .arg(transport.as_str())
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .env("UFLINUX_RDS_CLIENT_FD", "3")
         .env("UFLINUX_RDS_STATUS_FD", "4")
         .env("UFLINUX_RDS_CONFIG", config_path)
-        .env("UFLINUX_RDS_SESSION_COMMAND", session_command);
+        .env("UFLINUX_RDS_SESSION_COMMAND", session_command)
+        .env("UFLINUX_RDS_TRANSPORT", transport.as_str());
 
-    let client_fd = client.as_raw_fd();
     // SAFETY: the closure only calls async-signal-safe functions (`fcntl`,
     // `dup2`) on descriptors owned by the child, and tokio runs it after the
     // fork and after the stdio redirections.
@@ -231,7 +285,12 @@ pub(crate) fn spawn(
         Err(e) => {
             // A `pre_exec` failure surfaces here. The child never ran, so the
             // fds are still ours to release.
-            drop(client);
+            // SAFETY: client_fd was never handed to a child process.
+            unsafe {
+                drop(<std::os::unix::net::UnixStream as FromRawFd>::from_raw_fd(
+                    client_fd,
+                ))
+            };
             // SAFETY: child_fd was never handed to a child process.
             unsafe { drop(<std::os::unix::net::UnixDatagram as FromRawFd>::from_raw_fd(child_fd)) };
             return Err(Error::io("spawn session binary", &e));
@@ -248,6 +307,12 @@ pub(crate) fn spawn(
 /// The pid of a spawned child, for the roster.
 pub(crate) fn pid_of(child: &tokio::process::Child) -> u32 {
     child.id().unwrap_or(0)
+}
+
+/// Remove a web listener's socket file. Called when the listener stops; a
+/// stale file left behind is unlinked by the next bind.
+pub(crate) fn remove_socket(path: &Path) {
+    let _ = std::fs::remove_file(path);
 }
 
 /// Track a spawned child: read its status frames and remove the roster row when
@@ -366,6 +431,14 @@ pub(crate) fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_transport_labels_are_what_the_session_host_expects() {
+        // `--transport` is parsed by the session host's `Transport`, so these
+        // strings are a wire contract between the two binaries.
+        assert_eq!(Transport::Rdp.as_str(), "rdp");
+        assert_eq!(Transport::Web.as_str(), "web");
+    }
 
     #[test]
     fn a_partial_frame_leaves_the_other_fields_alone() {

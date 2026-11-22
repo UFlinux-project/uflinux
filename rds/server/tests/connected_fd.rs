@@ -58,6 +58,22 @@ fn invocation() -> Vec<String> {
     ]
 }
 
+/// Hands `accepted` to `child` as its client descriptor and lets the host see
+/// the hang-up, so a session that never gets past X.224 still ends.
+///
+/// The desktop is only started once a login has been validated, so a client
+/// that says nothing leaves the host waiting on the socket; without this the
+/// test would wait for a protocol the client never speaks.
+fn hang_up(client: &mut std::net::TcpStream) {
+    client
+        .shutdown(std::net::Shutdown::Write)
+        .expect("half-close");
+    let mut buf = [0u8; 64];
+    // Either an EOF or whatever the host chose to say first: both mean the
+    // descriptor reached the child and the child gave up on it.
+    let _ = client.read(&mut buf);
+}
+
 #[test]
 fn a_live_client_socket_is_registered_without_panicking() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -92,8 +108,7 @@ fn a_live_client_socket_is_registered_without_panicking() {
     client
         .set_read_timeout(Some(DEADLINE))
         .expect("read timeout on the client side");
-    let mut buf = [0u8; 64];
-    let _ = client.read(&mut buf);
+    hang_up(&mut client);
 
     let output = child.wait_with_output().expect("wait for the session host");
     let stderr = String::from_utf8_lossy(&output.stderr);

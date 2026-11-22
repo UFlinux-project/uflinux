@@ -3,32 +3,125 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#191919" />
+    <meta name="color-scheme" content="dark" />
     <title>UFLinux RDS — Sign in</title>
     <link rel="stylesheet" href="/assets/app.css" />
   </head>
   <body>
+    <header class="header">
+      <h1 class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="wordmark">UFlinux<span class="brand-dot">.</span></span>
+      </h1>
+      <nav aria-label="Site">
+        <a href="https://uflinux.org/">Desktop</a>
+        <a href="https://uflinux.org/releases">Releases</a>
+        <a href="/" aria-current="page">Remote desktop</a>
+      </nav>
+    </header>
+
     <main>
-      <form class="card" id="login" autocomplete="on">
-        <p class="label"><b>01 /</b> uflinux rds</p>
-        <h1>Sign in</h1>
-        <p class="hint">Less noise. More Linux. One session, straight to your desktop.</p>
+      <section class="hero">
+        <div class="hero-content">
+          <div class="hero-copy">
+            <p class="release-pill">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span>gateway online · sessions are single-use</span>
+            </p>
+            <p class="eyebrow">THE DESKTOP, REMOTE</p>
+            <h1>Less noise.<br />More Linux.</h1>
+            <p class="lead">
+              Sign in with your UFLinux account and the gateway opens one labwc session for you. No
+              client to install, nothing left behind when you leave.
+            </p>
+          </div>
 
-        <label class="field">
-          <span>username</span>
-          <input id="username" name="username" type="text" autocomplete="username" required />
-        </label>
+          <form class="panel" id="login" autocomplete="on">
+            <p class="eyebrow">SIGN IN</p>
 
-        <label class="field">
-          <span>password</span>
-          <input id="password" name="password" type="password" autocomplete="current-password" required />
-        </label>
+            <label class="field">
+              <span>USERNAME</span>
+              <input id="username" name="username" type="text" autocomplete="username" required />
+            </label>
 
-        <button id="submit" type="submit">Connect</button>
-        <p class="status" id="status" role="status" aria-live="polite"></p>
+            <label class="field">
+              <span>PASSWORD</span>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+              />
+            </label>
 
-        <p class="foot">02 / session token is single-use · nothing is stored on the server</p>
-      </form>
+            <div class="actions">
+              <button class="button" id="submit" type="submit">Connect</button>
+            </div>
+
+            <p class="status" id="status" role="status" aria-live="polite"></p>
+          </form>
+        </div>
+
+        <p class="hero-bottom">
+          <span>ALPINE LINUX + LABWC</span>
+          <span>TOKEN IS SINGLE-USE</span>
+        </p>
+      </section>
+
+      <section class="section">
+        <div class="section-heading">
+          <p class="eyebrow">HOW IT WORKS</p>
+          <h2>Everything in its place.</h2>
+          <p>
+            The gateway holds the session, not your data. Credentials go to PAM once, the token is
+            spent on the first frame, and the stream ends when you close the tab.
+          </p>
+        </div>
+
+        <div class="features">
+          <article>
+            <span class="feature-number">01 /</span>
+            <h3>One sign-in</h3>
+            <p>
+              Your distro account is the only account. PAM checks it, and the same password unlocks
+              the remote desktop.
+            </p>
+          </article>
+          <article>
+            <span class="feature-number">02 /</span>
+            <h3>Nothing to install</h3>
+            <p>
+              The desktop is decoded in the browser by the gateway's own WebAssembly module. No
+              plugin, no download, no third-party script.
+            </p>
+          </article>
+          <article>
+            <span class="feature-number">03 /</span>
+            <h3>Gone when you go</h3>
+            <p>
+              Closing the tab disconnects the session and burns the token. Nothing is kept on the
+              server between visits.
+            </p>
+          </article>
+        </div>
+      </section>
     </main>
+
+    <footer>
+      <div>
+        <h3>Simple by design.</h3>
+        <p>Alpine Linux + labwc, served from a machine you control.</p>
+      </div>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="https://uflinux.org/">uflinux.org</a>
+        <a href="https://uflinux.org/releases">Releases</a>
+        <a href="/">Remote desktop</a>
+      </nav>
+      <small>UFLinux Remote Desktop Service</small>
+    </footer>
+
     <script src="/assets/login.js"></script>
   </body>
 </html>

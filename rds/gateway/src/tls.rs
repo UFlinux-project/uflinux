@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -267,13 +268,40 @@ fn display(path: &Path) -> String {
     path.display().to_string()
 }
 
+/// How long a client may take to finish the TLS handshake.
+///
+/// Without a deadline a client that opens a socket and sends nothing holds the
+/// handshake slot (and, before this bound existed, the accept loop) for as
+/// long as the kernel's TCP timeout. Five seconds is generous for a full TLS
+/// 1.3 handshake plus client-auth round trips on a congested link, and short
+/// enough that a stalled or malicious client cannot sit on a slot for minutes.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How many handshakes may be in flight at once.
+///
+/// A handshake is CPU work (signature verification) on a shared runtime, and
+/// every in-flight one is a client that has not yet become a request. Thirty
+/// two is far more than a console needs — a page load opens a handful of
+/// sockets — while keeping the cost of a connection flood bounded instead of
+/// letting it starve the sessions already being served.
+const MAX_CONCURRENT_HANDSHAKES: usize = 32;
+
 /// A [`TcpListener`] that hands out accepted TLS connections.
 ///
 /// Implements [`axum::serve::Listener`] so `axum::serve` can be used without
 /// `axum-server`.
+///
+/// Handshakes run in their own tasks, bounded by [`MAX_CONCURRENT_HANDSHAKES`]
+/// and bounded in time by [`HANDSHAKE_TIMEOUT`], so one stalled client cannot
+/// delay anybody else's connection. Completed handshakes arrive on `done`.
 pub struct TlsListener {
     listener: TcpListener,
     acceptor: TlsAcceptor,
+    handshakes: Arc<tokio::sync::Semaphore>,
+    done: tokio::sync::mpsc::UnboundedReceiver<(TlsStream, SocketAddr)>,
+    /// Kept so the channel never closes while the listener is alive.
+    completed: tokio::sync::mpsc::UnboundedSender<(TlsStream, SocketAddr)>,
+    handshake_timeout: Duration,
 }
 
 /// Accepted TLS connection.
@@ -285,19 +313,22 @@ impl axum::serve::Listener for TlsListener {
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
-            match self.listener.accept().await {
-                Ok((stream, peer)) => match self.acceptor.accept(stream).await {
-                    Ok(tls) => return (tls, peer),
+            tokio::select! {
+                // Prefer delivering a finished handshake over taking another
+                // connection: the queue is what backpressure is measured on.
+                biased;
+                finished = self.done.recv() => match finished {
+                    Some(accepted) => return accepted,
+                    // Only closed by dropping the sender we hold ourselves.
+                    None => continue,
+                },
+                accepted = self.listener.accept() => match accepted {
+                    Ok((stream, peer)) => self.spawn_handshake(stream, peer),
                     Err(e) => {
-                        // Handshake failures (scans, wrong scheme, expired
-                        // client probes) are routine; keep listening.
-                        tracing::debug!(%peer, "TLS handshake failed: {e}");
+                        tracing::warn!("accept failed: {e}");
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
                 },
-                Err(e) => {
-                    tracing::warn!("accept failed: {e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
             }
         }
     }
@@ -310,10 +341,43 @@ impl axum::serve::Listener for TlsListener {
 impl TlsListener {
     /// Wrap a bound listener with TLS.
     pub fn new(listener: TcpListener, config: rustls::ServerConfig) -> Self {
+        let (completed, done) = tokio::sync::mpsc::unbounded_channel();
         Self {
             listener,
             acceptor: TlsAcceptor::from(Arc::new(config)),
+            handshakes: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_HANDSHAKES)),
+            done,
+            completed,
+            handshake_timeout: HANDSHAKE_TIMEOUT,
         }
+    }
+
+    /// Start the handshake for one connection, or drop the connection if no
+    /// slot is free. Dropping `stream` closes the socket: a client that cannot
+    /// be served now can reconnect.
+    fn spawn_handshake(&self, stream: TcpStream, peer: SocketAddr) {
+        let Ok(permit) = Arc::clone(&self.handshakes).try_acquire_owned() else {
+            tracing::debug!(%peer, "TLS handshake limit reached, dropping connection");
+            return;
+        };
+        let acceptor = self.acceptor.clone();
+        let completed = self.completed.clone();
+        let timeout = self.handshake_timeout;
+        tokio::spawn(async move {
+            // The permit lives exactly as long as the handshake.
+            let _permit = permit;
+            match tokio::time::timeout(timeout, acceptor.accept(stream)).await {
+                Ok(Ok(tls)) => {
+                    let _ = completed.send((tls, peer));
+                }
+                Ok(Err(e)) => {
+                    // Handshake failures (scans, wrong scheme, expired client
+                    // probes) are routine; keep listening.
+                    tracing::debug!(%peer, "TLS handshake failed: {e}");
+                }
+                Err(_) => tracing::debug!(%peer, "TLS handshake timed out"),
+            }
+        });
     }
 }
 
@@ -476,6 +540,7 @@ type _Pkcs8 = PrivatePkcs8KeyDer<'static>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::serve::Listener as _;
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("uflinux-rds-gw-{tag}-{}", std::process::id()));
@@ -654,6 +719,188 @@ mod tests {
         let server = Server::bind(&config, &dir).unwrap();
         let addr = server.local_addr().unwrap();
         assert_ne!(addr.port(), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Verifier that accepts any certificate: the gateway uses a self-signed
+    /// certificate, and these tests care about the handshake, not the chain.
+    #[derive(Debug)]
+    struct AnyCert;
+
+    impl rustls::client::danger::ServerCertVerifier for AnyCert {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &rustls::pki_types::ServerName<'_>,
+            _ocsp: &[u8],
+            _now: rustls::pki_types::UnixTime,
+        ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error>
+        {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+        {
+            rustls::crypto::verify_tls12_signature(message, cert, dss, &signature_algorithms())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+        {
+            rustls::crypto::verify_tls13_signature(message, cert, dss, &signature_algorithms())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            signature_algorithms().supported_schemes()
+        }
+    }
+
+    fn signature_algorithms() -> rustls::crypto::WebPkiSupportedAlgorithms {
+        rustls::crypto::ring::default_provider().signature_verification_algorithms
+    }
+
+    fn tls_connector() -> tokio_rustls::TlsConnector {
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("ring supports every protocol version")
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AnyCert))
+            .with_no_client_auth();
+        tokio_rustls::TlsConnector::from(Arc::new(config))
+    }
+
+    /// A TLS listener on port 0, plus its address.
+    async fn tls_listener(tag: &str) -> (TlsListener, SocketAddr, std::path::PathBuf) {
+        let dir = temp_dir(tag);
+        let mut config = Config::default();
+        config.web.https = true;
+        config.web.bind = "127.0.0.1".into();
+        config.web.port = 0;
+        let server = Server::bind(&config, &dir).unwrap();
+        let addr = server.local_addr().unwrap();
+        let Listener::Tls(listener) = server.into_listener() else {
+            panic!("https config must produce a TLS listener");
+        };
+        (listener, addr, dir)
+    }
+
+    #[tokio::test]
+    async fn a_stalled_client_does_not_hold_up_the_next_one() {
+        let (mut listener, addr, dir) = tls_listener("listener-stalled").await;
+        // Long enough that a sequential implementation could not accidentally
+        // finish inside the window we measure.
+        listener.handshake_timeout = Duration::from_secs(2);
+
+        // A client that opens a socket and then says nothing at all.
+        let stalled = TcpStream::connect(addr).await.unwrap();
+        let stalled_peer = stalled.peer_addr().unwrap();
+
+        let client = TcpStream::connect(addr).await.unwrap();
+        let expected = client.local_addr().unwrap();
+        let name = rustls::pki_types::ServerName::try_from("localhost".to_owned()).unwrap();
+        let handshake = async move { tls_connector().connect(name, client).await };
+
+        let started = std::time::Instant::now();
+        let (accepted, client_side) = tokio::join!(listener.accept(), handshake);
+        let elapsed = started.elapsed();
+
+        assert!(client_side.is_ok(), "the client handshake should succeed");
+        assert_eq!(accepted.1, expected, "the live client is served first");
+        assert_ne!(accepted.1, stalled_peer);
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "a stalled client held the listener for {elapsed:?} \
+             (handshake timeout is two seconds)"
+        );
+
+        drop(stalled);
+        drop(listener);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn handshake_permits_come_back_when_a_handshake_times_out() {
+        let (mut listener, addr, dir) = tls_listener("listener-permits").await;
+        listener.handshake_timeout = Duration::from_millis(50);
+        let permits = Arc::clone(&listener.handshakes);
+
+        // Two clients that connect and then say nothing.
+        let stalled_a = TcpStream::connect(addr).await.unwrap();
+        let stalled_b = TcpStream::connect(addr).await.unwrap();
+
+        // The accept loop never returns: no handshake completes.
+        let serving = tokio::spawn(async move {
+            let mut listener = listener;
+            loop {
+                listener.accept().await;
+            }
+        });
+
+        let mut held = false;
+        for _ in 0..100 {
+            if permits.available_permits() < MAX_CONCURRENT_HANDSHAKES {
+                held = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            held,
+            "the two stalled clients should be holding handshake slots"
+        );
+
+        let mut freed = false;
+        for _ in 0..100 {
+            if permits.available_permits() == MAX_CONCURRENT_HANDSHAKES {
+                freed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            freed,
+            "a timed-out handshake must release its permit, leaving {} slots used",
+            MAX_CONCURRENT_HANDSHAKES - permits.available_permits()
+        );
+
+        serving.abort();
+        drop((stalled_a, stalled_b));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_full_handshake_pool_refuses_without_stalling_the_listener() {
+        let (mut listener, addr, dir) = tls_listener("listener-full").await;
+        listener.handshake_timeout = Duration::from_secs(30);
+        // Everything is taken, so the next connection is dropped rather than
+        // queued behind the clients already handshaking.
+        listener.handshakes = Arc::new(tokio::sync::Semaphore::new(0));
+
+        let noisy = TcpStream::connect(addr).await.unwrap();
+        let probe = async { listener.accept().await };
+        tokio::select! {
+            _ = probe => panic!("no handshake can complete"),
+            () = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+        // The socket was accepted and then closed by the dropped stream.
+        let mut buf = [0u8; 1];
+        use tokio::io::AsyncReadExt;
+        let mut noisy = noisy;
+        let read = noisy.read(&mut buf).await.unwrap();
+        assert_eq!(read, 0, "the over-limit connection is closed");
+
+        drop(listener);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
