@@ -41,7 +41,10 @@ plus the recording target, quality preset, audio source and frame rate. The rema
 recording options live behind an Advanced expander, mirroring the backend's own frontend;
 the expander state is itself a preference. The page also reports whether the
 `gpu-screen-recorder` backend was detected and can re-run that probe. Print Screen opens
-the capture overlay, and Shift or Ctrl plus Print Screen starts a recording straight away.
+the dimmed capture overlay with Screen, Window, and Area modes. Record supports Screen
+and Area. Shift or Ctrl plus Print Screen starts a screen recording directly when Screen
+is selected in Settings. Click the red timer in the taskbar to stop the recording, or
+right-click it to pause and resume.
 Hardware encoding needs a VA-API driver; the desktop meta ships the Mesa gallium driver
 plus both Intel VA-API drivers (x86) so recording works out of the box on AMD and Intel GPUs.
 On boards whose encoder is the Qualcomm Iris/Venus V4L2 device (for example the Arrow

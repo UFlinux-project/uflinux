@@ -190,7 +190,7 @@ enable_service() {
 }
 
 enable_service sysinit devfs dmesg udev udev-trigger udev-settle hwdrivers
-enable_service boot hwclock modules sysctl hostname bootmisc syslog uflinux-device uflinux-zram
+enable_service boot hwclock modules sysctl hostname bootmisc syslog uflinux-device uflinux-zram gsr-kms-capability
 enable_service default dbus elogind iwd connman connman-vpn bluetooth tlp uflinux-acpid uflinux-routes greetd
 enable_service shutdown killprocs mount-ro
 

@@ -233,10 +233,12 @@ def device_snapshot(source, destination, *, rootfs=False):
     """Copy an installed rootfs into an image staging tree, minus build artefacts."""
     destination.mkdir(parents=True, exist_ok=True)
     excludes = [f"--exclude=./{name}" for name in DEVICE_ROOT_EXCLUDES]
-    reader = subprocess.Popen(("tar", "-C", str(source), *excludes, "-p", "-f", "-", "-c", "."),
+    # The GPU screen recorder's KMS helper relies on a file capability.
+    xattrs = ("--xattrs", "--xattrs-include=security.capability") if rootfs else ()
+    reader = subprocess.Popen(("tar", "-C", str(source), *excludes, *xattrs, "-p", "-f", "-", "-c", "."),
                               stdout=subprocess.PIPE)
     writer = subprocess.Popen(("tar", "-C", str(destination), "--numeric-owner",
-                               "-xpf", "-"), stdin=reader.stdout)
+                               *xattrs, "-xpf", "-"), stdin=reader.stdout)
     reader.stdout.close()
     writer.communicate()
     reader.wait()

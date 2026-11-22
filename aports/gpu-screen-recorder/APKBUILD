@@ -2,18 +2,18 @@
 # Upstream 6.1.7 plus the UFLinux patch series (V4L2 mem2mem encoder, WebP screenshots).
 pkgname=gpu-screen-recorder
 pkgver=6.1.7
-pkgrel=2
+pkgrel=3
 pkgdesc="GPU screen capture backend for uflinux-screencapture"
 url="https://git.dec05eba.com/gpu-screen-recorder/about/"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
 license="GPL-3.0-only"
-depends="dbus-libs ffmpeg-libs libcap2 libdrm libpulse libturbojpeg libwebp
+depends="dbus-libs ffmpeg-libs libcap2 libcap-setcap libdrm libpulse libturbojpeg libwebp
 	libx11 libxcomposite libxdamage libxfixes libxrandr mesa-egl mesa-gbm mesa-gl
 	pipewire-libs wayland-libs-client wayland-libs-egl vulkan-loader"
 makedepends="build-base meson abuild-meson ninja pkgconfig linux-headers vulkan-headers
 	ffmpeg-dev libx11-dev libxcomposite-dev libxrandr-dev libxfixes-dev libxdamage-dev
 	wayland-dev libdrm-dev dbus-dev pulseaudio-dev libva-dev libcap-dev mesa-dev
-	pipewire-dev libcap-setcap"
+	pipewire-dev"
 subpackages="$pkgname-dbg $pkgname-doc $pkgname-dev"
 # The KMS capture server needs CAP_SYS_ADMIN; ship the file capability so that
 # direct monitor capture works for a normal user without a setuid root helper.
@@ -28,7 +28,9 @@ source="$pkgname-$pkgver.tar.gz::https://dec05eba.com/snapshot/gpu-screen-record
 	0007-info-report-v4l2-mem2mem-encoders.patch
 	0008-Add-webp-screenshot-support.patch
 	0009-Docs-document-v4l2-encoder-and-webp-screenshots.patch
-	0010-Encoder-align-v4l2-m2m-capture-for-Qualcomm-venus.patch"
+	0010-Encoder-align-v4l2-m2m-capture-for-Qualcomm-venus.patch
+	0011-Check-recording-video-output.patch
+	gsr-kms-capability.initd"
 # The upstream snapshot has no leading directory component.
 builddir="$srcdir"
 
@@ -61,6 +63,7 @@ check() {
 package() {
 	DESTDIR="$pkgdir" meson install -C build
 	setcap cap_sys_admin+ep "$pkgdir/usr/bin/gsr-kms-server"
+	install -Dm755 "$srcdir/gsr-kms-capability.initd" "$pkgdir/etc/init.d/gsr-kms-capability"
 }
 
 sha512sums="
@@ -75,4 +78,6 @@ d91976e4f2c1876f3c786f62addbafdf5e0b7e67c5db7fa5d04e858a747a3ca5dcb8ed0e3c2114a1
 bce60884c450802c1e34cc740342fc156090068c6afb59991da1164733a862377ae6b5085c5f45c31208eac392527e99c2af87d0b2cb163be3ab2029841b60ee  0008-Add-webp-screenshot-support.patch
 61a9ec74fcc76e7d5ab2b942904b7b668c269739d46a2784ad94b439a4ebf0ee90ddea2f3d7eea454c4de3adddb91cd9f24a6ca3a188655da901132d154bf80f  0009-Docs-document-v4l2-encoder-and-webp-screenshots.patch
 f54cbce46a8eab9396c4aed2f9ab7af6a8247ebf31ecf0b7f10b980fb74681e2f28a7abc0f977b397a08a6518990f83c953400d990dec65e8ccea90cebbe3060  0010-Encoder-align-v4l2-m2m-capture-for-Qualcomm-venus.patch
+54bb1c3610b9418ca8413ea18830f201684732f99c33f55f29fd0c23d90b0c400e08f7af7b1e2fd8dda6c0ab6ace653e1fde06c64cd7b115d03d104461b1bb06  0011-Check-recording-video-output.patch
+28c1aeb36adcf1ea408f0273f1143bcd18bedc39f63ddc86c86305f39752beed27f426b76ee9d8033b204e9d39a63880ee7142ebe9c668bb049db5d5d3310cc3  gsr-kms-capability.initd
 "

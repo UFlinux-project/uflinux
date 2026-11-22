@@ -1,10 +1,12 @@
 """Device disk images are laid out, described and checked deterministically."""
 import contextlib
+import errno
 import gzip
 import io
 import json
 from pathlib import Path
 import os
+import struct
 import sys
 import tempfile
 import unittest
@@ -89,6 +91,25 @@ class DeviceRootfsTests(unittest.TestCase):
                 self.assertEqual((destination / name).stat().st_mode & 0o777, 0o755)
             self.assertFalse((destination / "project").exists())
             self.assertEqual((destination / "etc/hostname").read_text(), "uflinux-test\n")
+
+    def test_root_snapshot_preserves_file_capabilities(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            source.mkdir()
+            helper = source / "helper"
+            helper.touch()
+            # Linux v2 file capability with CAP_NET_BIND_SERVICE permitted/effective.
+            capability = struct.pack("<IIIII", 0x02000001, 1 << 10, 0, 0, 0)
+            try:
+                os.setxattr(helper, "security.capability", capability)
+            except OSError as error:
+                if error.errno in (errno.EPERM, errno.EACCES, errno.ENOTSUP):
+                    self.skipTest("test requires a filesystem and user with file capability support")
+                raise
+            destination = Path(temporary) / "rootfs"
+            builder.device_snapshot(source, destination, rootfs=True)
+            self.assertEqual(os.getxattr(destination / helper.name, "security.capability"),
+                             os.getxattr(helper, "security.capability"))
 
     def test_esp_snapshot_does_not_gain_root_mountpoints(self):
         with tempfile.TemporaryDirectory() as temporary:

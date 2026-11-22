@@ -26,7 +26,7 @@ class KeybindTests(unittest.TestCase):
 
 
 class PortalTests(unittest.TestCase):
-    """Window capture reaches the wlr portal through two packaged drop-ins."""
+    """Screen sharing uses the wlr portal through two packaged drop-ins."""
 
     def setUp(self):
         self.apkbuild = read(UFLINUX / 'APKBUILD')

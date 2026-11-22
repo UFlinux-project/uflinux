@@ -1,0 +1,169 @@
+diff --git a/include/encoder/encoder.h b/include/encoder/encoder.h
+index 54b558d..65c9a69 100644
+--- a/include/encoder/encoder.h
++++ b/include/encoder/encoder.h
+@@ -52,7 +52,8 @@ bool gsr_encoder_init(gsr_encoder *self, gsr_replay_storage replay_storage, size
+ */
+ void gsr_encoder_deinit(gsr_encoder *self, bool exiting);
+ 
+-void gsr_encoder_receive_packets(gsr_encoder *self, AVCodecContext *codec_context, int64_t pts, int stream_index);
++/* Returns true once a packet has been written to a recording destination. */
++bool gsr_encoder_receive_packets(gsr_encoder *self, AVCodecContext *codec_context, int64_t pts, int stream_index);
+ 
+ /* Returns the id to the recording destination, or -1 on error */
+ size_t gsr_encoder_add_recording_destination(gsr_encoder *self, AVCodecContext *codec_context, AVFormatContext *format_context, AVStream *stream, int64_t first_pts);
+diff --git a/include/recorder/error.h b/include/recorder/error.h
+index ba2ae1d..40a2579 100644
+--- a/include/recorder/error.h
++++ b/include/recorder/error.h
+@@ -13,7 +13,8 @@ typedef enum {
+     GSR_ERROR_MONITOR_NOT_FOUND = -51,
+     GSR_ERROR_NO_VIDEO_CODEC_AVAILABLE = -52,
+     GSR_ERROR_VIDEO_CODEC_RESOLUTION_UNSUPPORTED = -53,
+-    GSR_ERROR_VIDEO_CODEC_UNSUPPORTED = -54
++    GSR_ERROR_VIDEO_CODEC_UNSUPPORTED = -54,
++    GSR_ERROR_NO_VIDEO_WRITTEN = -55
+ } gsr_error;
+ 
+ static inline int gsr_error_to_exit_code(int error) {
+diff --git a/src/cli/main.c b/src/cli/main.c
+index 41d709f..82af85b 100644
+--- a/src/cli/main.c
++++ b/src/cli/main.c
+@@ -498,7 +498,9 @@ static int record(args_parser *arg_parser, gsr_windowing *windowing, gsr_capture
+     if(run_result == GSR_ERROR_OK)
+         run_result = gsr_recorder_run(recorder);
+ 
+-    gsr_ipc_complete_request(ipc, GSR_IPC_DEFERRED_REQUEST_STOP, true, arg_parser->settings.is_replaying ? NULL : arg_parser->settings.filename);
++    const bool saved = run_result == GSR_ERROR_OK;
++    const char *stop_reply = !saved ? "Recording failed" : (arg_parser->settings.is_replaying ? NULL : arg_parser->settings.filename);
++    gsr_ipc_complete_request(ipc, GSR_IPC_DEFERRED_REQUEST_STOP, saved, stop_reply);
+     gsr_ipc_stop(ipc);
+     gsr_recorder_destroy(recorder, true);
+     recorder = NULL;
+diff --git a/src/encoder/encoder.c b/src/encoder/encoder.c
+index 4d5a1aa..a8fe9a4 100644
+--- a/src/encoder/encoder.c
++++ b/src/encoder/encoder.c
+@@ -123,7 +123,8 @@ static int64_t gsr_encoder_get_packet_timestamp(const AVCodecContext *codec_cont
+     return sent_frame_pts;
+ }
+ 
+-void gsr_encoder_receive_packets(gsr_encoder *self, AVCodecContext *codec_context, int64_t pts, int stream_index) {
++bool gsr_encoder_receive_packets(gsr_encoder *self, AVCodecContext *codec_context, int64_t pts, int stream_index) {
++    bool wrote_packet = false;
+     for(;;) {
+         AVPacket *av_packet = av_packet_alloc();
+         if(!av_packet)
+@@ -195,9 +196,10 @@ void gsr_encoder_receive_packets(gsr_encoder *self, AVCodecContext *codec_contex
+                 // TODO: Is av_interleaved_write_frame needed?. Answer: might be needed for mkv but dont use it! it causes frames to be inconsistent, skipping frames and duplicating frames.
+                 // TODO: av_interleaved_write_frame might be needed for cfr, or always for flv
+                 const int ret = av_write_frame(recording_destination->format_context, av_packet);
+-                if(ret >= 0)
++                if(ret >= 0) {
++                    wrote_packet = true;
+                     gsr_av_format_context_mark_packet_written(recording_destination->format_context);
+-                if(ret < 0) {
++                } else {
+                     char error_buffer[AV_ERROR_MAX_STRING_SIZE];
+                     if(av_strerror(ret, error_buffer, sizeof(error_buffer)) < 0)
+                         snprintf(error_buffer, sizeof(error_buffer), "Unknown error");
+@@ -220,6 +222,7 @@ void gsr_encoder_receive_packets(gsr_encoder *self, AVCodecContext *codec_contex
+             break;
+         }
+     }
++    return wrote_packet;
+ }
+ 
+ size_t gsr_encoder_add_recording_destination(gsr_encoder *self, AVCodecContext *codec_context, AVFormatContext *format_context, AVStream *stream, int64_t first_pts) {
+diff --git a/src/recorder/recorder.c b/src/recorder/recorder.c
+index 6a9dc8a..e16ed23 100644
+--- a/src/recorder/recorder.c
++++ b/src/recorder/recorder.c
+@@ -106,6 +106,7 @@ struct gsr_recorder {
+     atomic_int save_replay_restart_replay;
+     bool should_stop_error;
+     bool force_iframe_frame;
++    bool wrote_video_packet;
+     int audio_max_frame_size;
+     bool use_damage_tracking;
+     gsr_damage damage;
+@@ -707,13 +708,14 @@ static void recorder_capture_and_encode_frame(gsr_recorder *self, bool damaged)
+             int ret = avcodec_send_frame(self->video_codec_context, self->video_frame);
+             if(ret == 0) {
+                 // TODO: Move to separate thread because this could write to network (for example when livestreaming)
+-                gsr_encoder_receive_packets(&self->encoder, self->video_codec_context, self->video_frame->pts, GSR_VIDEO_STREAM_INDEX);
++                self->wrote_video_packet |= gsr_encoder_receive_packets(&self->encoder, self->video_codec_context, self->video_frame->pts, GSR_VIDEO_STREAM_INDEX);
+             } else {
+                 gsr_log(GSR_LOG_LEVEL_ERROR, "avcodec_send_frame failed, error: %s", gsr_av_error_to_string(ret));
+             }
+ 
+             if(self->force_iframe_frame) {
+-                self->force_iframe_frame = false;
++                if(ret == 0)
++                    self->force_iframe_frame = false;
+                 self->video_frame->pict_type = AV_PICTURE_TYPE_NONE;
+             }
+         }
+@@ -895,7 +897,10 @@ int gsr_recorder_run(gsr_recorder *self) {
+ 
+     gsr_replay_save_init(&self->replay_save);
+ 
+-    self->force_iframe_frame = false;
++    // Some mem2mem encoders need a keyframe request at startup before
++    // their first GOP is decodable.
++    self->force_iframe_frame = self->settings.video_encoder == GSR_VIDEO_ENCODER_HW_V4L2;
++    self->wrote_video_packet = false;
+ 
+     gsr_recording_clock_start(self->recording_clock);
+     self->record_start_time = gsr_recording_clock_get_start_time(self->recording_clock);
+@@ -951,6 +956,8 @@ int gsr_recorder_run(gsr_recorder *self) {
+     }
+ 
+     gsr_recorder_stop_recording(self);
++    if(!self->settings.is_replaying && self->video_stream && !self->wrote_video_packet)
++        return GSR_ERROR_NO_VIDEO_WRITTEN;
+     return self->should_stop_error ? GSR_ERROR_CAPTURE_FAILED : GSR_ERROR_OK;
+ }
+ 
+@@ -958,8 +965,13 @@ static void gsr_recorder_flush_video(gsr_recorder *self) {
+     if(!self->video_codec_context || !self->video_frame)
+         return;
+ 
+-    if(avcodec_send_frame(self->video_codec_context, NULL) >= 0)
+-        gsr_encoder_receive_packets(&self->encoder, self->video_codec_context, self->video_frame->pts, GSR_VIDEO_STREAM_INDEX);
++    int ret = avcodec_send_frame(self->video_codec_context, NULL);
++    if(ret == AVERROR(EAGAIN)) {
++        self->wrote_video_packet |= gsr_encoder_receive_packets(&self->encoder, self->video_codec_context, self->video_frame->pts, GSR_VIDEO_STREAM_INDEX);
++        ret = avcodec_send_frame(self->video_codec_context, NULL);
++    }
++    if(ret >= 0)
++        self->wrote_video_packet |= gsr_encoder_receive_packets(&self->encoder, self->video_codec_context, self->video_frame->pts, GSR_VIDEO_STREAM_INDEX);
+ }
+ 
+ static void gsr_recorder_stop_recording(gsr_recorder *self) {
+@@ -995,13 +1007,18 @@ static void gsr_recorder_stop_recording(gsr_recorder *self) {
+         }
+     }
+ 
+-    // TODO: Replace this with start_recording_create_steams
+-    if(!self->settings.is_replaying && gsr_av_format_context_write_trailer(self->av_format_context) != 0) {
+-        //fprintf(stderr, "Failed to write trailer\n");
++    if(!self->settings.is_replaying) {
++        const int trailer_result = gsr_av_format_context_write_trailer(self->av_format_context);
++        if(trailer_result < 0) {
++            self->should_stop_error = true;
++            gsr_log(GSR_LOG_LEVEL_ERROR, "Failed to finalize the recording: %s", gsr_av_error_to_string(trailer_result));
++        }
++        const bool empty_video = self->video_stream && !self->wrote_video_packet;
++        if(empty_video)
++            gsr_log(GSR_LOG_LEVEL_ERROR, "The encoder did not write any video frames");
++        if(self->callbacks.recording_stopped)
++            self->callbacks.recording_stopped(empty_video || self->should_stop_error ? NULL : self->settings.filename, self->callbacks.userdata);
+     }
+-
+-    if(!self->settings.is_replaying && self->callbacks.recording_stopped)
+-        self->callbacks.recording_stopped(self->settings.filename, self->callbacks.userdata);
+ }
+ 
+ void gsr_recorder_destroy(gsr_recorder *self, bool exiting) {

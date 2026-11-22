@@ -1,14 +1,14 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-settings
 pkgver=0.1.0
-pkgrel=9
+pkgrel=10
 pkgdesc="UFLinux Settings, quick controls and resident Start menu"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
 license="GPL-3.0-only"
 depends="uflinux-desktop=$pkgver-r$pkgrel $pkgname-daemon=$pkgver-r$pkgrel $pkgname-system=$pkgver-r$pkgrel"
 makedepends="cargo cargo-auditable gtk4.0-dev gtk4-layer-shell-dev pulseaudio-dev polkit-dev
-	eudev-dev vulkan-loader-dev mesa-dev pkgconf"
+	eudev-dev vulkan-loader-dev mesa-dev libwebp-dev pkgconf"
 subpackages="$pkgname-dbg $pkgname-doc $pkgname-daemon:daemon $pkgname-system:system
 	$pkgname-system-openrc:system_openrc uflinux-installer-ui:installer_ui uflinux-desktop:desktop
 	uflinux-screencapture:screencapture"
@@ -94,7 +94,7 @@ desktop() {
 }
 screencapture() {
 	pkgdesc="UFLinux screenshot and screen recording tool"
-	depends="gpu-screen-recorder xdg-desktop-portal xdg-desktop-portal-wlr mako"
+	depends="gpu-screen-recorder>=6.1.7-r3 mako"
 	amove usr/bin/uflinux-screencapture usr/share/applications/org.uflinux.ScreenCapture.desktop
 }
 installer_ui() {

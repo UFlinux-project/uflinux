@@ -4,14 +4,19 @@
 mod backend;
 mod clipboard;
 mod flash;
-mod hud;
 mod output;
 mod overlay;
 mod prefs;
+mod recording;
+#[path = "../../shared/recording_bus.rs"]
+mod recording_bus;
 mod selection;
 mod shell;
+mod still;
+#[path = "../../shared/wayland_capture.rs"]
+mod wayland_capture;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -19,6 +24,7 @@ use std::time::Duration;
 use backend::{Job, Outcome, Recorder, Target};
 use gtk::gdk;
 use gtk::glib;
+use gtk::prelude::MonitorExt;
 use settings_core::{CONTAINERS, CaptureFormat, CaptureTarget, MAX_DELAY_SECONDS, ScreenCapture};
 
 const APP_ID: &str = "org.uflinux.ScreenCapture";
@@ -28,23 +34,25 @@ uflinux-screencapture - screenshot and screen recording
 
 Usage:
   uflinux-screencapture [options]                Show the capture chooser
-  uflinux-screencapture --screenshot [options]   Capture without asking
-  uflinux-screencapture --record [options]       Record without asking
+  uflinux-screencapture --screenshot [options]   Take a screenshot
+  uflinux-screencapture --record [options]       Start a recording
 
 Options:
   --target screen|window|area   What to capture (default: from settings)
   --delay SECONDS               Extra delay before capturing (max 30)
+  --stop                        Stop the active recording
   --silent                      Do not show a notification on failure
   -h, --help                    Show this help
 
 Screenshots are written to the folder configured in Settings and copied to the
-clipboard. A recording is controlled from the bar shown on screen.";
+clipboard. A recording is controlled from the taskbar.";
 
 /// What the process was asked to do.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Screenshot,
     Record,
+    Stop,
 }
 
 /// Command line state.
@@ -58,8 +66,8 @@ struct Options {
 thread_local! {
     /// The recorder of this process, so that a shutdown signal can stop it.
     static RECORDER: RefCell<Option<Recorder>> = const { RefCell::new(None) };
-    /// The control bar belonging to that recorder.
-    static HUD: RefCell<Option<hud::Hud>> = const { RefCell::new(None) };
+    static RESULT: Cell<ExitCode> = const { Cell::new(ExitCode::SUCCESS) };
+    static CONTROLS: RefCell<Option<recording::Controls>> = const { RefCell::new(None) };
 }
 
 fn main() -> ExitCode {
@@ -75,98 +83,106 @@ fn main() -> ExitCode {
         }
     };
 
-    if gtk::init().is_err() {
-        eprintln!("uflinux-screencapture: cannot connect to the display server");
-        return ExitCode::from(1);
+    if options.mode == Some(Mode::Stop) {
+        return match recording::stop() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("uflinux-screencapture: {error}");
+                ExitCode::from(1)
+            }
+        };
     }
 
-    let monitor = shell::pointed_monitor();
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        gdk::set_allowed_backends("wayland");
+    }
+    if gtk::init().is_err() || !gtk4_layer_shell::is_supported() {
+        return startup_error(
+            "Screen capture requires a Wayland session with layer shell",
+            options.silent,
+        );
+    }
+    let Some(monitor) = shell::pointed_monitor() else {
+        return startup_error("No screen available", options.silent);
+    };
     let mut prefs = prefs::load();
     if let Some(target) = options.target {
         prefs.target = target;
-    }
-    if let Err(error) = refresh().map(|_| ()) {
-        eprintln!("uflinux-screencapture: {error}");
-        return ExitCode::from(1);
     }
     shell::add_css();
     watch_shutdown_signals();
 
     let main_loop = glib::MainLoop::new(None, false);
-    // A direct capture honours --target, so `--screenshot --target area` still asks
-    // for a region. Recording a region is not offered; it falls back to the screen.
-    let direct = options.mode.map(|mode| {
-        let video = mode == Mode::Record;
-        match (video, prefs.target) {
-            (false, CaptureTarget::Window) => overlay::Choice::Still(Target::portal()),
-            (true, CaptureTarget::Window) => overlay::Choice::Video(Target::portal()),
-            (false, CaptureTarget::Area) => overlay::Choice::Area,
-            _ => {
-                let source = screen_target(monitor.as_ref());
-                if video {
-                    overlay::Choice::Video(source)
-                } else {
-                    overlay::Choice::Still(source)
-                }
-            }
-        }
-    });
-
+    let mode = options.mode;
+    let target = prefs.target;
     let loop_ref = main_loop.clone();
-    let delay = options.delay;
-    let silent = options.silent;
     let monitor_for_choice = monitor.clone();
     let on_choice = move |choice: overlay::Choice| {
-        let state = match refresh() {
+        let silent = options.silent;
+        if matches!(choice, overlay::Choice::Cancel) {
+            loop_ref.quit();
+            return;
+        }
+        let (prefs, directory) = match refresh() {
             Ok(state) => state,
             Err(error) => {
                 finish(&loop_ref, Outcome::Failed(error), None, silent);
                 return;
             }
         };
-        let (prefs, directory) = state;
-        let monitor = monitor_for_choice.as_ref();
         match choice {
-            overlay::Choice::Cancel => loop_ref.quit(),
-            overlay::Choice::Still(source) => {
-                run_still(
-                    &loop_ref, &prefs, &directory, delay, source, monitor, silent,
-                );
-            }
+            overlay::Choice::Still(source) => run_still(
+                &loop_ref,
+                &prefs,
+                &directory,
+                options.delay,
+                source,
+                &monitor_for_choice,
+                silent,
+            ),
             overlay::Choice::Video(source) => {
-                run_recording(&loop_ref, &prefs, &directory, source, monitor, silent);
+                run_recording(&loop_ref, &prefs, &directory, source, silent)
             }
-            overlay::Choice::Area => {
-                let pointed = monitor.cloned();
-                selection::pick(monitor, move |source| match source {
-                    Some(source) => run_still(
-                        &loop_ref,
-                        &prefs,
-                        &directory,
-                        delay,
-                        source,
-                        pointed.as_ref(),
-                        silent,
-                    ),
-                    None => loop_ref.quit(),
-                });
-            }
+            overlay::Choice::Cancel => {}
         }
     };
 
-    if let Some(choice) = direct {
-        on_choice(choice);
+    let record_target_needs_choice = mode == Some(Mode::Record) && target == CaptureTarget::Window;
+    if record_target_needs_choice && options.target.is_some() {
+        return startup_error(
+            "Window recording is unavailable on labwc. Choose Screen or Area.",
+            options.silent,
+        );
+    }
+    let direct_recording = mode.map(|mode| mode == Mode::Record);
+    if target == CaptureTarget::Screen
+        && let Some(recording) = direct_recording
+    {
+        let source = Target::Screen(monitor.connector().map(String::from).unwrap_or_default());
+        // Start inside the loop so an immediate startup error can quit it.
+        glib::idle_add_local_once(move || {
+            on_choice(if recording {
+                overlay::Choice::Video(source)
+            } else {
+                overlay::Choice::Still(source)
+            })
+        });
     } else {
         overlay::show(
-            monitor.as_ref(),
-            &prefs,
+            &monitor,
+            if record_target_needs_choice {
+                CaptureTarget::Area
+            } else {
+                target
+            },
             backend::backend_available(),
+            direct_recording,
             on_choice,
         );
     }
 
     main_loop.run();
-    ExitCode::SUCCESS
+    RESULT.with(Cell::get)
 }
 
 /// Re-reads the settings and makes sure the output folder exists. The chooser
@@ -178,12 +194,12 @@ fn refresh() -> Result<(ScreenCapture, PathBuf), String> {
     Ok((prefs, directory))
 }
 
-/// The capture source for a whole-screen capture.
-fn screen_target(monitor: Option<&gdk::Monitor>) -> Target {
-    match monitor {
-        Some(monitor) => Target::monitor(&shell::monitor_name(monitor)),
-        None => Target::monitor(&shell::fallback_monitor_name()),
+fn startup_error(message: &str, silent: bool) -> ExitCode {
+    eprintln!("uflinux-screencapture: {message}");
+    if !silent {
+        notify("Capture failed", message);
     }
+    ExitCode::from(1)
 }
 
 /// Takes one screenshot, after a countdown when one is configured. The loop is
@@ -194,32 +210,28 @@ fn run_still(
     directory: &Path,
     extra_delay: u8,
     target: Target,
-    monitor: Option<&gdk::Monitor>,
+    monitor: &gdk::Monitor,
     silent: bool,
 ) {
     let format = prefs.image_format;
     let path = output::unique_path(directory, &output::filename(format.extension()));
-    let job = Job {
-        target,
-        path,
-        prefs: prefs.clone(),
-    };
+    let include_cursor = prefs.include_cursor;
     let copy_format = prefs.copy_to_clipboard.then_some(format);
     let delay = u64::from(prefs.delay_seconds) + u64::from(extra_delay);
-    let flash = prefs.flash && delay == 0;
+    let flash = prefs.flash;
     let loop_ref = main_loop.clone();
-    let monitor = monitor.cloned();
+    let monitor = monitor.clone();
     let start = move || {
         glib::MainContext::default().spawn_local(async move {
-            if flash {
-                flash::show(monitor.as_ref());
+            let result =
+                gio::spawn_blocking(move || still::capture(&target, &path, format, include_cursor))
+                    .await;
+            let outcome =
+                result.unwrap_or_else(|_| Outcome::Failed("Capture was interrupted".into()));
+            if flash && matches!(outcome, Outcome::Saved(_)) {
+                flash::show(&monitor);
+                glib::timeout_future(flash::DURATION).await;
             }
-            let job_for_thread = job.clone();
-            let result = gio::spawn_blocking(move || backend::screenshot(&job_for_thread)).await;
-            let outcome = match result {
-                Ok(outcome) => outcome,
-                Err(_) => Outcome::Failed("Capture was interrupted".into()),
-            };
             finish(&loop_ref, outcome, copy_format, silent);
         });
     };
@@ -230,16 +242,21 @@ fn run_still(
     }
 }
 
-/// Starts a recording and shows the control bar. The process stays alive until
-/// the backend exits, which happens when the user presses stop.
+/// Start the backend and publish its controls to the taskbar.
 fn run_recording(
     main_loop: &glib::MainLoop,
     prefs: &ScreenCapture,
     directory: &Path,
     target: Target,
-    monitor: Option<&gdk::Monitor>,
     silent: bool,
 ) {
+    let controls = match recording::Controls::claim() {
+        Ok(controls) => controls,
+        Err(message) => {
+            finish(main_loop, Outcome::Failed(message), None, silent);
+            return;
+        }
+    };
     let extension = container_extension(prefs.container.as_deref().unwrap_or("mp4"));
     let path = output::unique_path(directory, &output::filename(extension));
     let job = Job {
@@ -249,25 +266,19 @@ fn run_recording(
     };
     let socket = output::socket_path();
     let loop_ref = main_loop.clone();
-    let started = Recorder::start(&job, Some(&socket), move |code| {
-        // Runs on the main context once the backend is gone. Both are taken out
-        // first so that closing the bar below does not ask a finished recorder
-        // to stop again.
+    let started = Recorder::start(&job, Some(&socket), move |exit| {
         let recorder = RECORDER.with(|slot| slot.borrow_mut().take());
-        let bar = HUD.with(|slot| slot.borrow_mut().take());
-        if let Some(bar) = bar {
-            bar.close();
-        }
+        CONTROLS.with(|slot| slot.borrow_mut().take());
         let outcome = match recorder {
-            Some(recorder) => recorder.outcome(code),
+            Some(recorder) => recorder.outcome(exit),
             None => Outcome::Failed("Recording was interrupted".into()),
         };
         finish(&loop_ref, outcome, None, silent);
     });
     match started {
         Ok(recorder) => {
-            let bar = hud::Hud::show(&recorder, monitor);
-            HUD.with(|slot| *slot.borrow_mut() = Some(bar));
+            controls.attach(&recorder);
+            CONTROLS.with(|slot| *slot.borrow_mut() = Some(controls));
             RECORDER.with(|slot| *slot.borrow_mut() = Some(recorder));
         }
         Err(message) => finish(main_loop, Outcome::Failed(message), None, silent),
@@ -290,6 +301,7 @@ fn finish(
             }
         }
         Outcome::Failed(message) => {
+            RESULT.with(|status| status.set(ExitCode::from(1)));
             eprintln!("uflinux-screencapture: {message}");
             if !silent {
                 notify("Capture failed", &message);
@@ -348,6 +360,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
             }
             "--screenshot" | "--screenshot-now" => options.mode = Some(Mode::Screenshot),
             "--record" => options.mode = Some(Mode::Record),
+            "--stop" => options.mode = Some(Mode::Stop),
             "--silent" => options.silent = true,
             "--delay" => {
                 let value = args.next().ok_or("--delay needs a value")?;
@@ -366,11 +379,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
             other => return Err(format!("unknown option: {other}")),
         }
     }
-    if options.target.is_some() && options.mode.is_none() {
+    if options.target.is_some() && !matches!(options.mode, Some(Mode::Screenshot | Mode::Record)) {
         return Err("--target needs --screenshot or --record".into());
-    }
-    if options.mode == Some(Mode::Record) && options.target == Some(CaptureTarget::Area) {
-        return Err("recording an area is not supported".into());
     }
     Ok(options)
 }

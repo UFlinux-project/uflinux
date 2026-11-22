@@ -3,12 +3,12 @@
 //! The argument builder is pure and unit-tested so the preset mapping can be
 //! checked without a GPU. The recorder itself is a plain child process: the tool
 //! is its parent, which is what keeps the backend daemonless.
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gtk::glib;
@@ -17,12 +17,8 @@ use settings_core::{AudioSource, CaptureQuality, ScreenCapture};
 /// Program name installed by the gpu-screen-recorder package.
 pub const BACKEND: &str = "gpu-screen-recorder";
 
-/// Wayland capture source understood by the backend.
-pub const PORTAL_SOURCE: &str = "portal";
-
-pub const EXIT_OK: i32 = 0;
-pub const EXIT_USAGE: i32 = 1;
-pub const EXIT_INVALID_ARGS: i32 = 2;
+const EXIT_OK: i32 = 0;
+const EXIT_NO_VIDEO: i32 = 55;
 
 /// How long to wait for the recorder to close the file after a stop request.
 /// The backend answers `stop` only once the muxer is done, which can take a
@@ -33,44 +29,32 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 /// socket from freezing the UI.
 const QUICK_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// What to capture. `monitor` is a GTK connector name ("DP-1") or
-/// `PORTAL_SOURCE`. `region` is in GTK logical coordinates: the backend locates
-/// the monitor from the region centre and applies the scale itself, so the
-/// values are passed through unchanged.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Target {
-    pub monitor: String,
-    pub region: Option<(i32, i32, i32, i32)>,
+#[derive(Clone, Debug)]
+pub struct Region {
+    pub output: gtk::gdk::Rectangle,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Clone, Debug)]
+pub enum Target {
+    Screen(String),
+    Area(String, Region),
+    Window(String),
 }
 
 impl Target {
-    pub fn portal() -> Self {
-        Self {
-            monitor: PORTAL_SOURCE.to_string(),
-            region: None,
-        }
-    }
-
-    pub fn monitor(name: &str) -> Self {
-        Self {
-            monitor: name.to_string(),
-            region: None,
-        }
-    }
-
-    pub fn region(name: &str, x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self {
-            monitor: name.to_string(),
-            region: Some((x, y, width, height)),
-        }
-    }
-
-    /// The `-w` value. A region uses the inline `WxH+X+Y` form, which the backend
-    /// prefers over the deprecated `-region` option.
-    fn capture_source(&self) -> String {
-        match self.region {
-            Some((x, y, width, height)) => format!("{width}x{height}+{x}+{y}"),
-            None => self.monitor.clone(),
+    fn recording_source(&self) -> Option<String> {
+        match self {
+            Self::Screen(connector) => Some(connector.clone()),
+            Self::Area(_, region) => {
+                // GSR takes the region in global Wayland logical coordinates.
+                let (x, y) = (region.output.x() + region.x, region.output.y() + region.y);
+                Some(format!("{}x{}+{x}+{y}", region.width, region.height))
+            }
+            Self::Window(_) => None,
         }
     }
 }
@@ -92,11 +76,10 @@ fn no_yes(flag: bool) -> &'static str {
     if flag { "no" } else { "yes" }
 }
 
-/// Common flags for both stills and recordings.
-fn capture_flags(job: &Job) -> Vec<String> {
+fn capture_flags(job: &Job, source: String) -> Vec<String> {
     vec![
         "-w".to_string(),
-        job.target.capture_source(),
+        source,
         "-o".to_string(),
         job.path.to_string_lossy().into_owned(),
         "-cursor".to_string(),
@@ -163,17 +146,13 @@ fn audio_flags(prefs: &ScreenCapture) -> Vec<String> {
     argv
 }
 
-/// Flags for a single still image. The backend picks the encoder from the `-o`
-/// extension, so no container or quality flags apply here.
-pub fn screenshot_args(job: &Job) -> Vec<String> {
-    capture_flags(job)
-}
-
 /// Flags for a video recording. `socket` enables the IPC control channel; when
 /// it is `None` the recorder can only be stopped with a signal.
-pub fn recording_args(job: &Job, socket: Option<&Path>) -> Vec<String> {
-    let mut argv = capture_flags(job);
+fn recording_args(job: &Job, source: String, socket: Option<&Path>) -> Vec<String> {
+    let mut argv = capture_flags(job, source);
     argv.extend(["-f".to_string(), job.prefs.fps.to_string()]);
+    // Keep keyframes close together, including on drivers with buffered output.
+    argv.extend(["-keyint".to_string(), "1".to_string()]);
     argv.extend(quality_flags(&job.prefs));
     argv.extend(audio_flags(&job.prefs));
     argv.extend(advanced_flags(&job.prefs));
@@ -193,58 +172,6 @@ pub fn backend_available() -> bool {
     program().is_some()
 }
 
-/// Runs the backend for a still image and reports the result. Blocking, so it is
-/// called from a worker thread.
-pub fn screenshot(job: &Job) -> Outcome {
-    let Some(program) = program() else {
-        return Outcome::Failed(format!("{BACKEND} is not installed"));
-    };
-    let output = match Command::new(program)
-        .args(screenshot_args(job))
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) => return Outcome::Failed(format!("Cannot start recorder: {error}")),
-    };
-    match output.status.code() {
-        Some(EXIT_OK) => Outcome::Saved(job.path.clone()),
-        Some(EXIT_USAGE | EXIT_INVALID_ARGS) => Outcome::Failed(
-            first_line(&output.stderr).unwrap_or_else(|| "Bad recorder arguments".to_string()),
-        ),
-        Some(code) => Outcome::Failed(recorder_error(code, &output.stderr)),
-        None => Outcome::Failed("Recorder was interrupted".to_string()),
-    }
-}
-
-/// The backend reports failures as exit codes; the human-readable reason is on
-/// stderr, so show the last message there when there is one.
-fn recorder_error(code: i32, stderr: &[u8]) -> String {
-    match last_log_line(stderr) {
-        Some(detail) => detail,
-        None => format!("Recorder failed (exit {code})"),
-    }
-}
-
-fn first_line(stderr: &[u8]) -> Option<String> {
-    String::from_utf8_lossy(stderr)
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| line.trim().to_string())
-}
-
-fn last_log_line(stderr: &[u8]) -> Option<String> {
-    String::from_utf8_lossy(stderr)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .next_back()
-        .map(|line| {
-            let line = line.trim();
-            line.strip_prefix("gsr error: ").unwrap_or(line).to_string()
-        })
-}
-
 /// A running recorder. The child is reaped in a worker thread and the result is
 /// delivered back on the main context, so the HUD stays responsive for the whole
 /// recording.
@@ -254,71 +181,79 @@ pub struct Recorder {
     socket: Option<PathBuf>,
     path: PathBuf,
     stopping: Arc<AtomicBool>,
-    /// Path reported by the IPC `stop` request, when it got one.
-    saved: Arc<Mutex<Option<PathBuf>>>,
+    exited: Arc<AtomicBool>,
+}
+
+pub struct RecorderExit {
+    code: Option<i32>,
+    detail: Option<String>,
 }
 
 impl Recorder {
-    /// Spawns the recorder and calls `on_exit` on the main context when it is
-    /// gone. `on_exit` receives the exit code, or `None` when the recorder was
-    /// killed by a signal.
+    /// Spawns the recorder and reports its exit on the GTK main context.
     pub fn start(
         job: &Job,
         socket: Option<&Path>,
-        on_exit: impl FnOnce(Option<i32>) + Send + 'static,
+        on_exit: impl FnOnce(RecorderExit) + Send + 'static,
     ) -> Result<Self, String> {
         let Some(program) = program() else {
             return Err(format!("{BACKEND} is not installed"));
         };
+        let source = job
+            .target
+            .recording_source()
+            .ok_or("Window recording is unavailable on labwc")?;
         let mut child = Command::new(program)
-            .args(recording_args(job, socket))
+            .args(recording_args(job, source, socket))
             .stdin(Stdio::null())
-            // The recorder logs to stderr for the whole recording. Draining the
-            // pipe would need a second thread and a full pipe would stall the
-            // capture, so its output goes to the void and failures are reported
-            // by exit code.
-            .stderr(Stdio::null())
             .stdout(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("Cannot start recorder: {error}"))?;
         let pid = child.id();
+        let exited = Arc::new(AtomicBool::new(false));
+        let worker_exited = exited.clone();
+        let stderr = child.stderr.take().expect("piped recorder stderr");
         let context = glib::MainContext::default();
         std::thread::spawn(move || {
+            let mut detail = None;
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if let Some(error) = line.strip_prefix("gsr error: ") {
+                    detail = Some(error.to_owned());
+                }
+            }
             let code = child.wait().ok().and_then(|status| status.code());
-            let _ = context.invoke(move || on_exit(code));
+            worker_exited.store(true, Ordering::Release);
+            context.spawn(async move { on_exit(RecorderExit { code, detail }) });
         });
         Ok(Self {
             pid,
             socket: socket.map(Path::to_path_buf),
             path: job.path.clone(),
             stopping: Arc::new(AtomicBool::new(false)),
-            saved: Arc::new(Mutex::new(None)),
+            exited,
         })
     }
 
     /// Asks the recorder to finish the file. The blocking IPC call runs in a
     /// worker thread; the exit callback is what reports the outcome.
     pub fn stop(&self) {
-        self.stopping.store(true, Ordering::Relaxed);
+        if self.stopping.swap(true, Ordering::Relaxed) {
+            return;
+        }
         let Some(socket) = self.socket.clone() else {
             kill(self.pid, libc::SIGINT);
             return;
         };
-        let saved = self.saved.clone();
-        let pid = self.pid;
-        std::thread::spawn(
-            move || match ipc_request(&socket, "stop", None, STOP_TIMEOUT) {
-                Ok(reply) => {
-                    if let Some(path) = reply_path(&reply) {
-                        *saved.lock().unwrap() = Some(path);
-                    }
+        let recorder = self.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = ipc_request(&socket, "stop", None, STOP_TIMEOUT) {
+                if !recorder.exited.load(Ordering::Acquire) {
+                    eprintln!("uflinux-screencapture: IPC stop failed: {error}, trying SIGINT");
+                    kill(recorder.pid, libc::SIGINT);
                 }
-                Err(error) => {
-                    eprintln!("uflinux-screencapture: IPC stop failed: {error}, using SIGINT");
-                    kill(pid, libc::SIGINT);
-                }
-            },
-        );
+            }
+        });
     }
 
     /// Pauses or resumes the capture. Falls back to SIGUSR2, which the backend
@@ -327,7 +262,12 @@ impl Recorder {
         match &self.socket {
             Some(socket) => {
                 let data = if paused { "true" } else { "false" };
-                ipc_request(socket, "set-paused", Some(data), QUICK_TIMEOUT).map(|_| ())
+                let reply = ipc_request(socket, "set-paused", Some(data), QUICK_TIMEOUT)?;
+                if reply.contains("\"result\":\"ok\"") {
+                    Ok(())
+                } else {
+                    Err(ipc_error(&reply))
+                }
             }
             None => {
                 kill(self.pid, libc::SIGUSR2);
@@ -342,28 +282,30 @@ impl Recorder {
     pub fn terminate(self) {
         self.stopping.store(true, Ordering::Relaxed);
         kill(self.pid, libc::SIGINT);
-        std::mem::forget(self);
     }
 
-    /// Called from the exit callback: the file is closed by now, so the path is
-    /// final. Prefers the path the recorder reported over the one we asked for.
-    pub fn outcome(&self, code: Option<i32>) -> Outcome {
-        match code {
-            Some(EXIT_OK) => {
-                let path = self
-                    .saved
-                    .lock()
-                    .unwrap()
-                    .take()
-                    .unwrap_or_else(|| self.path.clone());
-                if path.exists() {
-                    Outcome::Saved(path)
-                } else {
-                    Outcome::Failed("Recorder did not write the file".to_string())
-                }
-            }
-            Some(code) if code > 0 => Outcome::Failed(format!("Recorder failed (exit {code})")),
-            _ => Outcome::Failed("Recording was interrupted".to_string()),
+    /// Reports the result after the backend has flushed and closed the file.
+    pub fn outcome(&self, exit: RecorderExit) -> Outcome {
+        if let Some(socket) = &self.socket {
+            let _ = std::fs::remove_file(socket);
+        }
+        let metadata = self.path.metadata().ok();
+        let empty_file = metadata.is_some_and(|metadata| metadata.len() == 0);
+        if exit.code == Some(EXIT_NO_VIDEO) || empty_file {
+            let _ = std::fs::remove_file(&self.path);
+            return Outcome::Failed(
+                exit.detail
+                    .unwrap_or_else(|| "Recorder did not write any video".into()),
+            );
+        }
+        match exit.code {
+            Some(EXIT_OK) if self.path.is_file() => Outcome::Saved(self.path.clone()),
+            Some(EXIT_OK) => Outcome::Failed("Recorder did not write any video".into()),
+            Some(code) => Outcome::Failed(
+                exit.detail
+                    .unwrap_or_else(|| format!("Recorder failed (exit {code})")),
+            ),
+            None => Outcome::Failed("Recording was interrupted".into()),
         }
     }
 }
@@ -392,12 +334,7 @@ fn ipc_request(
         .write_all(payload.as_bytes())
         .map_err(|error| error.to_string())?;
     stream.flush().map_err(|error| error.to_string())?;
-    let reply = read_reply(&mut stream)?;
-    if reply.contains("\"result\":\"ok\"") {
-        Ok(reply)
-    } else {
-        Err(ipc_error(&reply))
-    }
+    read_reply(&mut stream)
 }
 
 /// Reads the reply to a request. Deferred names such as `stop` are answered only
@@ -433,12 +370,6 @@ fn reply_text(reply: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn reply_path(reply: &str) -> Option<PathBuf> {
-    reply_text(reply)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,7 +377,7 @@ mod tests {
 
     fn job(extension: &str) -> Job {
         Job {
-            target: Target::monitor("DP-1"),
+            target: Target::Screen("DP-1".into()),
             path: PathBuf::from(format!("/tmp/shot.{extension}")),
             prefs: ScreenCapture::default(),
         }
@@ -459,41 +390,38 @@ mod tests {
             .map(String::as_str)
     }
 
-    #[test]
-    fn screenshot_uses_monitor_and_webp() {
-        let argv = screenshot_args(&job("webp"));
-        assert_eq!(flag(&argv, "-w"), Some("DP-1"));
-        assert_eq!(flag(&argv, "-o"), Some("/tmp/shot.webp"));
-        assert_eq!(flag(&argv, "-cursor"), Some("yes"));
-        assert_eq!(flag(&argv, "-v"), Some("no"));
-        assert!(!argv.iter().any(|arg| arg == "-f"));
+    fn args(job: &Job, socket: Option<&Path>) -> Vec<String> {
+        recording_args(job, job.target.recording_source().unwrap(), socket)
     }
 
     #[test]
-    fn area_uses_inline_region_capture_source() {
-        let mut j = job("webp");
-        j.target = Target::region("DP-1", 10, 20, 300, 400);
-        assert_eq!(flag(&screenshot_args(&j), "-w"), Some("300x400+10+20"));
-    }
-
-    #[test]
-    fn window_uses_portal() {
-        let mut j = job("webp");
-        j.target = Target::portal();
-        assert_eq!(flag(&screenshot_args(&j), "-w"), Some("portal"));
+    fn area_uses_global_logical_coordinates() {
+        let mut j = job("mp4");
+        j.target = Target::Area(
+            "DP-1".into(),
+            Region {
+                output: gtk::gdk::Rectangle::new(-500, 100, 500, 500),
+                x: 10,
+                y: 20,
+                width: 300,
+                height: 400,
+            },
+        );
+        assert_eq!(flag(&args(&j, None), "-w"), Some("300x400+-490+120"));
     }
 
     #[test]
     fn cursor_can_be_dropped() {
         let mut j = job("mp4");
         j.prefs.include_cursor = false;
-        assert_eq!(flag(&recording_args(&j, None), "-cursor"), Some("no"));
+        assert_eq!(flag(&args(&j, None), "-cursor"), Some("no"));
     }
 
     #[test]
     fn recording_defaults_match_backend() {
-        let argv = recording_args(&job("mp4"), None);
+        let argv = args(&job("mp4"), None);
         assert_eq!(flag(&argv, "-f"), Some("60"));
+        assert_eq!(flag(&argv, "-keyint"), Some("1"));
         assert_eq!(flag(&argv, "-q"), Some("very_high"));
         assert_eq!(flag(&argv, "-c"), None);
         assert_eq!(flag(&argv, "-k"), None);
@@ -513,7 +441,7 @@ mod tests {
         ] {
             let mut j = job("mp4");
             j.prefs.quality = quality;
-            let argv = recording_args(&j, None);
+            let argv = args(&j, None);
             assert_eq!(flag(&argv, "-q"), Some(name));
             assert_eq!(flag(&argv, "-bm"), None);
         }
@@ -524,7 +452,7 @@ mod tests {
         let mut j = job("mp4");
         j.prefs.quality = CaptureQuality::ConstantBitrate;
         j.prefs.bitrate_kbps = 25000;
-        let argv = recording_args(&j, None);
+        let argv = args(&j, None);
         assert_eq!(flag(&argv, "-bm"), Some("cbr"));
         assert_eq!(flag(&argv, "-q"), Some("25000"));
     }
@@ -533,14 +461,11 @@ mod tests {
     fn audio_sources_are_repeated() {
         let mut j = job("mp4");
         j.prefs.audio_source = AudioSource::Output;
-        assert_eq!(
-            flag(&recording_args(&j, None), "-a"),
-            Some("default_output")
-        );
+        assert_eq!(flag(&args(&j, None), "-a"), Some("default_output"));
         j.prefs.audio_source = AudioSource::Input;
-        assert_eq!(flag(&recording_args(&j, None), "-a"), Some("default_input"));
+        assert_eq!(flag(&args(&j, None), "-a"), Some("default_input"));
         j.prefs.audio_source = AudioSource::OutputAndInput;
-        let argv = recording_args(&j, None);
+        let argv = args(&j, None);
         let sources: Vec<&str> = argv
             .iter()
             .enumerate()
@@ -550,7 +475,7 @@ mod tests {
             .collect();
         assert_eq!(sources, vec!["default_output", "default_input"]);
         j.prefs.audio_source = AudioSource::None;
-        assert!(!recording_args(&j, None).iter().any(|arg| arg == "-a"));
+        assert!(!args(&j, None).iter().any(|arg| arg == "-a"));
     }
 
     #[test]
@@ -560,7 +485,7 @@ mod tests {
         j.prefs.framerate_mode = FramerateMode::Constant;
         j.prefs.color_range = ColorRange::Full;
         j.prefs.container = Some("mkv".to_string());
-        let argv = recording_args(&j, None);
+        let argv = args(&j, None);
         assert_eq!(flag(&argv, "-k"), Some("hevc"));
         assert_eq!(flag(&argv, "-fm"), Some("cfr"));
         assert_eq!(flag(&argv, "-cr"), Some("full"));
@@ -570,21 +495,12 @@ mod tests {
     #[test]
     fn ipc_socket_is_last() {
         let socket = Path::new("/run/user/1000/uflinux-screencapture-1.sock");
-        let argv = recording_args(&job("mp4"), Some(socket));
+        let argv = args(&job("mp4"), Some(socket));
         assert_eq!(
             argv.last().map(String::as_str),
             Some(socket.to_str().unwrap())
         );
         assert_eq!(&argv[argv.len() - 2], "-ipc");
-    }
-
-    #[test]
-    fn reply_path_comes_from_data() {
-        assert_eq!(
-            reply_path("{\"id\":1,\"result\":\"ok\",\"data\":\"/tmp/a.mp4\"}"),
-            Some(PathBuf::from("/tmp/a.mp4"))
-        );
-        assert_eq!(reply_path("{\"id\":1,\"result\":\"ok\"}"), None);
     }
 
     #[test]
@@ -596,9 +512,26 @@ mod tests {
     }
 
     #[test]
-    fn stderr_log_lines_are_readable() {
-        let stderr = b"gsr info: hello\ngsr error: monitor not found\n";
-        assert_eq!(last_log_line(stderr).as_deref(), Some("monitor not found"));
-        assert_eq!(first_line(stderr).as_deref(), Some("gsr info: hello"));
+    fn rejects_container_with_no_video_packets() {
+        let path = std::env::temp_dir().join(format!(
+            "uflinux-empty-recording-test-{}.mp4",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"container header").unwrap();
+        let recorder = Recorder {
+            pid: 0,
+            socket: None,
+            path: path.clone(),
+            stopping: Arc::new(AtomicBool::new(true)),
+            exited: Arc::new(AtomicBool::new(true)),
+        };
+        assert_eq!(
+            recorder.outcome(RecorderExit {
+                code: Some(EXIT_NO_VIDEO),
+                detail: None
+            }),
+            Outcome::Failed("Recorder did not write any video".into())
+        );
+        assert!(!path.exists());
     }
 }

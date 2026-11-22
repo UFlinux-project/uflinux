@@ -10,9 +10,10 @@ settings-core.workspace = true
 glib.workspace = true
 glib-unix.workspace = true
 gio.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 libc.workspace = true
 gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
 gtk4-layer-shell = "0.8"
 gdk-pixbuf = "0.22"
+wayland-client = "=0.31.14"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }

@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+
+description="Restore the screen recorder KMS helper capability on device images"
+
+depend() {
+	need localmount
+	before greetd
+}
+
+start() {
+	local helper=/usr/bin/gsr-kms-server
+	[ -f "$helper" ] || return 0
+	[ "$(getcap "$helper")" != "$helper cap_sys_admin=ep" ] || return 0
+	ebegin "Restoring the KMS screen capture capability"
+	setcap cap_sys_admin+ep "$helper"
+	eend $?
+}

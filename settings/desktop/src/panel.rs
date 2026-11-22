@@ -94,6 +94,7 @@ struct TrayButton {
     cell: (i32, i32),
 }
 struct Surface {
+    _recording: crate::recording_indicator::Indicator,
     overflow: gtk::Button,
     overflow_popover: gtk::Popover,
     overflow_scroll: gtk::ScrolledWindow,
@@ -1459,6 +1460,8 @@ impl Panel {
             }
         });
         root.append(&overflow);
+        let recording = crate::recording_indicator::Indicator::new();
+        root.append(recording.widget());
         let overflow_columns = Self::flyout_columns(monitor);
         scroll.set_max_content_width(overflow_columns * TRAY_CELL);
         for (index, name, fallback) in [
@@ -1764,6 +1767,7 @@ impl Panel {
         window.set_child(Some(&root));
         window.present();
         Some(Surface {
+            _recording: recording,
             overflow,
             overflow_popover,
             overflow_scroll: scroll,

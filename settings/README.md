@@ -52,12 +52,12 @@ are local files with a 16-megapixel/32-MiB limit; previews are downscaled and th
 resident desktop draws the wallpaper itself, so no separate background client runs.
 
 `screencapture/` is the Print Screen tool shipped as the `uflinux-screencapture` package.
-It starts on demand and exits when the capture is done; nothing runs permanently. It reads
-its preferences from the Settings service over session D-Bus, so the Screen Capture page
-is the only editor, and it captures through the `gpu-screen-recorder` backend, using the
-desktop portal for window capture. `uflinux-screencapture [--screenshot|--record]
-[--target screen|window|area] [--delay SECONDS] [--silent]` bypasses the chooser;
-screenshots go to the configured folder and the clipboard.
+It starts on demand and reads preferences from the Settings service over session D-Bus.
+The overlay captures screens, windows, and dragged areas through Labwc's image capture
+protocol. Screenshots go to the configured folder and can be copied to the clipboard.
+`uflinux-screencapture --screenshot --target screen` captures directly, while the window
+and area targets open their selectors. Screen and area recording use `gpu-screen-recorder`.
+Click the taskbar timer or run `uflinux-screencapture --stop` to stop a recording.
 
 Build with `cargo build --workspace --release --locked`; packaging uses frozen
 resolution and cargo auditable. Run `cargo test --workspace --locked`. Generate

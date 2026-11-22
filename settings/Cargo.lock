@@ -1098,9 +1098,10 @@ dependencies = [
  "gtk4",
  "gtk4-layer-shell",
  "libc",
- "serde",
  "serde_json",
  "settings-core",
+ "wayland-client",
+ "wayland-protocols",
 ]
 
 [[package]]

@@ -60,3 +60,15 @@
 .desktop-icon:focus {
     background-color: alpha(black, 0.36);
 }
+
+.uflinux-panel button.uflinux-recording {
+  background: #be2837;
+  color: white;
+  border-radius: 14px;
+  padding: 0 8px;
+  margin: 5px 3px;
+  font-variant-numeric: tabular-nums;
+}
+.uflinux-panel button.uflinux-recording:hover {
+  background: #a31e2b;
+}
