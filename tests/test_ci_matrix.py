@@ -80,13 +80,14 @@ class MatrixTests(unittest.TestCase):
         result=ci.configuration('workflow_dispatch','refs/heads/main',True,True)
         self.assertEqual(result['release'],'false')
         self.assertEqual(result['devices_enabled'],'true')
-        self.assertEqual(len(result['devices']['include']),5)
+        self.assertEqual(len(result['devices']['include']),8)
     def test_release_tags_build_every_device_and_label_experimental_targets(self):
         result=ci.configuration('push','refs/tags/v0.1.0')
         self.assertEqual(result['devices_enabled'],'true')
         jobs=result['devices']['include']
         self.assertEqual(sorted((job['device'],job['arch']) for job in jobs),
-                         [('qcs6490','aarch64'),('rpi','aarch64'),('spacemit-k1','riscv64'),
+                         [('pc-f2fs','x86_64'),('pc-xfs','x86'),('pc-xfs','x86_64'),
+                          ('qcs6490','aarch64'),('rpi','aarch64'),('spacemit-k1','riscv64'),
                           ('vm','aarch64'),('vm','x86_64')])
         self.assertEqual({job['device'] for job in jobs if job['experimental']=='true'},
                          {'qcs6490','spacemit-k1'})

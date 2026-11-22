@@ -17,6 +17,8 @@ ISOs are published, but no VM is started for them.
 
 | Board id | Package build | Boot firmware | Status |
 | --- | --- | --- | --- |
+| `pc-f2fs` | native x86_64 runner | BIOS `syslinux` and UEFI `systemd-boot` | supported |
+| `pc-xfs` | native x86_64 and x86 runners | BIOS `syslinux` and UEFI `systemd-boot` | supported |
 | `qcs6490` | native ARM64 runner | board UEFI plus `systemd-boot` | experimental |
 | `rpi` | native ARM64 runner | VideoCore firmware with `config.txt` | supported |
 | `spacemit-k1` | qemu-riscv64 | U-Boot distro boot with `extlinux` | experimental |

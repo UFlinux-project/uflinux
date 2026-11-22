@@ -265,20 +265,57 @@ fi
 # Alpine passes root= to BusyBox mount, which resolves UUID= and LABEL= but
 # not PARTUUID=. Kernel PARTUUID support cannot resolve a userspace mount.
 rootargs="root=UUID=$root_partuuid rootwait rootfstype=$rootfs rootflags=ro"
+# An F2FS volume mounted without compress_algorithm= never compresses, however
+# it was formatted, so the option has to be on the kernel command line: the
+# initramfs hands rootflags= to mount verbatim and there is no fstab involved.
+# The builder formats the volume with the matching on-disk features, and the
+# kernel rejects this option on a volume that lacks them.
+if [ -n "${UFLINUX_F2FS_COMPRESS:-}" ]; then
+	rootargs="$rootargs,compress_algorithm=$UFLINUX_F2FS_COMPRESS,compress_mode=fs"
+fi
 case "$cmdline" in
 *console=*) consoleargs="" ;;
 *) consoleargs=" console=$serial,115200n8 console=tty0" ;;
 esac
 
+# systemd-boot ships as a bare EFI binary named after the firmware architecture.
+# The table matches EFI_SUFFIX in scripts/builder.py.
+systemd_boot_suffix() {
+	case "$arch" in
+	aarch64) printf 'aa64' ;;
+	x86) printf 'ia32' ;;
+	x86_64) printf 'x64' ;;
+	*) return 1 ;;
+	esac
+}
+
+# Microcode has to lead the initrd list, and the two PC loaders spell a list of
+# images differently: syslinux separates them with commas, systemd-boot wants
+# one initrd line per file. A machine whose CPU needs no patch simply has no
+# ucode package installed, and the boot entries then name only the initramfs.
+ucode_syslinux=""
+ucode_systemd=""
+for image in amd-ucode intel-ucode; do
+	[ -f "/boot/$image.img" ] || continue
+	cp -a "/boot/$image.img" "$esp/boot/$image.img"
+	[ -z "$ucode_syslinux" ] || ucode_syslinux="$ucode_syslinux,"
+	ucode_syslinux="$ucode_syslinux/boot/$image.img"
+	ucode_systemd="$ucode_systemd /boot/$image.img"
+done
+if [ -n "$ucode_syslinux" ]; then
+	syslinux_initrd="$ucode_syslinux,/boot/initramfs"
+else
+	syslinux_initrd="/boot/initramfs"
+fi
+
 case "$boot" in
 efi)
 	# systemd-boot ships as a bare EFI binary; the install step that would
 	# copy it onto a real ESP needs firmware variables, so it is copied here.
-	case "$arch" in
-	aarch64) suffix=aa64;;
-	x86_64) suffix=x64;;
-	*) echo "device-rootfs: no systemd-boot binary for $arch" >&2; exit 1;;
-	esac
+	suffix=$(systemd_boot_suffix) || {
+		echo "device-rootfs: no systemd-boot binary for $arch" >&2
+		exit 1
+	}
 	installer_efi="/usr/lib/systemd/boot/efi/systemd-boot$suffix.efi"
 	[ -f "$installer_efi" ] || {
 		echo "device-rootfs: missing $installer_efi" >&2
@@ -364,6 +401,61 @@ extlinux)
 		printf '\tFDT /dtbs/%s\n' "$UFLINUX_DTB"
 		printf '\tAPPEND %s%s %s\n' "$cmdline" "$consoleargs" "$rootargs"
 	} > "$esp/extlinux/extlinux.conf"
+	;;
+pc)
+	# One GPT disk that boots from either firmware. UEFI loads systemd-boot
+	# from the removable-media path, so nothing has to be written into the
+	# firmware's boot list. Legacy BIOS runs the syslinux MBR bootstrap that
+	# the builder installs into the protective MBR; it chainloads ldlinux.sys
+	# at the start of this same ESP. Both loaders point at the same kernel,
+	# initramfs and microcode images, so only the config syntax differs.
+	suffix=$(systemd_boot_suffix) || {
+		echo "device-rootfs: no systemd-boot binary for $arch" >&2
+		exit 1
+	}
+	installer_efi="/usr/lib/systemd/boot/efi/systemd-boot$suffix.efi"
+	[ -f "$installer_efi" ] || {
+		echo "device-rootfs: missing $installer_efi" >&2
+		exit 1
+	}
+	mkdir -p "$esp/EFI/boot" "$esp/loader/entries"
+	cp -a "$installer_efi" "$esp/EFI/boot/boot$suffix.efi"
+	printf 'default uflinux.conf\ntimeout 3\n' > "$esp/loader/loader.conf"
+	{
+		printf 'title\tUFLinux %s (%s)\n' "$version" "$device"
+		printf 'linux\t/boot/vmlinuz\n'
+		for image in $ucode_systemd; do
+			printf 'initrd\t%s\n' "$image"
+		done
+		printf 'initrd\t/boot/initramfs\n'
+		printf 'options\t%s%s %s\n' "$cmdline" "$consoleargs" "$rootargs"
+	} > "$esp/loader/entries/uflinux.conf"
+
+	# syslinux --install writes ldlinux.sys and ldlinux.c32 itself, but the
+	# com32 libraries a configuration with menus pulls in are not copied, so
+	# they are placed alongside. The trigger that ships with the package runs
+	# update-extlinux on every kernel or syslinux transaction and would rewrite
+	# /boot/extlinux.conf and the ESP it finds mounted there; the config here
+	# is generated once, so the trigger is switched off.
+	for module in libcom32.c32 libutil.c32; do
+		[ -f "/usr/share/syslinux/$module" ] || {
+			echo "device-rootfs: missing /usr/share/syslinux/$module" >&2
+			exit 1
+		}
+		cp -a "/usr/share/syslinux/$module" "$esp/$module"
+	done
+	sed -i 's/^disable_trigger=.*/disable_trigger=1/' /etc/update-extlinux.conf
+	{
+		printf 'SERIAL 0 115200\n'
+		printf 'TIMEOUT 30\n'
+		printf 'PROMPT 1\n'
+		printf 'DEFAULT uflinux\n'
+		printf 'LABEL uflinux\n'
+		printf '\tMENU LABEL UFLinux %s (%s)\n' "$version" "$device"
+		printf '\tKERNEL /boot/vmlinuz\n'
+		printf '\tINITRD %s\n' "$syslinux_initrd"
+		printf '\tAPPEND %s%s %s\n' "$cmdline" "$consoleargs" "$rootargs"
+	} > "$esp/syslinux.cfg"
 	;;
 *)
 	echo "device-rootfs: unsupported boot mode $boot" >&2

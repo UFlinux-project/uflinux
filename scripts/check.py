@@ -31,15 +31,30 @@ for device_id, device in devices.items():
     # pinned Nura suite and is fetched and unpacked by the device profile.
     assert device["kernel"] in {"lts", "rpi", "virt"} or device["kernel"].startswith("postmarketos-"), \
         f"{device_id} must use a known kernel flavour"
-    assert device["boot"] in {"efi", "rpi", "extlinux"}, f"{device_id} must use a known boot mode"
+    assert device["boot"] in {"efi", "rpi", "extlinux", "pc"}, f"{device_id} must use a known boot mode"
     if device["boot"] == "extlinux":
         assert re.fullmatch(r"[a-z0-9][a-z0-9._/-]*\.dtb", device.get("dtb", "")), \
             f"{device_id} boots with extlinux and needs the dtb path it loads"
+    if device["boot"] == "pc":
+        # The pc mode chains syslinux's MBR code into systemd-boot on one ESP, which
+        # only makes sense on the PC firmware of the two x86 architectures.
+        assert set(device["arches"]) <= {"x86", "x86_64"}, \
+            f"{device_id} boots PC firmware but lists non-x86 architectures"
+        assert device["kernel"] == "lts", \
+            f"{device_id} boots a PC kernel and needs the generic lts flavour"
+        assert not device.get("dtb"), f"{device_id} boots PC firmware and cannot use a device tree"
     if device.get("dtb"):
         assert re.fullmatch(r"[a-z0-9][a-z0-9._/-]*\.dtb", device["dtb"]), \
             f"{device_id} needs a device tree path relative to the boot partition's dtbs directory"
     assert device["status"] in {"supported", "experimental"}, f"{device_id} must declare a release status"
     assert device["rootfs"] in {"f2fs", "xfs"}, f"{device_id} must use a root filesystem the device stage can build"
+    # The algorithm reaches the kernel as a mount option, and the kernel only
+    # implements these two for on-disk cluster compression; zstd and lz4hc are
+    # write-only algorithms there, so a target must not name them.
+    assert device.get("f2fs_compress") in (None, "lz4", "lzo"), \
+        f"{device_id} must compress its f2fs root with an algorithm the kernel can read back"
+    if device.get("f2fs_compress"):
+        assert device["rootfs"] == "f2fs", f"{device_id} asks for f2fs compression without an f2fs root"
     assert device.get("initramfs_compression", "zstd") in {"gzip", "zstd"}, \
         f"{device_id} must use a supported initramfs compression"
     assert device["packages"] and all(re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", p) for p in device["packages"]), \

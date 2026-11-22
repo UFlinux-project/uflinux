@@ -42,8 +42,8 @@ default to `https://repo.uflinux.org/apk/v3.24/uflinux`, and other repositories
 derive `https://OWNER.github.io/REPO/apk/v3.24/uflinux` from `GITHUB_REPOSITORY`.
 
 `--stage` accepts `bootstrap`, `packages`, `sign`, `image`, `device`, `verify`, or `all`.
-With `--device BOARD`, `device` (or `all`) assembles an installed board disk image
-instead of an ISO; see [device images](device-images.md).
+With `--device TARGET`, `device` (or `all`) assembles an installed device disk
+image instead of an ISO; see [device images](device-images.md).
 Stages share `--workdir` (default `.state`) and `--outdir` (default `out`). Download,
 APK, Cargo, and compiler caches use `--cache` (default `.cache/build`). A lockfile
 change requires a fresh work directory, but verified downloads can be reused.
@@ -118,7 +118,7 @@ upstream source and Alpine compatibility patches are retained with build inputs.
   controls against the resident desktop shell (quick-settings panels, Start menu and
   wallpaper drawing), checks every shipped executable's architecture and library linkage, and
   exercises the installer safeguards. Firmware boot and disk installation are separate VM jobs.
-- `device` (with `--device`): installs the board's package set into a separate
+- `device` (with `--device`): installs the target's package set into a separate
   chroot, configures an installed (non-live) system, regenerates the initramfs
   without a modloop, and writes a raw GPT disk image without loop devices or
   mounts. The assembled disk is re-read and checked for its geometry, identifiers,
@@ -133,7 +133,7 @@ Outputs:
 | Directory | Contents |
 | --- | --- |
 | `out/images/ARCH` | ISO and SHA-256/SHA-512 sidecars |
-| `out/devices/ARCH` | Board disk images (`img.zst`) and their SHA-256 sidecars |
+| `out/devices/ARCH` | Device disk images (`img.zst`) and their SHA-256 sidecars |
 | `out/package-shards/ARCH/ORIGIN` | Isolated compile outputs before collection |
 | `out/packages/ARCH` | Build-signed APKs and their public key |
 | `out/repository/ARCH` | Final signed APKs and APKINDEX |

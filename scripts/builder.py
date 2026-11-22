@@ -35,13 +35,19 @@ GPT_LINUX_TYPE = "0FC63DAF-8483-477B-8E3F-43138715FD6D"
 # The device rootfs is assembled from a throwaway chroot whose transient mounts
 # and build inputs must not become part of the installed filesystem.
 DEVICE_ROOT_EXCLUDES = ("proc", "sys", "dev", "run", "cache", "repo", "nura", "project",
-                        "device-esp", "device-image", ".uflinux-bootstrap", "etc/apk/cache")
+                        "device-esp", "device-esp.img", "device-image",
+                        ".uflinux-bootstrap", "etc/apk/cache")
 DEVICE_ESP = "/device-esp"
 DEVICE_PROJECT_DIRS = ("aports", "profiles", "config", "scripts", "patches")
 PROJECT_DIRS = ("aports", "profiles", "config", "scripts", "tests", "patches", "settings")
 # Mirrors the table in profiles/device-rootfs.sh: systemd-boot ships one bare
 # EFI binary per architecture and the ESP has to carry it under that name.
-EFI_SUFFIX = {"aarch64": "aa64", "x86_64": "x64"}
+EFI_SUFFIX = {"aarch64": "aa64", "x86": "ia32", "x86_64": "x64"}
+# syslinux ships a GPT-aware MBR bootstrap that chainloads ldlinux.sys from the
+# ESP, but it refuses to run unless that partition has the GPT legacy BIOS boot
+# attribute; sfdisk's plain "bootable" keyword only sets the MBR boot indicator.
+SYSLINUX_GPT_MBR = "/usr/share/syslinux/gptmbr.bin"
+GPT_LEGACY_BOOTABLE = "attrs=LegacyBIOSBootable"
 # A device image is several gigabytes of already-compressed packages, so the
 # highest level would cost hours of CPU for a few percent of size.
 DEVICE_IMAGE_ZSTD_LEVEL = 12
@@ -84,12 +90,19 @@ def device_partitions(size_mib):
             "root_size": total - root_start - ESP_START, "total": total}
 
 
-def device_partition_script(layout, uuids):
+def device_partition_script(layout, uuids, legacy_bootable=False):
+    """sfdisk script for the two-partition GPT layout.
+
+    A BIOS-bootable PC disk needs the legacy BIOS boot attribute on the ESP so
+    that the syslinux GPT MBR will chainload it; the plain "bootable" keyword
+    only writes the protective MBR's boot indicator, which gptmbr.bin ignores.
+    """
+    esp_attrs = f", {GPT_LEGACY_BOOTABLE}" if legacy_bootable else ""
     return (
         "label: gpt\n"
         f"label-id: {uuids['disk']}\n"
         f"start={layout['esp_start']}, size={layout['esp_size']}, type={GPT_ESP_TYPE}, "
-        f"uuid={uuids['esp']}, name=ESP, bootable\n"
+        f"uuid={uuids['esp']}, name=ESP, bootable{esp_attrs}\n"
         f"start={layout['root_start']}, size={layout['root_size']}, type={GPT_LINUX_TYPE}, "
         f"uuid={uuids['root']}, name=ROOT\n"
     )
@@ -209,6 +222,10 @@ def device_environment(name, device, arch, version, root_partuuid, esp):
         env["UFLINUX_DTB"] = device["dtb"]
     elif device.get("dtb"):
         env["UFLINUX_DEVICETREE"] = device["dtb"]
+    # F2FS compression has to be requested by the kernel at mount time, so the
+    # algorithm reaches the rootfs profile, which puts it in the kernel cmdline.
+    if device.get("f2fs_compress"):
+        env["UFLINUX_F2FS_COMPRESS"] = device["f2fs_compress"]
     return env
 
 
@@ -272,6 +289,12 @@ ROOTFS_SIGNATURES = {
     "xfs": (0, b"XFSB", "the XFS superblock magic"),
 }
 
+# F2FS incompat feature bitmap inside the superblock, and the two bits the
+# kernel needs before it accepts compress_algorithm= on the mount line.
+F2FS_FEATURES_OFFSET = 0xc84
+F2FS_FEATURE_EXTRA_ATTR = 1 << 3
+F2FS_FEATURE_COMPRESSION = 1 << 13
+
 
 def device_verify_rootfs(image, root_start, rootfs):
     """Raise unless the root partition holds a *rootfs* superblock."""
@@ -284,7 +307,22 @@ def device_verify_rootfs(image, root_start, rootfs):
                          + signature[2])
 
 
-def device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, epoch):
+def device_verify_f2fs_compression(image, root_start):
+    """Raise unless the F2FS volume advertises the compression feature.
+
+    dump.f2fs prints nothing about features, so the superblock is read directly.
+    """
+    with image.open("rb") as handle:
+        handle.seek(root_start * SECTOR + F2FS_FEATURES_OFFSET)
+        features = int.from_bytes(handle.read(4), "little")
+    wanted = F2FS_FEATURE_EXTRA_ATTR | F2FS_FEATURE_COMPRESSION
+    if features & wanted != wanted:
+        raise ValueError(f"{image}: the F2FS root has no compression features "
+                         f"(found {features:#x}, expected {wanted:#x} to be set)")
+
+
+def device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, epoch,
+                        f2fs_compress=None):
     """Format an f2fs or XFS root volume, fill it from *staging* and dd it onto *disk*.
 
     Unlike ext4, neither mkfs can write the tree into the disk image at a
@@ -295,10 +333,17 @@ def device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, epoch):
     volume = snapshot / ("root." + rootfs)
     run(["truncate", "-s", str(layout["root_size"] * SECTOR), volume])
     if rootfs == "f2fs":
-        # The sectors argument is in device-sector units, and a regular file is
-        # taken to have 512-byte sectors, so it equals the partition size here.
-        run(["mkfs.f2fs", "-q", "-f", "-l", "UFLINUX_ROOT", "-U", uuids["root"].lower(),
-             "-R", "0:0", "-t", "0", "-T", epoch, str(volume), str(layout["root_size"])])
+        mkfs = ["mkfs.f2fs", "-q", "-f", "-l", "UFLINUX_ROOT", "-U", uuids["root"].lower(),
+                "-R", "0:0", "-t", "0", "-T", epoch]
+        if f2fs_compress:
+            # Alpine's sload.f2fs is built without compression support, so the
+            # seeded tree is written uncompressed and the kernel compresses what
+            # it writes from then on. Enabling the on-disk feature here is what
+            # lets the mount option in the kernel cmdline take effect; the
+            # kernel refuses it on a volume formatted without these bits.
+            mkfs += ["-O", "compression,extra_attr"]
+        mkfs += [str(volume), str(layout["root_size"])]
+        run(mkfs)
         # sload prints one line per directory; the log only needs its failures.
         run(["sload.f2fs", "-f", staging, "-t", "/", "-T", epoch, "-P", str(volume)],
             stdout=subprocess.DEVNULL)
@@ -315,7 +360,7 @@ def device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, epoch):
     volume.unlink()
 
 
-def device_verify_image(image, device, arch, uuids, layout):
+def device_verify_image(image, device, arch, uuids, layout, mbr=None):
     """Check the assembled disk, including the board's initramfs compression."""
     rootfs = device.get("rootfs", "ext4")
     if rootfs not in ROOTFS_SIGNATURES:
@@ -336,6 +381,8 @@ def device_verify_image(image, device, arch, uuids, layout):
     if actual["disk"] != uuids["disk"]:
         raise ValueError(f"{image}: disk GUID changed")
     device_verify_rootfs(image, layout["root_start"], rootfs)
+    if device.get("f2fs_compress"):
+        device_verify_f2fs_compression(image, layout["root_start"])
     stage = image.parent / (image.name + "-esp")
     device_extract(image, stage)
     boot = {}
@@ -357,6 +404,25 @@ def device_verify_image(image, device, arch, uuids, layout):
         bootloader = "cmdline.txt"
     elif device["boot"] == "extlinux":
         bootloader = "extlinux/extlinux.conf"
+    elif device["boot"] == "pc":
+        # One disk, both firmware classes: syslinux covers BIOS and
+        # systemd-boot covers UEFI, so the ESP has to carry both chains.
+        suffix = EFI_SUFFIX[arch]
+        bootloader = "syslinux.cfg"
+        for name in ("ldlinux.sys", "ldlinux.c32", "EFI/boot/boot" + suffix + ".efi",
+                     "loader/entries/uflinux.conf"):
+            if not (stage / name).is_file():
+                raise ValueError(f"{image}: the ESP has no {name}")
+        # gptmbr.bin refuses a disk whose ESP lacks the legacy BIOS boot
+        # attribute, and the failure is a bare "Boot failed" with no hint.
+        if actual["esp"].get("attrs") != "LegacyBIOSBootable":
+            raise ValueError(f"{image}: the ESP has no legacy BIOS boot attribute")
+        if mbr is None:
+            raise ValueError(f"{image}: no syslinux GPT bootstrap to check")
+        with image.open("rb") as handle:
+            bootstrap = handle.read(440)
+        if bootstrap != mbr.read_bytes():
+            raise ValueError(f"{image}: the MBR is not the syslinux GPT bootstrap")
     else:
         raise ValueError(f"{image}: unsupported boot mode {device['boot']}")
     if not (stage / bootloader).is_file():
@@ -368,7 +434,7 @@ def device_verify_image(image, device, arch, uuids, layout):
                                    "uuid": uuids["esp"]},
                            "root": {"start": layout["root_start"], "size": layout["root_size"],
                                     "uuid": uuids["root"]}},
-                   **boot}
+            **boot}
 # apk v2 has no ECDSA signature: apk-tools 3.0.9 knows only the stream names
 # RSA512, RSA256, RSA and DSA, and resolves a trusted key by its filename from a
 # plain public-key PEM (an X.509 certificate is not accepted). UFLinux therefore
@@ -1241,13 +1307,42 @@ class Builder:
         # No other stage refreshes the indexes: apk 3 needs them before the first add.
         self.chroot("apk", "update")
 
+    def device_pc_esp(self, root, staging, layout, uuids):
+        """Build the PC ESP as a standalone FAT image and install syslinux in it.
+
+        syslinux accepts a block device or a regular file but never a directory
+        inside a mounted filesystem, and the build must not need a loop device,
+        so the ESP is assembled in an image of its own and copied into the
+        partition afterwards. The installer runs in the chroot because the
+        syslinux package is built for the target architecture, and it drives
+        mtools through a generated MTOOLSRC, which is why TMPDIR has to be
+        inside the chroot and writable.
+        """
+        image = root.root / "device-esp.img"
+        run(["truncate", "-s", str(layout["esp_size"] * SECTOR), image])
+        run(["mkfs.vfat", "-n", "UFLINUX", "-i", uuids["serial"], "-F", "32",
+             "-S", "512", str(image)])
+        mcopy = ["mcopy", "-s", "-n", "-i", str(image)]
+        mcopy += sorted(str(path) for path in staging.iterdir())
+        run(mcopy + ["::/"], env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
+        # syslinux writes ldlinux.sys and ldlinux.c32 itself and marks both
+        # read-only, hidden and system; device_verify_image checks they landed.
+        # The installer's temp directory has to live inside the chroot, since
+        # that is the only filesystem the installer can see.
+        (root.root / "tmp").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="syslinux-", dir=root.root / "tmp") as tmp:
+            root.chroot("syslinux", "--install", "--offset", "0", "/device-esp.img",
+                        extra_env={"TMPDIR": "/" + Path(tmp).relative_to(root.root).as_posix(),
+                                   "MTOOLS_SKIP_CHECK": "1"})
+        return image
+
     def device_image(self):
         """Assemble one installed GPT disk image for the selected device."""
         name = self.args.device
         device = device_target(DEVICES, name, self.args.arch)
         arch = self.args.arch
         self.tools("dosfstools", "mtools", "zstd", "util-linux", "e2fsprogs",
-                   "f2fs-tools", "xfsprogs")
+                   "f2fs-tools", "xfsprogs", "syslinux")
         uuids = device_uuids(f"{self.args.version}:{name}:{arch}")
         layout = device_partitions(device["img_size_mib"])
         args = argparse.Namespace(**vars(self.args))
@@ -1277,20 +1372,38 @@ class Builder:
             esp = snapshot / "esp"
             device_snapshot(root.root, staging, rootfs=True)
             device_snapshot(root.root / DEVICE_ESP.lstrip("/"), esp)
+            esp_image = (self.device_pc_esp(root, esp, layout, uuids)
+                         if device["boot"] == "pc" else None)
         disk = snapshot / "disk"
         disk.parent.mkdir(parents=True, exist_ok=True)
         disk.unlink(missing_ok=True)
         run(["truncate", "-s", f"{device['img_size_mib']}M", disk])
         run(["sfdisk", "--quiet", "--force", str(disk)],
-            input=device_partition_script(layout, uuids), text=True)
-        # The explicit block count bounds the FAT to its partition; mkfs.vfat
-        # notices the disk is larger and warns, which is what we want here.
-        run(["mkfs.vfat", "-n", "UFLINUX", "-i", uuids["serial"], "-F", "32", "-S", "512",
-             "--offset", str(layout["esp_start"]), str(disk), str(layout["esp_size"] // 2)],
-            stderr=subprocess.DEVNULL)
-        mcopy = ["mcopy", "-s", "-n", "-i", f"{disk}@@{layout['esp_start']}s"]
-        mcopy += sorted(str(path) for path in esp.iterdir())
-        run(mcopy + ["::/"], env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
+            input=device_partition_script(layout, uuids,
+                                          legacy_bootable=device["boot"] == "pc"),
+            text=True)
+        mbr = None
+        if esp_image is None:
+            # The explicit block count bounds the FAT to its partition; mkfs.vfat
+            # notices the disk is larger and warns, which is what we want here.
+            run(["mkfs.vfat", "-n", "UFLINUX", "-i", uuids["serial"], "-F", "32", "-S", "512",
+                 "--offset", str(layout["esp_start"]), str(disk),
+                 str(layout["esp_size"] // 2)],
+                stderr=subprocess.DEVNULL)
+            mcopy = ["mcopy", "-s", "-n", "-i", f"{disk}@@{layout['esp_start']}s"]
+            mcopy += sorted(str(path) for path in esp.iterdir())
+            run(mcopy + ["::/"], env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
+        else:
+            run(["dd", f"if={esp_image}", f"of={disk}", "bs=1M",
+                 f"seek={layout['esp_start'] * SECTOR // (1024 * 1024)}",
+                 "conv=notrunc", "status=none"])
+            esp_image.unlink()
+            mbr = snapshot / "gptmbr.bin"
+            shutil.copy2(root.root / SYSLINUX_GPT_MBR.lstrip("/"), mbr)
+            # 440 bytes is exactly the bootstrap area, so the protective MBR
+            # partition table and its signature survive untouched.
+            run(["dd", f"if={mbr}", f"of={disk}", "bs=440", "count=1",
+                 "conv=notrunc", "status=none"])
         rootfs = device.get("rootfs", "ext4")
         if rootfs == "ext4":
             run(["mke2fs", "-q", "-Fn", "-t", "ext4", "-d", staging, "-L", "UFLINUX_ROOT",
@@ -1298,8 +1411,9 @@ class Builder:
                  f"offset={layout['root_start'] * SECTOR},root_owner=0:0,lazy_itable_init=0",
                  str(disk), str(layout["root_size"] // 2)])
         else:
-            device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, self.epoch)
-        report = device_verify_image(disk, device, arch, uuids, layout)
+            device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, self.epoch,
+                                device.get("f2fs_compress"))
+        report = device_verify_image(disk, device, arch, uuids, layout, mbr=mbr)
         target = self.out / "devices" / arch
         target.mkdir(parents=True, exist_ok=True)
         image = target / device_image_name(self.args.version, name, arch)

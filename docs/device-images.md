@@ -1,9 +1,9 @@
 # Device images
 
 Besides the generic live ISOs, UFLinux builds **installed** GPT disk images for
-specific boards. A device image writes straight to the board's SD card or eMMC,
-boots to the login screen, and uses an installed root filesystem. Every image
-expands to fill the storage medium on first boot: XFS images online, F2FS
+specific machines and boards. A device image writes straight to the disk, SD
+card or eMMC, boots to the login screen, and uses an installed root filesystem.
+Every image expands to fill the storage medium on first boot: XFS images online, F2FS
 images offline in the initramfs. There is no squashfs modloop, no `live` user
 and no live session.
 
@@ -15,6 +15,8 @@ of the ISOs and the signed APK repository.
 
 | Id | Boards | Alpine arch | Kernel | Boot | Root fs | Status |
 | --- | --- | --- | --- | --- | --- | --- |
+| `pc-f2fs` | PCs booted from a flash drive or SD card | x86_64 | `linux-lts` | BIOS `syslinux` + UEFI `systemd-boot` | f2fs (lz4) | supported |
+| `pc-xfs` | PCs with a hard drive or SSD | x86_64, x86 | `linux-lts` | BIOS `syslinux` + UEFI `systemd-boot` | XFS | supported |
 | `qcs6490` | Arrow Dragon Q6A and similar QCS6490 boards | aarch64 | Nura `linux-postmarketos-qcom-sc7280` | board UEFI + `systemd-boot` | f2fs | experimental |
 | `rpi` | Raspberry Pi 3, 4 and 5 | aarch64 | `linux-rpi` | VideoCore firmware | f2fs | supported |
 | `spacemit-k1` | SpacemiT K1 boards (Orange Pi RV2, Orange Pi R2S, BananaPi-F3) | riscv64 | `linux-lts` | U-Boot distro boot (`extlinux`) | f2fs | experimental |
@@ -25,6 +27,18 @@ the kernel command line come from `config/devices.json`; the optional Nura
 repository is pinned in `config/devices.lock.json`. Both files are validated by
 `python3 scripts/check.py`, and every package name is checked against the live
 Alpine index by `python3 scripts/check-packages.py`.
+
+The two `pc-*` targets are not boards but machines: they write to an internal
+disk or to a USB stick and boot on any x86 firmware, so they are the only images
+that carry a BIOS and a UEFI boot chain on the same disk. `pc-xfs` is meant for
+a hard drive or SSD and uses XFS; `pc-f2fs` is meant for the flash drive or SD
+card that has to survive thousands of small writes, and asks the kernel for
+F2FS's lz4 cluster compression. `pc-f2fs` is built for x86_64 only: i386 PCs are
+rare enough that one 32-bit image (`pc-xfs`) covers the architecture, and every
+extra image costs a whole job in the release matrix.
+Both ship `amd-ucode` and `intel-ucode` and pass both microcode images to both
+bootloaders, so the CPU microcode is loaded before the kernel starts on either
+firmware.
 
 `spacemit-k1` is the Orange Pi RV2: its SpacemiT Ky X1 is a RISC-V SoC of the K1
 family, so the image is riscv64 and uses Alpine's generic `linux-lts`, which is
@@ -94,13 +108,15 @@ mounts so that it is identical on a runner and on a developer machine:
 | Partition | Start (512 B sectors) | Size | Filesystem |
 | --- | --- | --- | --- |
 | ESP | 2048 | 1 048 576 (512 MiB) | FAT32, label `UFLINUX` |
-| ROOT | 1 050 624 | rest of the disk minus one alignment gap | f2fs on boards, XFS on `vm`, label `UFLINUX_ROOT` |
+| ROOT | 1 050 624 | rest of the disk minus one alignment gap | f2fs on boards and `pc-f2fs`, XFS on `vm` and `pc-xfs`, label `UFLINUX_ROOT` |
 
 f2fs is the root filesystem on the SBC targets because it is built for the
-wear-levelling and small-write behaviour of SD cards and eMMC. The `vm` image uses
-XFS, the same filesystem as the installed ISO target, since a virtual disk has
-none of those constraints. `mkfs.f2fs` and `mkfs.xfs` cannot write a tree at a
-partition offset inside a disk image the way `mke2fs -d` does, so those two roots
+wear-levelling and small-write behaviour of SD cards and eMMC, and `pc-f2fs`
+uses it for the same reason on USB flash drives and SD cards in a PC. The `vm`
+and `pc-xfs` images use XFS, the same filesystem as the installed ISO target,
+since a hard drive, SSD or virtual disk has none of those constraints.
+`mkfs.f2fs` and `mkfs.xfs` cannot write a tree at a partition offset inside a
+disk image the way `mke2fs -d` does, so those two roots
 are built as a standalone volume file (`mkfs.f2fs` plus `sload.f2fs`, or
 `mkfs.xfs -p DIRECTORY`) and placed with a single MiB-aligned `dd`. Those formatters
 run on the build host rather than in the build chroot, so a local device build needs
@@ -113,8 +129,16 @@ uses `root=UUID=<ROOT filesystem UUID> rootwait rootfstype=<fs> rootflags=ro`.
 The formatters set the filesystem UUID to the root partition GUID too. Alpine's
 initramfs passes root to BusyBox `mount`, which resolves filesystem `UUID=` and
 `LABEL=` but not `PARTUUID=`. The explicit type means the initramfs carries only
-the one filesystem module it needs. The ESP carries the kernel as `boot/vmlinuz` and the
-initramfs as `boot/initramfs`, plus whatever the boot scheme needs:
+the one filesystem module it needs. A target that wants F2FS cluster compression
+adds `compress_algorithm=<algo>,compress_mode=fs` to those flags, and
+`mkfs.f2fs` is given `-O compression,extra_attr` to match; the kernel refuses the
+mount option unless both the feature bits and `extra_attr` are present in the
+superblock, which `scripts/builder.py` checks by reading the bitmap at offset
+`0xc84` of the root partition. Alpine's `sload.f2fs -c -a lz4` cannot be used
+instead: it prints "The selected compression algorithm is not supported" and
+still exits 0, because `f2fs-tools` is not linked against liblz4. The ESP carries
+the kernel as `boot/vmlinuz` and the initramfs as `boot/initramfs`, plus whatever
+the boot scheme needs:
 
 - `efi` — `EFI/boot/bootaa64.efi` or `EFI/boot/bootx64.efi` (systemd-boot, copied
   from the package because installing it needs firmware variables),
@@ -123,6 +147,25 @@ initramfs as `boot/initramfs`, plus whatever the boot scheme needs:
 - `rpi` — `config.txt`, `cmdline.txt`, `usercfg.txt`, the VideoCore firmware and
   the device-tree overlays, all unpacked from the bootloader APKs.
 - `extlinux` — `extlinux/extlinux.conf` plus the board device tree under `dtbs/`.
+- `pc` — both chains on one ESP. UEFI uses the same removable-media layout as
+  `efi` (`EFI/boot/bootx64.efi` or `bootia32.efi`, `loader/loader.conf`,
+  `loader/entries/uflinux.conf`), so no NVRAM entry has to exist and the same
+  disk boots in any machine. BIOS uses `syslinux`: `gptmbr.bin` occupies the
+  first 440 bytes of the disk and chainloads `ldlinux.sys` in the ESP, which
+  reads `syslinux.cfg`. Three things are needed for that to work and the build
+  verifies all of them: the ESP partition carries the GPT `LegacyBIOSBootable`
+  attribute (`sfdisk`'s plain `bootable` keyword only sets the MBR boot
+  indicator, and `gptmbr.bin` then prints a bare `Boot failed`), `ldlinux.sys`
+  and `ldlinux.c32` are present, and `libcom32.c32` and `libutil.c32` are copied
+  next to them. Because `syslinux` only accepts a block device or a regular
+  file, the PC ESP is assembled as a standalone FAT image, installed with
+  `syslinux --install --offset 0`, and copied into the partition with one `dd`;
+  every other target formats its ESP inside the disk with `mkfs.vfat --offset`.
+  The installer runs in the chroot, since the package is built for the target
+  architecture and drives mtools itself, so no host package is needed for it.
+  Installing the package would otherwise leave a `/boot` trigger behind that
+  rewrites `/extlinux.conf` on every kernel upgrade, so the profile sets
+  `disable_trigger=1` in `/etc/update-extlinux.conf` and owns `syslinux.cfg`.
 
 The initramfs is generated by `profiles/device-rootfs.sh` with an explicit feature
 set (`base <rootfs> phy mmc usb scsi nvme ata virtio kms`, where `<rootfs>` is
@@ -322,8 +365,9 @@ zstd -d < uflinux-0.1.0-rpi-aarch64.img.zst | sudo dd of=/dev/sdX bs=8M oflag=di
 sync
 ```
 
-The uncompressed image is 6144 MiB (5120 MiB for `vm`), so any larger card or eMMC
-works. Every root filesystem expands on first boot: XFS online through the
+The uncompressed image is 6144 MiB (5120 MiB for `vm`, 4096 MiB for the `pc-*`
+images), so any larger card, eMMC or disk works. Every root filesystem expands on
+first boot: XFS online through the
 first-boot service, F2FS offline in the initramfs. Verify the checksum sidecar and the
 GitHub attestation first:
 

@@ -52,6 +52,12 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertIn("uuid=" + uuids["esp"], script)
         self.assertIn("uuid=" + uuids["root"], script)
         self.assertIn("name=ESP, bootable", script)
+        # The plain keyword only sets the protective MBR's boot indicator, so a
+        # BIOS-bootable PC disk has to ask for the GPT attribute explicitly.
+        self.assertNotIn("LegacyBIOSBootable", script)
+        pc = device_partition_script(device_partitions(6144), uuids, legacy_bootable=True)
+        self.assertIn("name=ESP, bootable, attrs=LegacyBIOSBootable", pc)
+        self.assertIn("name=ROOT", pc)
 
     def test_image_names_match_the_release_assets(self):
         self.assertEqual(device_image_name("0.1.0", "rpi", "aarch64"),
@@ -158,11 +164,13 @@ class DeviceRootfsTests(unittest.TestCase):
     def test_only_f2fs_devices_pull_in_the_f2fs_tools(self):
         # F2FS boards carry tools for offline maintenance; the XFS vm image
         # already carries xfsprogs for the shared desktop set.
-        for name in ("qcs6490", "rpi", "spacemit-k1"):
+        for name in ("qcs6490", "rpi", "spacemit-k1", "pc-f2fs"):
             arch = DEVICES[name]["arches"][0]
             self.assertIn("f2fs-tools", device_packages(DEVICES[name], arch), name)
-        self.assertNotIn("f2fs-tools", device_packages(DEVICES["vm"], "x86_64"))
-        self.assertIn("xfsprogs", device_packages(DEVICES["vm"], "x86_64"))
+        for name, arch in (("vm", "x86_64"), ("pc-xfs", "x86_64"), ("pc-xfs", "x86")):
+            packages = device_packages(DEVICES[name], arch)
+            self.assertNotIn("f2fs-tools", packages, name)
+            self.assertIn("xfsprogs", packages, name)
 
     def test_environment_covers_the_profile_contract(self):
         env = device_environment("rpi", DEVICES["rpi"], "aarch64", "0.1.0",
@@ -206,20 +214,161 @@ class DeviceRootfsTests(unittest.TestCase):
         vm = device_environment("vm", DEVICES["vm"], "x86_64", "0.1.0",
                                 "01234567-89AB-4CDE-8F01-23456789ABCD", "/device-esp")
         self.assertEqual(vm["UFLINUX_ROOTFS"], "xfs")
+        self.assertNotIn("UFLINUX_F2FS_COMPRESS", vm)
+        # The compressed PC variant has to tell the profile which algorithm the
+        # kernel is being told to mount with.
+        flash = device_environment("pc-f2fs", DEVICES["pc-f2fs"], "x86_64", "0.1.0",
+                                   "01234567-89AB-4CDE-8F01-23456789ABCD", "/device-esp")
+        self.assertEqual(flash["UFLINUX_F2FS_COMPRESS"], DEVICES["pc-f2fs"]["f2fs_compress"])
+        self.assertEqual(flash["UFLINUX_BOOT"], "pc")
+
+
+class DevicePcBootTests(unittest.TestCase):
+    """A PC disk image carries a BIOS chain and a UEFI chain on the same ESP."""
+
+    # A bootstrap that differs from the zero-filled disk, so a missing or
+    # unmoved MBR is detectable.
+    bootstrap = bytes(range(256)) + bytes(184)
+
+    def esp(self, suffix="x64"):
+        return {"boot/vmlinuz": b"kernel",
+                "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
+                "ldlinux.sys": b"LDOS", "ldlinux.c32": b"LDXL",
+                "syslinux.cfg": b"DEFAULT uflinux\n",
+                "EFI/boot/boot" + suffix + ".efi": b"MZ",
+                "loader/entries/uflinux.conf": b"title\tUFLinux\n"}
+
+    def check(self, esp=None, rootfs="xfs", arch="x86_64", device=None, attrs="LegacyBIOSBootable",
+              mbr=bootstrap, **kwargs):
+        return DeviceImageCheckTests.report(
+            self, "pc", esp if esp is not None else self.esp(), rootfs=rootfs, arch=arch,
+            device=device or DEVICES["pc-xfs"], attrs=attrs, mbr=mbr, disk_mbr=mbr, **kwargs)
+
+    def test_a_pc_disk_needs_both_bootloaders_and_the_mbr_bootstrap(self):
+        report = self.check()
+        self.assertEqual(report["boot"], "pc")
+        self.assertEqual(report["device_image_format"], "gpt-xfs")
+
+    def test_the_i386_esp_carries_the_ia32_systemd_boot(self):
+        report = self.check(esp=self.esp("ia32"), arch="x86")
+        self.assertEqual(report["arch"], "x86")
+
+    def test_a_pc_disk_without_the_syslinux_mbr_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "no syslinux GPT bootstrap"):
+            self.check(mbr=None)
+
+    def test_a_pc_disk_whose_mbr_was_not_replaced_is_rejected(self):
+        # The bootstrap file is present but was never written onto the disk.
+        with self.assertRaisesRegex(ValueError, "not the syslinux GPT bootstrap"):
+            DeviceImageCheckTests.report(self, "pc", self.esp(), rootfs="xfs", arch="x86_64",
+                                         device=DEVICES["pc-xfs"], attrs="LegacyBIOSBootable",
+                                         mbr=self.bootstrap, disk_mbr=bytes(440))
+
+    def test_a_pc_disk_without_the_legacy_boot_attribute_is_rejected(self):
+        # gptmbr.bin answers with a bare "Boot failed", so the checker has to
+        # catch a missing attribute rather than let the image ship.
+        with self.assertRaisesRegex(ValueError, "legacy BIOS boot attribute"):
+            self.check(attrs=None)
+
+    def test_a_pc_disk_without_the_syslinux_files_is_rejected(self):
+        for name in ("ldlinux.sys", "ldlinux.c32", "syslinux.cfg", "EFI/boot/bootx64.efi",
+                     "loader/entries/uflinux.conf"):
+            with self.subTest(name=name):
+                esp = self.esp()
+                del esp[name]
+                with self.assertRaisesRegex(ValueError, name.replace(".", r"\.")):
+                    self.check(esp=esp)
+
+    def test_f2fs_compression_needs_the_on_disk_features(self):
+        # mkfs.f2fs only accepts -O compression together with extra_attr, and
+        # the kernel refuses compress_algorithm= without both bits.
+        both = builder.F2FS_FEATURE_COMPRESSION | builder.F2FS_FEATURE_EXTRA_ATTR
+        report = self.check(rootfs="f2fs", device=DEVICES["pc-f2fs"], f2fs_features=both)
+        self.assertEqual(report["device_image_format"], "gpt-f2fs")
+        for missing in (0, builder.F2FS_FEATURE_COMPRESSION, builder.F2FS_FEATURE_EXTRA_ATTR):
+            with self.subTest(features=missing):
+                with self.assertRaisesRegex(ValueError, "compression features"):
+                    self.check(rootfs="f2fs", device=DEVICES["pc-f2fs"], f2fs_features=missing)
+
+    def test_an_uncompressed_f2fs_device_is_not_checked_for_the_features(self):
+        report = DeviceImageCheckTests.report(
+            self, "efi", {"boot/vmlinuz": b"kernel",
+                          "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
+                          "EFI/boot/bootaa64.efi": b"MZ"}, rootfs="f2fs")
+        self.assertEqual(report["device_image_format"], "gpt-f2fs")
+
+    def test_syslinux_is_installed_into_the_esp_image_from_inside_the_chroot(self):
+        # The installer is a target binary, so it runs in the chroot, and it
+        # builds an MTOOLSRC under TMPDIR, so that directory has to exist in the
+        # chroot too. A bind mount would need a loop device, so the image file
+        # itself is what syslinux is pointed at.
+        calls = []
+
+        class FakeRoot:
+            def __init__(self, root):
+                self.root = root
+
+            def chroot(self, *command, **kwargs):
+                env = kwargs.get("extra_env", {})
+                # The installer can only use a temp directory that exists at the
+                # time it runs, so check it here rather than after the fact.
+                temp = env.get("TMPDIR", "").lstrip("/")
+                exists = bool(temp) and (self.root / temp).is_dir()
+                calls.append((list(command), env, exists))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "root"
+            root.mkdir()
+            staging = Path(temporary) / "esp"
+            staging.mkdir()
+            (staging / "syslinux.cfg").write_bytes(b"DEFAULT uflinux\n")
+            fake = FakeRoot(root)
+            with patch.object(builder, "run",
+                              lambda *a, **k: calls.append(("run", a))):
+                image = builder.Builder.device_pc_esp(
+                    None, fake, staging, device_partitions(1024), device_uuids("pc"))
+            self.assertEqual(image, root / "device-esp.img")
+            formatted = [list(call[1][0]) for call in calls if call[0] == "run"]
+            self.assertEqual(formatted[0][:3],
+                             ["truncate", "-s", str(builder.ESP_SECTORS * builder.SECTOR)])
+            self.assertEqual(formatted[1][:2], ["mkfs.vfat", "-n"])
+            self.assertIn("-F", formatted[1])
+            self.assertIn("32", formatted[1])
+            self.assertEqual(formatted[-1][:2], ["mcopy", "-s"])
+            chroot = [call for call in calls if call[0] and call[0][0] == "syslinux"]
+            self.assertEqual(len(chroot), 1)
+            command, env, temp_exists = chroot[0]
+            self.assertEqual(command, ["syslinux", "--install", "--offset", "0",
+                                       "/device-esp.img"])
+            tmpdir = env["TMPDIR"]
+            self.assertTrue(tmpdir.startswith("/tmp/syslinux-"), tmpdir)
+            self.assertTrue(temp_exists)
+            self.assertEqual(env["MTOOLS_SKIP_CHECK"], "1")
 
 
 class DeviceImageCheckTests(unittest.TestCase):
     def report(self, boot, esp_files, initramfs=b"\x28\xb5\x2f\xfd" + b"initramfs",
-               rootfs="f2fs", arch="aarch64", device=None):
+               rootfs="f2fs", arch="aarch64", device=None, attrs=None, mbr=None,
+               disk_mbr=None, f2fs_features=None):
         """Run the checker against a synthetic disk whose ESP is faked."""
         uuids = device_uuids("0.1.0:check:" + boot)
         layout = device_partitions(1024)
         with tempfile.TemporaryDirectory() as temporary:
             image = Path(temporary) / "disk"
             offset, magic, _ = builder.ROOTFS_SIGNATURES[rootfs]
-            image.write_bytes(b"\0" * (layout["root_start"] * builder.SECTOR + offset))
-            with image.open("ab") as handle:
-                handle.write(magic)
+            body = b"\0" * offset + magic
+            if f2fs_features is not None:
+                # The feature bitmap sits past the magic, so pad up to it.
+                pad = builder.F2FS_FEATURES_OFFSET - len(body)
+                body += b"\0" * pad + int(f2fs_features).to_bytes(4, "little")
+            image.write_bytes(b"\0" * (layout["root_start"] * builder.SECTOR) + body)
+            if disk_mbr is not None:
+                with image.open("r+b") as handle:
+                    handle.write(disk_mbr)
+            bootstrap = None
+            if mbr is not None:
+                bootstrap = image.parent / "gptmbr.bin"
+                bootstrap.write_bytes(mbr)
             stage = image.parent / (image.name + "-esp")
 
             def extract(source, destination, esp_start=builder.ESP_START):
@@ -230,9 +379,11 @@ class DeviceImageCheckTests(unittest.TestCase):
                     target.write_bytes(content)
 
             def geometry(source):
-                return {"disk": uuids["disk"],
-                        "esp": {"start": layout["esp_start"], "size": layout["esp_size"],
-                                "uuid": uuids["esp"]},
+                esp = {"start": layout["esp_start"], "size": layout["esp_size"],
+                       "uuid": uuids["esp"]}
+                if attrs is not None:
+                    esp["attrs"] = attrs
+                return {"disk": uuids["disk"], "esp": esp,
                         "root": {"start": layout["root_start"], "size": layout["root_size"],
                                  "uuid": uuids["root"]}}
 
@@ -240,7 +391,7 @@ class DeviceImageCheckTests(unittest.TestCase):
             builder.device_layout, builder.device_extract = geometry, extract
             try:
                 report = device_verify_image(image, device or {"boot": boot, "rootfs": rootfs},
-                                             arch, uuids, layout)
+                                             arch, uuids, layout, mbr=bootstrap)
             finally:
                 builder.device_layout, builder.device_extract = saved_layout, saved_extract
             self.assertFalse(stage.exists(), "the ESP extraction must be cleaned up")

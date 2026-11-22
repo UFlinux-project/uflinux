@@ -11,7 +11,8 @@ lock = json.loads((root / "config/devices.lock.json").read_text())
 
 class DevicesConfigTests(unittest.TestCase):
     def test_expected_targets_are_present(self):
-        self.assertEqual(sorted(devices), ["qcs6490", "rpi", "spacemit-k1", "vm"])
+        self.assertEqual(sorted(devices),
+                         ["pc-f2fs", "pc-xfs", "qcs6490", "rpi", "spacemit-k1", "vm"])
 
     def test_every_target_uses_a_supported_architecture(self):
         for device_id, device in devices.items():
@@ -24,6 +25,12 @@ class DevicesConfigTests(unittest.TestCase):
                 self.assertEqual(device["kernel"], "rpi", device_id)
             if device["boot"] == "extlinux":
                 self.assertEqual(device["arches"], ["riscv64"], device_id)
+            if device["boot"] == "pc":
+                # syslinux and systemd-boot are only built for the PC firmware
+                # classes, and gptmbr.bin needs a kernel the loader can chainload
+                # from the ESP, so the PC targets stay on the generic flavour.
+                self.assertEqual(device["kernel"], "lts", device_id)
+                self.assertTrue(set(device["arches"]) <= {"x86", "x86_64"}, device_id)
 
     def test_a_nura_kernel_is_fetched_rather_than_installed(self):
         # A postmarketos-* flavour is not in any Alpine repository, so its
@@ -77,6 +84,12 @@ class DevicesConfigTests(unittest.TestCase):
                 self.assertIn("raspberrypi-bootloader", device["packages"], device_id)
             elif device["boot"] == "efi":
                 self.assertIn("systemd-boot", device["packages"], device_id)
+            elif device["boot"] == "pc":
+                # One disk boots from either firmware, so both loaders have to
+                # be installed: syslinux supplies gptmbr.bin and ldlinux.sys for
+                # BIOS, systemd-boot the EFI binary for UEFI.
+                self.assertIn("syslinux", device["packages"], device_id)
+                self.assertIn("systemd-boot", device["packages"], device_id)
 
     def test_images_leave_room_for_the_root_filesystem(self):
         for device_id, device in devices.items():
@@ -85,11 +98,22 @@ class DevicesConfigTests(unittest.TestCase):
     def test_boards_use_f2fs_and_virtual_machines_use_xfs(self):
         # f2fs suits the wear-levelling of SD cards and eMMC; a virtual disk has
         # no such constraint and matches the XFS of the installed ISO target.
+        # The PC targets cover both media classes, so each states its own.
         for device_id, device in devices.items():
-            if device_id == "vm":
+            if device_id in ("vm", "pc-xfs"):
                 self.assertEqual(device["rootfs"], "xfs", device_id)
             else:
                 self.assertEqual(device["rootfs"], "f2fs", device_id)
+
+    def test_only_f2fs_targets_ask_for_compression(self):
+        # The kernel refuses compress_algorithm= on a volume formatted without
+        # the feature, so the option may only appear with an F2FS root.
+        for device_id, device in devices.items():
+            compression = device.get("f2fs_compress")
+            if compression is None:
+                continue
+            self.assertEqual(device["rootfs"], "f2fs", device_id)
+            self.assertIn(compression, ("lz4", "lzo"), device_id)
 
 
 if __name__ == "__main__":

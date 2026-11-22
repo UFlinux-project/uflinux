@@ -51,6 +51,35 @@
     "dtb": "spacemit/k1-orangepi-rv2.dtb",
     "packages": ["linux-lts", "mesa-vulkan-swrast", "xf86-video-fbdev"]
   },
+  "pc-xfs": {
+    "label": "PCs with hard drives or SSDs (BIOS and UEFI)",
+    "arches": ["x86_64", "x86"],
+    "kernel": "lts",
+    "boot": "pc",
+    "rootfs": "xfs",
+    "status": "supported",
+    "serial": "ttyS0",
+    "cmdline": "quiet console=tty0 console=ttyS0,115200n8",
+    "img_size_mib": 4096,
+    "nura": false,
+    "nura_packages": [],
+    "packages": ["linux-lts", "systemd-boot", "syslinux", "amd-ucode", "intel-ucode", "mesa-vulkan-intel", "mesa-vulkan-nouveau", "mesa-vulkan-virtio"]
+  },
+  "pc-f2fs": {
+    "label": "PCs with flash drives or SD cards (BIOS and UEFI)",
+    "arches": ["x86_64"],
+    "kernel": "lts",
+    "boot": "pc",
+    "rootfs": "f2fs",
+    "f2fs_compress": "lz4",
+    "status": "supported",
+    "serial": "ttyS0",
+    "cmdline": "quiet console=tty0 console=ttyS0,115200n8",
+    "img_size_mib": 4096,
+    "nura": false,
+    "nura_packages": [],
+    "packages": ["linux-lts", "systemd-boot", "syslinux", "amd-ucode", "intel-ucode", "mesa-vulkan-intel", "mesa-vulkan-nouveau", "mesa-vulkan-virtio"]
+  },
   "vm": {
     "label": "Virtual machines (QEMU, KVM, hypervisors)",
     "arches": ["x86_64", "aarch64"],
