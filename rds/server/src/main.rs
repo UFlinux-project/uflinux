@@ -219,7 +219,11 @@ fn run(args: Args, env: &[(String, String)]) -> Result<(), String> {
     let client_fd = args.client_fd.ok_or_else(|| {
         "no client socket: pass --client-fd (or set UFLINUX_RDS_CLIENT_FD); the broker passes fd 3".to_owned()
     })?;
-    let (stream, peer) = client_stream(client_fd)?;
+    // Take the descriptor over before anything else is decided. It is the one
+    // resource a session cannot start without, and a bad one should be the only
+    // thing in the journal rather than a footnote after the codec plan. Handing
+    // the socket to the runtime waits until the runtime is entered, below.
+    let (std_stream, peer) = client_stream(client_fd)?;
 
     let hardware = detect_vaapi(config.codec.vaapi_device.as_deref());
     let negotiation = planned_negotiation(&config);
@@ -257,25 +261,35 @@ fn run(args: Args, env: &[(String, String)]) -> Result<(), String> {
         .build()
         .map_err(|e| format!("cannot start the session runtime: {e}"))?;
 
-    runtime.block_on(serve(
-        args,
-        Plan {
-            config: &config,
-            hardware: &hardware,
-            decision: &decision,
-            runtime_dir: &runtime_dir,
-            status,
-            pacer,
-            idle_timeout,
-            stream,
-            peer,
-        },
-    ))
+    // Registering the socket with tokio needs a live reactor, so it happens
+    // inside `block_on` rather than out here: creating a runtime does not enter
+    // it, and `TcpStream::from_std` panics with "there is no reactor running"
+    // when called outside one.
+    runtime.block_on(async move {
+        let stream = TcpStream::from_std(std_stream)
+            .map_err(|e| format!("cannot register client socket with the runtime: {e}"))?;
+        serve(
+            args,
+            Plan {
+                config: &config,
+                hardware: &hardware,
+                decision: &decision,
+                runtime_dir: &runtime_dir,
+                status,
+                pacer,
+                idle_timeout,
+                stream,
+                peer,
+            },
+        )
+        .await
+    })
 }
 
-/// Turns the inherited descriptor into a tokio socket, and says what is on the
-/// other end for the log.
-fn client_stream(fd: RawFd) -> Result<(TcpStream, String), String> {
+/// Validates the inherited descriptor and turns it into a ready std socket,
+/// plus what is on the other end for the log. The caller registers it with the
+/// runtime — see [`run`], which is why this returns a `std` socket.
+fn client_stream(fd: RawFd) -> Result<(std::net::TcpStream, String), String> {
     if fd < 0 {
         return Err(format!(
             "client descriptor {fd} is not a valid file descriptor"
@@ -312,9 +326,7 @@ fn client_stream(fd: RawFd) -> Result<(TcpStream, String), String> {
     std_stream
         .set_nodelay(true)
         .map_err(|e| format!("cannot set TCP_NODELAY on fd {fd}: {e}"))?;
-    let stream =
-        TcpStream::from_std(std_stream).map_err(|e| format!("cannot register fd {fd}: {e}"))?;
-    Ok((stream, format!("{local} -> {peer}")))
+    Ok((std_stream, format!("{local} -> {peer}")))
 }
 
 /// Everything one session needs that is decided before the async runtime

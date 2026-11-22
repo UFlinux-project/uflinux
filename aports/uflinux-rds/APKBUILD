@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-rds
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="UFLinux Remote Desktop Services broker (IronRDP)"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
