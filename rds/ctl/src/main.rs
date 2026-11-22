@@ -106,8 +106,8 @@ fn run() -> Result<(), String> {
             println!("configuration applied");
             Ok(())
         }
-        Some("enable") => rc_update(&["add", SERVICE, RUNLEVEL], "enable"),
-        Some("disable") => rc_update(&["del", SERVICE, RUNLEVEL], "disable"),
+        Some("enable") => set_enabled(&socket, true),
+        Some("disable") => set_enabled(&socket, false),
         Some("start") => service_toggle(&socket, true),
         Some("stop") => service_toggle(&socket, false),
         Some(other) => Err(format!("unknown command {other}\n{USAGE}")),
@@ -261,6 +261,37 @@ fn rc_update(args: &[&str], verb: &str) -> Result<(), String> {
         ));
     }
     run_openrc(&openrc::rc_update(), args)
+}
+
+/// `enable` and `disable`: move both halves of the master switch together.
+///
+/// The runlevel decides whether the broker starts at boot, while the `enabled`
+/// key of the configuration file is what a running broker — and therefore the
+/// Settings UI — reports. Moving only the runlevel left the two disagreeing.
+/// A live broker is asked to do the whole job itself, exactly like `start` and
+/// `stop` do; the direct path is for a machine where the service is stopped.
+fn set_enabled(socket: &Path, enabled: bool) -> Result<(), String> {
+    let verb = if enabled { "enable" } else { "disable" };
+    if unsafe { libc::geteuid() } != 0 {
+        return Err(format!(
+            "{verb} needs root (try: sudo uflinux-rdsctl {verb})"
+        ));
+    }
+    let request = Request::Execute {
+        action: SystemAction::SetEnabled { enabled },
+    };
+    if let Ok(reply) = exchange(socket, request) {
+        return expect_ok(reply);
+    }
+    let path = uflinux_rds_common::config_file_path();
+    Config::set_enabled_on_disk(&path, enabled)
+        .map_err(|error| format!("cannot update {}: {error}", path.display()))?;
+    let args = if enabled {
+        ["add", SERVICE, RUNLEVEL]
+    } else {
+        ["del", SERVICE, RUNLEVEL]
+    };
+    rc_update(&args, verb)
 }
 
 /// `start` and `stop`: ask the broker to bring its own listeners down or up,

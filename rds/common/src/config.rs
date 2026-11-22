@@ -204,6 +204,17 @@ impl Config {
         })
     }
 
+    /// Rewrites the `enabled` key of the on-disk configuration in place.
+    ///
+    /// This is what makes the master switch survive a restart: the OpenRC
+    /// runlevel decides whether the broker starts, but the broker only ever
+    /// reads its state from this file, so a runlevel entry without
+    /// `"enabled": true` leaves it holding no listener. Everything else in the
+    /// file is preserved verbatim — see [`patch_enabled`].
+    pub fn set_enabled_on_disk(path: &Path, enabled: bool) -> Result<(), ConfigError> {
+        patch_enabled(path, enabled)
+    }
+
     /// Apply `UFLINUX_RDS_*` overrides from `/etc/conf.d/uflinux-rds`.
     pub fn apply_env_overrides(&mut self, env: impl IntoIterator<Item = (String, String)>) {
         for (key, value) in env {
@@ -282,6 +293,58 @@ impl Config {
     }
 }
 
+/// Rewrites one key of a JSON configuration file, keeping every other byte.
+///
+/// The file is read as free-form JSON rather than as [`Config`] on purpose:
+/// `Config` rejects unknown keys, and a configuration written by a newer build
+/// must not lose those keys just because an older helper is patching the
+/// switch. A missing file starts from an empty object, which is what
+/// [`Config::load`] treats as "all defaults".
+pub fn patch_enabled(path: &Path, enabled: bool) -> Result<(), ConfigError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut value = match std::fs::read(path) {
+        Ok(bytes) if bytes.iter().any(|byte| !byte.is_ascii_whitespace()) => {
+            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| ConfigError::Parse {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            })?
+        }
+        Ok(_) => serde_json::Value::Object(serde_json::Map::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            serde_json::Value::Object(serde_json::Map::new())
+        }
+        Err(e) => {
+            return Err(ConfigError::Io {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            });
+        }
+    };
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| ConfigError::Invalid(format!("{} is not a JSON object", path.display())))?;
+    object.insert("enabled".to_owned(), serde_json::Value::Bool(enabled));
+    let bytes = serde_json::to_vec_pretty(&value).map_err(|e| ConfigError::Parse {
+        path: path.to_path_buf(),
+        message: e.to_string(),
+    })?;
+
+    // Same tmp-then-rename discipline as `Config::save`, so a reader never sees
+    // a half-written file, plus an explicit mode because the file is world
+    // readable and a restrictive umask would otherwise make it root-only.
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| ConfigError::Io {
+        path: tmp.clone(),
+        message: e.to_string(),
+    })?;
+    let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644));
+    std::fs::rename(&tmp, path).map_err(|e| ConfigError::Io {
+        path: path.to_path_buf(),
+        message: e.to_string(),
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("cannot read {path}: {message}")]
@@ -330,6 +393,76 @@ mod tests {
     fn unknown_keys_are_rejected() {
         let err = serde_json::from_str::<Config>(r#"{"nope": 1}"#).unwrap_err();
         assert!(err.to_string().contains("nope"));
+    }
+
+    /// Scratch directory for the tests below, following the convention used by
+    /// the rest of the workspace (no extra dev-dependency).
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("uflinux-rds-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A host that never had the file (or has an empty one) still gets a
+    /// readable configuration out of a switch flip.
+    #[test]
+    fn patching_enabled_creates_a_missing_file() {
+        let dir = scratch_dir("patch-missing");
+        let path = dir.join("rds.json");
+        Config::set_enabled_on_disk(&path, true).unwrap();
+        let config = Config::load(&path).unwrap();
+        assert!(config.enabled);
+        assert_eq!(config.rdp_port, DEFAULT_RDP_PORT);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The helper must not be a configuration writer in disguise: a port the
+    /// user changed, or a key from a newer build, survives the switch flip even
+    /// though `Config` itself would reject it.
+    #[test]
+    fn patching_enabled_keeps_other_keys() {
+        let dir = scratch_dir("patch-keep");
+        let path = dir.join("rds.json");
+        std::fs::write(
+            &path,
+            r#"{"rdp_port": 3489, "web": {"port": 3490}, "from_the_future": 7}"#,
+        )
+        .unwrap();
+        Config::set_enabled_on_disk(&path, true).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["enabled"], serde_json::Value::Bool(true));
+        assert_eq!(value["rdp_port"], serde_json::json!(3489));
+        assert_eq!(value["web"]["port"], serde_json::json!(3490));
+        assert_eq!(value["from_the_future"], serde_json::json!(7));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn patching_enabled_round_trips_and_is_idempotent() {
+        let dir = scratch_dir("patch-idle");
+        let path = dir.join("rds.json");
+        Config::set_enabled_on_disk(&path, true).unwrap();
+        Config::set_enabled_on_disk(&path, true).unwrap();
+        assert!(Config::load(&path).unwrap().enabled);
+        Config::set_enabled_on_disk(&path, false).unwrap();
+        let config = Config::load(&path).unwrap();
+        assert!(!config.enabled);
+        assert!(config.validate().is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn patching_enabled_refuses_a_non_object_file() {
+        let dir = scratch_dir("patch-broken");
+        let path = dir.join("rds.json");
+        std::fs::write(&path, b"[1, 2, 3]").unwrap();
+        let err = Config::set_enabled_on_disk(&path, true).unwrap_err();
+        assert!(err.to_string().contains("not a JSON object"));
+        // The broken file is left alone rather than silently replaced.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[1, 2, 3]");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

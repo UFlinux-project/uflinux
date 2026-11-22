@@ -125,10 +125,21 @@ pub fn run() -> Result<()> {
 async fn execute(operation: &RdpSystemOperation) -> Result<serde_json::Value> {
     match operation {
         RdpSystemOperation::Enable => {
+            // The runlevel decides whether the broker starts, but the broker
+            // reads its own state out of the configuration file, so both have
+            // to move together or the switch flips back in the UI.
+            persist_enabled(true).await?;
             rc_update(&["add", SERVICE, RUNLEVEL]).await?;
-            rc_service(&[SERVICE, "start"]).await
+            rc_service(&[SERVICE, "start"]).await?;
+            // A broker that was already running has not seen the file.
+            let _ = rc_service(&[SERVICE, "reload"]).await;
+            Ok(certificate::ok())
         }
         RdpSystemOperation::Disable => {
+            persist_enabled(false).await?;
+            // A broker that is already running has not seen the file; tell it
+            // before the stop, in case the stop itself is what fails.
+            let _ = rc_service(&[SERVICE, "reload"]).await;
             // Best effort: stopping an already-stopped service is not an error.
             let _ = rc_service(&[SERVICE, "stop"]).await;
             rc_update(&["del", SERVICE, RUNLEVEL]).await
@@ -236,6 +247,21 @@ async fn run_openrc(
     gio::spawn_blocking(move || command(&executable, &args, 30).map(|_| certificate::ok()))
         .await
         .map_err(|_| "System worker failed".to_string())?
+}
+
+/// Writes the master switch into the configuration file the broker reads.
+///
+/// Failures are fatal for the operation: a service in the default runlevel
+/// whose configuration still says `enabled: false` would start and immediately
+/// refuse to listen, which is harder to explain than a rejected click.
+async fn persist_enabled(enabled: bool) -> Result<()> {
+    let path = uflinux_rds_common::config_file_path();
+    gio::spawn_blocking(move || {
+        uflinux_rds_common::Config::set_enabled_on_disk(&path, enabled)
+            .map_err(|error| format!("Cannot update {}: {error}", path.display()))
+    })
+    .await
+    .map_err(|_| "System worker failed".to_string())?
 }
 
 async fn authorized(

@@ -739,8 +739,21 @@ impl App {
             }
             Action::RdpSystem { operation } => {
                 let current = self.view.borrow().rdp.clone();
+                let expected = match operation {
+                    RdpSystemAction::Enable => Some(true),
+                    RdpSystemAction::Disable => Some(false),
+                    _ => None,
+                };
                 let value = rdp::system(&self.system, operation, &current).await?;
-                self.view.borrow_mut().rdp = rdp::query().await;
+                let mut state = rdp::query().await;
+                // The broker notices the rewritten file on SIGHUP and handles that
+                // signal asynchronously, so the first read can still carry the old
+                // flag. Read again before the panel is redrawn.
+                if expected.is_some_and(|want| state.enabled != want) {
+                    let _ = glib::timeout_future(Duration::from_millis(600)).await;
+                    state = rdp::query().await;
+                }
+                self.view.borrow_mut().rdp = state;
                 self.publish();
                 return Ok(value);
             }

@@ -12,6 +12,15 @@ pub use config::{
 };
 pub use protocol::{BrokerState, Reply, Request, SessionInfo, SystemAction};
 
+/// Configuration file, honouring `UFLINUX_RDS_CONFIG` exactly like the broker's
+/// own `--config` handling, so every writer patches the file the broker reads.
+pub fn config_file_path() -> std::path::PathBuf {
+    match std::env::var_os("UFLINUX_RDS_CONFIG") {
+        Some(path) if !path.is_empty() => std::path::PathBuf::from(path),
+        _ => std::path::Path::new(DEFAULT_CONFIG_PATH).to_path_buf(),
+    }
+}
+
 /// Socket the broker listens on for control traffic.
 ///
 /// The broker is a system service, so the socket lives in a directory it owns

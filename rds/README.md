@@ -47,9 +47,11 @@ uflinux-rdsctl apply /etc/uflinux/rds.json
 roster, and `uflinux-rdsctl disconnect SESSION_ID` ends one session. `start` and
 `stop` ask the running broker to open or close its listeners, so they work
 without root; if no broker answers they fall back to `rc-service uflinux-rds`,
-which does need root. `enable` and `disable` are `rc-update add`/`del`
-passthroughs and always need root. The Settings page reaches the same effect
-through the polkit helper.
+which does need root. `enable` and `disable` move both halves of the master
+switch — the default runlevel and the `enabled` key of `/etc/uflinux/rds.json` —
+and always need root; a live broker is asked to do it itself, otherwise the file
+is rewritten and `rc-update add`/`del` is run directly. The Settings page reaches
+the same effect through the polkit helper.
 
 Applying a configuration that changes `enabled` also starts or stops the
 listeners — that is what the Settings switch promises — while any other field is

@@ -299,6 +299,10 @@ fn set_running(state: &State, args: &Args, running: bool) -> Reply {
 
 /// Answer `set_enabled`, mirroring `uflinux-rdsctl enable|disable`: only root
 /// may change the default runlevel, and the broker says so instead of pretending.
+///
+/// The runlevel and the `enabled` key in the configuration file are the two
+/// halves of the switch, so both are moved here; a runlevel entry alone would
+/// be forgotten the next time the broker re-reads its configuration.
 async fn set_enabled(state: &State, enabled: bool) -> Reply {
     // Persistence lives in the runlevel, so this is `rc-update`, not
     // `rc-service`; the latter has no enable/disable verb.
@@ -306,6 +310,13 @@ async fn set_enabled(state: &State, enabled: bool) -> Reply {
     if !running_as_root() {
         return Reply::Error {
             message: format!("{verb} needs root (try: sudo uflinux-rdsctl {verb})"),
+        };
+    }
+    let path = state.config_path();
+    if let Err(error) = Config::set_enabled_on_disk(&path, enabled) {
+        warn!("cannot record the enabled state in {path:?}: {error}");
+        return Reply::Error {
+            message: error.to_string(),
         };
     }
     let args = if enabled {
