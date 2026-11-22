@@ -67,9 +67,9 @@ impl Compositor {
         };
         let env = child_env(&runtime_dir, target.as_ref());
         let args = [CString::new(command.as_str())
-            .unwrap_or_else(|_| CString::new("labwc").expect("static"))];
+            .unwrap_or_else(|_| CString::new(DesktopSpec::DEFAULT_COMMAND).expect("static"))];
         let filename = CString::new(command.as_str())
-            .unwrap_or_else(|_| CString::new("labwc").expect("static"));
+            .unwrap_or_else(|_| CString::new(DesktopSpec::DEFAULT_COMMAND).expect("static"));
 
         // CLOEXEC error pipe: `exec` closes the child's end, so an immediate
         // EOF in the parent means the exec succeeded. Anything the child
@@ -192,8 +192,14 @@ impl Compositor {
     }
 
     /// Ask the compositor to exit, escalating to `SIGKILL`, and reap it.
+    ///
+    /// The child is a session leader (see [`child_main`]) and the session
+    /// launcher leaves children of its own behind it — the compositor, the
+    /// autostart script, the desktop shell — so the signal goes to the whole
+    /// process group. Only the direct child is reaped; the rest are reparented
+    /// and exit once their wayland socket disappears.
     fn terminate(&self) {
-        if kill(self.pid, Signal::SIGTERM).is_err() {
+        if signal_group(self.pid, Signal::SIGTERM).is_err() {
             // Already gone.
             let _ = waitpid(self.pid, Some(WaitPidFlag::WNOHANG));
             return;
@@ -206,7 +212,7 @@ impl Compositor {
             std::thread::sleep(POLL_INTERVAL);
         }
         tracing::warn!(pid = self.pid.as_raw(), command = %self.command, "compositor ignored SIGTERM, sending SIGKILL");
-        let _ = kill(self.pid, Signal::SIGKILL);
+        let _ = signal_group(self.pid, Signal::SIGKILL);
         // Reap so we do not leave a zombie behind.
         let _ = waitpid(self.pid, None);
     }
@@ -215,6 +221,16 @@ impl Compositor {
 impl Drop for Compositor {
     fn drop(&mut self) {
         self.terminate();
+    }
+}
+
+/// Sends `signal` to the child's process group, falling back to the child
+/// itself when the group is already gone (`ESRCH`) or unreachable.
+fn signal_group(pid: Pid, signal: Signal) -> Result<(), Errno> {
+    match kill(Pid::from_raw(-pid.as_raw()), signal) {
+        Ok(()) => Ok(()),
+        Err(Errno::ESRCH) => kill(pid, signal),
+        Err(e) => Err(e),
     }
 }
 

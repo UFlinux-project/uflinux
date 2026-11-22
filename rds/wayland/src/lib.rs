@@ -1,7 +1,8 @@
 //! Headless desktop backend for UFLinux RDS.
 //!
-//! [`DesktopBackend`] spawns a nested wlroots compositor (`labwc` with
-//! `WLR_BACKENDS=headless`, `cage` as a fallback) inside a private
+//! [`DesktopBackend`] spawns the session launcher (`uflinux-session` by
+//! default, which starts `dbus-run-session` and a nested wlroots compositor
+//! with `WLR_BACKENDS=headless`) inside a private
 //! `XDG_RUNTIME_DIR`, connects to it as a Wayland client, captures its
 //! output with `zwlr_screencopy_manager_v1` (full frames in shared
 //! memory, diffed in software into dirty rectangles) and injects input

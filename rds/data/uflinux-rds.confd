@@ -19,5 +19,7 @@
 # TCP port for the embedded web gateway (default: 3390)
 #UFLINUX_RDS_WEB_PORT=3390
 
-# Command that starts the user session inside the broker (default: labwc)
-#UFLINUX_RDS_SESSION_COMMAND=labwc
+# Command that starts the user session inside the broker (default:
+# uflinux-session, the distro launcher; a bare compositor such as labwc starts
+# without a session bus, so the desktop shell cannot attach)
+#UFLINUX_RDS_SESSION_COMMAND=uflinux-session

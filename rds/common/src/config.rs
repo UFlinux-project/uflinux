@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_RDP_PORT: u16 = 3389;
 pub const DEFAULT_WEB_PORT: u16 = 3390;
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/uflinux/rds.json";
-pub const DEFAULT_SESSION_COMMAND: &str = "labwc";
+pub const DEFAULT_SESSION_COMMAND: &str = "uflinux-session";
 pub const DEFAULT_MAX_SESSIONS: usize = 4;
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
 pub const DEFAULT_MAX_FPS: u32 = 30;
@@ -40,7 +40,8 @@ pub struct Config {
     /// Keep the desktop alive this long after a disconnect so a reconnect can
     /// reattach. Zero means the session dies with the connection.
     pub linger_secs: u64,
-    /// Compositor launched per session. Overridden by `UFLINUX_RDS_SESSION_COMMAND`.
+    /// Session program launched per connection, e.g. `uflinux-session`.
+    /// Overridden by `UFLINUX_RDS_SESSION_COMMAND`.
     pub session_command: String,
     pub codec: CodecConfig,
     pub web: WebConfig,

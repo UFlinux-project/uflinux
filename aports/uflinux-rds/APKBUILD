@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-rds
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 pkgdesc="UFLinux Remote Desktop Services broker (IronRDP)"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
@@ -107,7 +107,12 @@ package() {
 }
 server() {
 	pkgdesc="Per-user RDP session process for UFLinux Remote Desktop Services"
-	depends="$pkgname=$pkgver-r$pkgrel wayland labwc cage"
+	# A session runs the distro launcher, so the subpackage pulls in the chain
+	# it execs: uflinux-session and uflinux-compositor (uflinux-defaults), the
+	# renderer probe (uflinux-settings-daemon), dbus-run-session (dbus) and
+	# labwc itself. Cross-package dependencies are unpinned: the versions
+	# belong to other recipes.
+	depends="$pkgname=$pkgver-r$pkgrel wayland labwc uflinux-defaults uflinux-settings-daemon dbus"
 	amove usr/libexec/uflinux-rdp-session
 }
 web() {

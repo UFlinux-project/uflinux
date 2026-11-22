@@ -16,7 +16,7 @@ connection and are torn down again when the last client leaves.
 | Package | Contents |
 | --- | --- |
 | `uflinux-rds` | Broker `/usr/bin/uflinux-rdsd`, `uflinux-rdsctl`, `/etc/uflinux/rds.json`, OpenRC service, PAM and D-Bus/polkit data |
-| `uflinux-rds-server` | Per-connection session host `/usr/libexec/uflinux-rdp-session` plus `labwc` and `cage` |
+| `uflinux-rds-server` | Per-connection session host `/usr/libexec/uflinux-rdp-session`, which runs the `uflinux-session` launcher (`uflinux-defaults`) |
 | `uflinux-rds-web` | Web gateway `/usr/bin/uflinux-rds-web` with the compiled wasm client embedded |
 | `uflinux-rds-system` | Authorized helper `/usr/libexec/uflinux-rds-system`, its D-Bus service and polkit rules |
 | `uflinux-rds-vaapi` | Runtime packages (`ffmpeg`, `openh264`, `libva`) for hardware H.264 |
@@ -74,7 +74,10 @@ mode 0750, so the private key (0640) is not readable by ordinary users.
 1. `uflinux-rdsd` accepts the connection, runs PAM (`/etc/pam.d/uflinux-rds`)
    and checks `allowed_users`/`allowed_groups`, `max_sessions` and NLA.
 2. It starts `uflinux-rdp-session` for that user. The session host drops root,
-   starts `cage` running `session_command`, and attaches to it over Wayland
+   starts the headless compositor for `session_command` (by default the
+   `uflinux-session` launcher, so the session gets its own D-Bus session bus,
+   `uflinux-compositor`, labwc and everything in `/etc/xdg/labwc/autostart`),
+   and attaches to it over Wayland
    using the virtual-pointer, virtual-keyboard and screencopy protocols. Input
    is injected rather than shared, so two users on one machine cannot see or
    drive each other's desktop.
@@ -129,5 +132,5 @@ libpam headers. `scripts/pgo-build.sh` does the profile-guided and BOLT-optimize
 build used by `aports/uflinux-rds`, the same way `settings/` does for Settings:
 train, rebuild with `-fprofile-generate`, train again, `llvm-bolt`, train a third
 time. `scripts/pgo-train.sh` drives one real loop — start the broker, log in over
-the web gateway, watch a session appear, disconnect — and needs a session bus,
-`gdbus`, `labwc` and a font.
+the web gateway, watch a session appear, disconnect — and needs a session bus
+and `gdbus`; the session program itself is stubbed out with `/bin/true`.

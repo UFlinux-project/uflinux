@@ -11,7 +11,7 @@ static SOCKET_SEQ: AtomicU32 = AtomicU32::new(0);
 /// Everything the backend needs to know in order to start one desktop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesktopSpec {
-    /// Compositor to execute, e.g. `labwc` or `cage`.
+    /// Session program to execute, e.g. `uflinux-session` or `labwc`.
     ///
     /// A bare name is looked up in `$PATH`; a value containing `/` is used as
     /// a path. `None` in [`Config::session_command`] maps to the default
@@ -32,8 +32,12 @@ pub struct DesktopSpec {
 }
 
 impl DesktopSpec {
-    /// The compositor used when the session command is not configured.
-    pub const DEFAULT_COMMAND: &'static str = "labwc";
+    /// Session launcher used when the session command is not configured.
+    ///
+    /// This is the distro launcher rather than a bare compositor: it starts
+    /// `dbus-run-session` and `uflinux-compositor`, so the shell and everything
+    /// else in `/etc/xdg/labwc/autostart` get a session bus.
+    pub const DEFAULT_COMMAND: &'static str = "uflinux-session";
 
     /// Compositor fallbacks tried when [`Self::command`] cannot be executed.
     pub const FALLBACK_COMMANDS: &'static [&'static str] = &["cage"];
@@ -113,7 +117,7 @@ mod tests {
     fn empty_command_falls_back_to_default() {
         let spec = DesktopSpec::new("", 1280, 720, "/run/user/1000");
         assert_eq!(spec.effective_command(), DesktopSpec::DEFAULT_COMMAND);
-        assert_eq!(DesktopSpec::DEFAULT_COMMAND, "labwc");
+        assert_eq!(DesktopSpec::DEFAULT_COMMAND, "uflinux-session");
     }
 
     #[test]

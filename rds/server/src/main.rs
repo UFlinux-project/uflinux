@@ -979,14 +979,32 @@ fn pick_idle_timeout(args: &Args, config: &Config) -> Option<Duration> {
     }
 }
 
-/// Where the nested compositor puts its socket.
+/// Where one session keeps its state: the TLS fallback and the nested
+/// compositor's socket.
+///
+/// The last component is per-process, so two concurrent sessions of the same
+/// user (every packaged session runs as the broker's uid) get separate
+/// directories. They have to: the session launcher writes its ready file and a
+/// private D-Bus socket into `XDG_RUNTIME_DIR`, and a compositor prunes stale
+/// `wayland-*` sockets from the directory it starts in, so a shared directory
+/// would make the second session tear the first one's display down.
 fn session_runtime_dir(env: &[(String, String)]) -> PathBuf {
-    if let Some(dir) = env_value(env.to_vec(), "XDG_RUNTIME_DIR") {
-        let path = PathBuf::from(dir);
-        if path.is_absolute() {
-            return path;
+    let base = match env_value(env.to_vec(), "XDG_RUNTIME_DIR") {
+        Some(dir) => {
+            let path = PathBuf::from(dir);
+            if path.is_absolute() {
+                path
+            } else {
+                state_runtime_base()
+            }
         }
-    }
+        None => state_runtime_base(),
+    };
+    base.join(format!("rdp-{}", std::process::id()))
+}
+
+/// Fallback root for session state when there is no `XDG_RUNTIME_DIR`.
+fn state_runtime_base() -> PathBuf {
     // Safety: `getuid` has no preconditions.
     let uid = unsafe { libc::getuid() };
     PathBuf::from(format!("{STATE_DIR}/sessions/{uid}"))
@@ -1014,3 +1032,34 @@ const _: fn(&ArgError) -> String = |error| error.to_string();
 
 /// Keeps `DesktopSize` in the public surface of the binary's imports.
 const _: fn(&DesktopSize) -> u16 = |size| size.width;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_dir_honours_xdg_runtime_dir() {
+        let dir = session_runtime_dir(&[("XDG_RUNTIME_DIR".to_owned(), "/run/user/1000".into())]);
+        assert!(dir.starts_with("/run/user/1000"));
+        assert!(dir.is_absolute());
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("rdp-"), "{name}");
+    }
+
+    #[test]
+    fn runtime_dir_falls_back_to_the_state_directory() {
+        let dir = session_runtime_dir(&[("XDG_RUNTIME_DIR".to_owned(), "relative".into())]);
+        assert!(dir.starts_with(&format!("{STATE_DIR}/sessions/")));
+        let empty = session_runtime_dir(&[]);
+        assert_eq!(dir, empty);
+    }
+
+    #[test]
+    fn runtime_dir_is_per_process() {
+        // Two session hosts for the same uid must not share a compositor
+        // directory; within one process the value is stable.
+        let env = [("XDG_RUNTIME_DIR".to_owned(), "/run/user/0".to_owned())];
+        assert_eq!(session_runtime_dir(&env), session_runtime_dir(&env));
+        assert!(session_runtime_dir(&env).ends_with(&format!("rdp-{}", std::process::id())));
+    }
+}

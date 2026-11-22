@@ -8,7 +8,7 @@
   "max_sessions": 4,
   "idle_timeout_secs": 900,
   "linger_secs": 0,
-  "session_command": "labwc",
+  "session_command": "uflinux-session",
   "codec": {
     "h264": "auto",
     "allow_remotefx": true,
