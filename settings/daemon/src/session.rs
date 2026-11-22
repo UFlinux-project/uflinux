@@ -1033,10 +1033,17 @@ impl App {
                     if !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
                         return Err("Wallpaper must be a regular image smaller than 32 MiB".into());
                     }
-                    let (_, width, height) =
-                        gdk_pixbuf::Pixbuf::file_info(path).ok_or("Unsupported wallpaper image")?;
-                    if width <= 0 || height <= 0 || width as i64 * height as i64 > 16_777_216 {
-                        return Err("Wallpaper exceeds the 16 megapixel memory limit".into());
+                    let dimensions = settings_core::image::probe_file(path)?;
+                    if let settings_core::image::ImageDimensions::Pixels {
+                        width,
+                        height,
+                    } = dimensions
+                    {
+                        if u64::from(width) * u64::from(height) > 16_777_216 {
+                            return Err(
+                                "Wallpaper exceeds the 16 megapixel memory limit".into()
+                            );
+                        }
                     }
                 }
                 Ok(())

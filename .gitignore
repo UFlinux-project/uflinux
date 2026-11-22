@@ -21,6 +21,7 @@
 !/settings/core/src/
 /settings/core/src/*
 !/settings/core/src/panel.rs
+!/settings/core/src/image.rs
 !/settings/installer/
 !/settings/desktop/
 !/settings/data/

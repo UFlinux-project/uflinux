@@ -2,6 +2,7 @@
 pub mod bus;
 pub mod clock;
 pub mod files;
+pub mod image;
 pub mod layout;
 pub mod model;
 pub mod panel;

@@ -10,6 +10,11 @@ same round confirmed that the shipped window control layout gives applications
 all three buttons; see
 [desktop prototype validation](desktop-prototype-validation.md).
 
+A third round measured the dynamic-loading question directly and implemented
+priorities 10 and 11. Priority 12 was measured and rejected. Those numbers come
+from the Alpine SDK container rather than a guest boot, so they compare two
+builds of this tree against each other and are not a hardware benchmark.
+
 ## Priorities
 
 | Priority | Opportunity | Main benefit | Effort |
@@ -23,6 +28,9 @@ all three buttons; see
 | 7 | Offer bounded zram swap | Better behavior under application memory pressure | Done (measurement left open) |
 | 8 | Force OpenSSL kTLS | Kernel-side TLS record encryption | Blocked (needs an openssl fork) |
 | 9 | Tune native compilation separately from emulated builds | Shorter build turnaround | Low–medium |
+| 10 | Load the renderer probe's GL and Vulkan libraries on demand | Faster `uflinux-settingsctl`, far smaller CLI footprint | Done |
+| 11 | Validate wallpapers without GdkPixbuf in the daemon | Smaller always-running daemon footprint | Done |
+| 12 | Bind Settings symbols lazily | Shorter dynamic-linker startup | Rejected (measured no-op) |
 
 ### 1. Select firmware per device
 
@@ -201,6 +209,97 @@ Compare fat versus thin LTO using clean build time, peak RAM, binary/APK size,
 desktop latency, and the existing reproducibility checks. Retain architecture
 portability and source verification. This is a build-time opportunity; a desktop
 runtime speedup has not been demonstrated.
+
+### 10. Load the renderer probe's GL and Vulkan libraries on demand
+
+Implemented. `settings/daemon/src/renderer.c` used to call `eglGetDisplay`,
+`eglInitialize`, `eglGetProcAddress`, `vkCreateInstance` and the Vulkan
+enumeration entry points directly, and `settings/daemon/build.rs` emitted a
+`cargo:rustc-link-lib` line for every one of `vulkan`, `EGL` and `GLESv2` that
+`pkg-config` reported. Those three libraries therefore appeared in the
+`DT_NEEDED` list of both `uflinux-settingsctl` and `uflinux-settingsd`, so the
+dynamic linker mapped and relocated the whole driver stack — Mesa, LLVM, the
+DRI drivers — before `main`, even for the `status` and `volume` subcommands that
+never touch a GPU.
+
+The probe now `dlopen`s `libvulkan.so.1` and `libEGL.so.1` with
+`RTLD_NOW | RTLD_LOCAL` and resolves each entry point with `dlsym`;
+`glGetString` and the `EXT` entry points come from `eglGetProcAddress`. The
+link-emission loop is gone from `build.rs`, so the libraries are no longer
+`NEEDED`. `vulkan-loader-dev` and `mesa-dev` stay in `makedepends` because the
+headers are still compiled against, and the compositor integration is unchanged:
+`aports/uflinux/uflinux-compositor` still runs `uflinux-settingsctl renderer`.
+
+Measured in the SDK container against a baseline built from the same tree with
+the same release flags (`opt-level=s`, fat LTO, 8 codegen units, `panic=abort`),
+40 executions each:
+
+| Case | Baseline | Now |
+| --- | ---: | ---: |
+| `uflinux-settingsctl status`, fastest exec | 11.450 ms | **0.818 ms** |
+| `uflinux-settingsctl status`, median exec | 11.839 ms | **0.872 ms** |
+| `uflinux-settingsctl status`, peak RSS | 49,088 KiB | **4,940 KiB** |
+| `uflinux-settingsctl renderer`, fastest exec | 11.200 ms | 10.985 ms |
+| `uflinux-settingsctl renderer`, peak RSS | 48,464 KiB | 48,756 KiB |
+| `uflinux-settingsctl` `NEEDED` closure | 46 objects, 251,528,296 B | **14 objects, 7,261,824 B** |
+| `/bin/true` floor | 0.089 ms, 868 KiB | 0.089 ms, 868 KiB |
+
+`renderer` is deliberately unchanged: that subcommand is exactly the one that
+pays for `dlopen`, and it still loads the driver stack. The gain is on every
+other invocation, which is what the panel, the compositor's non-GL path and any
+user shell command actually run. Both binaries print the same `pixman` verdict
+with the same exit status in a GPU-less container, so the probe still falls back
+correctly when `dlopen` fails.
+
+### 11. Validate wallpapers without GdkPixbuf in the daemon
+
+Implemented. The daemon only needed image *dimensions* to enforce the 16
+megapixel ceiling before handing a path to the desktop, but linking
+`gdk-pixbuf` pulled `libgdk_pixbuf-2.0`, its loader directory, and the shared
+library machinery around it into a process that runs for the whole session.
+
+`settings/core/src/image.rs` now reads the header of PNG, JPEG, WebP, GIF, BMP
+and SVG files — a 64 KiB window, with a whole-file reread for a JPEG whose
+start-of-frame marker sits past the window — and reports either pixel
+dimensions or `Scalable`. `set_appearance` in
+`settings/daemon/src/session.rs` calls `probe_file` and applies the ceiling only
+to the `Pixels` case. `gdk-pixbuf` is dropped from the daemon's manifest and
+lockfile entry; the desktop and the UI keep it, since they decode pixels.
+
+| Case | Baseline | Now |
+| --- | ---: | ---: |
+| `uflinux-settingsd` `NEEDED` closure | 44 objects, 17,155,048 B | **33 objects, 12,397,936 B** |
+| Idle daemon, `Rss` | 10,424 KiB | **8,716 KiB** |
+| Idle daemon, `Pss` | 5,484 KiB | **5,149 KiB** |
+
+The idle sample is one 6 second run per binary over a session and system bus;
+the mapped-closure delta is the more stable figure, since an idle daemon has not
+touched most of its pages. Behaviour was checked over real D-Bus by sending
+`Execute` with a `set-appearance` action: the prober accepts PNG, GIF, JPEG with
+a start-of-frame marker, SVG, BMP and WebP, rejects a 70 KiB random blob and a
+missing file, and an 8192×8192 PNG is refused with the existing 16 megapixel
+message. One intentional behaviour change: a JPEG that carries only a JFIF
+APP0 segment and no start-of-frame marker is now rejected where GdkPixbuf
+accepted it, because the header alone cannot bound its memory cost. The desktop
+re-decodes every wallpaper anyway and rejects the same file.
+
+### 12. Bind Settings symbols lazily
+
+Not implemented; measured as a no-op. Lazy binding needs a `.rela.plt` section
+and no `BIND_NOW`, and neither condition holds here. Across the 1,585 shared
+objects in the container's `/usr/lib`, only 94 have a `.rela.plt` at all: the
+toolchain emits `-fno-plt`, so calls go through `R_X86_64_GLOB_DAT` GOT entries
+in `.rela.dyn`, which are always processed eagerly. The totals are 7,359
+lazy-bindable PLT relocations against 832,849 eager `.rela.dyn` relocations, so
+the addressable set is about 0.9% of the relocation work. `libgtk-4.so.1.2200.4`
+has no `.plt` or `.rela.plt` section whatsoever and carries 3,008 `GLOB_DAT`
+entries. `uflinux-settingsctl` itself has 19 `JUMP_SLOT` entries in the baseline
+build, and 7 after priority 10, against 856 `RELATIVE` and 107 `GLOB_DAT` in
+both, and the `DT_FLAGS BIND_NOW` and
+`DT_FLAGS_1 NOW` entries come from Alpine's `abuild` default `LDFLAGS`, not from
+this project's `RUSTFLAGS` — so `-z lazy` would mean overriding the distribution
+policy for a rounding error. The `dlopen` work in priority 10 already removes
+the relocations that mattered by removing the libraries that owned them.
 
 ## Recommended first implementation
 
