@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use uflinux_rds_common::openrc;
 use uflinux_rds_common::{BrokerState, Config, Reply, Request, SessionInfo, SystemAction};
 
 const SERVICE: &str = "uflinux-rds";
@@ -161,7 +162,7 @@ fn print_state(state: &BrokerState) {
         if config.nla_required {
             "required"
         } else {
-            "optional"
+            "off, TLS only"
         }
     );
     if config.web.enabled {
@@ -259,7 +260,7 @@ fn rc_update(args: &[&str], verb: &str) -> Result<(), String> {
             "{verb} needs root (try: sudo uflinux-rdsctl {verb})"
         ));
     }
-    openrc("rc-update", args)
+    run_openrc(&openrc::rc_update(), args)
 }
 
 /// `start` and `stop`: ask the broker to bring its own listeners down or up,
@@ -275,22 +276,26 @@ fn service_toggle(socket: &Path, running: bool) -> Result<(), String> {
         Ok(reply) => expect_ok(reply),
         // The broker is not reachable, so there is nothing to toggle in-place.
         // The runscript is the only thing left that can change the state.
-        Err(_) => openrc("rc-service", &[SERVICE, verb]),
+        Err(_) => run_openrc(&openrc::rc_service(), &[SERVICE, verb]),
     }
 }
 
 /// Run one OpenRC command, argv-only. `rc-service` takes the service name
 /// *before* the verb, so the arguments arrive already in that order.
-fn openrc(executable: &str, args: &[&str]) -> Result<(), String> {
+fn run_openrc(executable: &Path, args: &[&str]) -> Result<(), String> {
+    let name = executable
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| executable.display().to_string());
     let status = Command::new(executable)
         .args(args)
         .env("LC_ALL", "C")
         .status()
-        .map_err(|_| format!("cannot run {executable}"))?;
+        .map_err(|_| format!("cannot run {name}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("{executable} {} failed", args.join(" ")))
+        Err(format!("{name} {} failed", args.join(" ")))
     }
 }
 

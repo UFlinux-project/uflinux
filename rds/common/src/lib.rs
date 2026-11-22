@@ -3,6 +3,8 @@
 mod config;
 mod protocol;
 
+pub mod openrc;
+
 pub use config::{
     CertificateSource, CodecConfig, Config, ConfigError, DEFAULT_CONFIG_PATH,
     DEFAULT_IDLE_TIMEOUT_SECS, DEFAULT_MAX_FPS, DEFAULT_MAX_SESSIONS, DEFAULT_RDP_PORT,

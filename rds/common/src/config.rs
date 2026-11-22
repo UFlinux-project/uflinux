@@ -23,8 +23,11 @@ pub struct Config {
     pub rdp_port: u16,
     /// Bind address for the RDP listener. Loopback keeps RDS local-only.
     pub rdp_bind: String,
-    /// Require CredSSP/NLA. Disabling it also disables the web gateway, which
-    /// cannot offer NLA without a machine certificate.
+    /// Require CredSSP/NLA. Off by default: answering CredSSP needs a copy of
+    /// the user's password, which a session host does not have (see
+    /// `rds/server/src/main.rs::session_security`). Clients that merely prefer
+    /// NLA connect anyway over server-authenticated TLS; clients that require
+    /// it are refused until there is a secret store to read a real one from.
     pub nla_required: bool,
     /// Users allowed to open a session. Empty means every local user.
     pub allowed_users: BTreeSet<String>,
@@ -129,7 +132,7 @@ impl Default for Config {
             enabled: false,
             rdp_port: DEFAULT_RDP_PORT,
             rdp_bind: "0.0.0.0".to_owned(),
-            nla_required: true,
+            nla_required: false,
             allowed_users: BTreeSet::new(),
             allowed_groups: BTreeSet::new(),
             max_sessions: DEFAULT_MAX_SESSIONS,

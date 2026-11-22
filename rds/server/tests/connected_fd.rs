@@ -78,7 +78,7 @@ fn a_live_client_socket_is_registered_without_panicking() {
     // Safety: `raw` is the descriptor `accepted` was holding, and `File` now
     // owns it; the child inherits it as fd 0.
     let socket = Stdio::from(unsafe { File::from_raw_fd(raw) });
-    let mut child = Command::new(binary())
+    let child = Command::new(binary())
         .args(invocation())
         .env("RUST_LOG", "off")
         .stdin(socket)
@@ -86,7 +86,6 @@ fn a_live_client_socket_is_registered_without_panicking() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn the session host");
-
     // The client side must not just sit there: the host takes the socket over
     // and closes it when the session gives up, so a read ends rather than
     // hanging forever. A timeout here means the child never reached the socket.

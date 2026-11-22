@@ -7,6 +7,7 @@ use std::{
     collections::HashMap,
     io::Read,
     os::unix::process::CommandExt,
+    path::Path,
     process::{Command, Stdio},
     rc::Rc,
     time::{Duration, Instant},
@@ -168,7 +169,14 @@ async fn execute(operation: &RdpSystemOperation) -> Result<serde_json::Value> {
 }
 
 /// OpenRC through the same argv-only boundary as every other helper command.
-fn command(executable: &str, args: &[&str], timeout: u64) -> Result<String> {
+///
+/// `executable` is an absolute path: this process is a polkit-spawned helper,
+/// so its `PATH` has no `/sbin` and a bare `rc-update` would not be found.
+fn command(executable: &Path, args: &[&str], timeout: u64) -> Result<String> {
+    let name = executable
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| executable.to_string_lossy().into_owned());
     let mut command = Command::new(executable);
     command.args(args).env("LC_ALL", "C");
     let mut child = unsafe {
@@ -182,7 +190,7 @@ fn command(executable: &str, args: &[&str], timeout: u64) -> Result<String> {
     .stdout(Stdio::piped())
     .stderr(Stdio::null())
     .spawn()
-    .map_err(|_| format!("Cannot start {executable}"))?;
+    .map_err(|_| format!("Cannot start {name}"))?;
     let started = Instant::now();
     loop {
         if let Some(status) = child
@@ -200,29 +208,32 @@ fn command(executable: &str, args: &[&str], timeout: u64) -> Result<String> {
             return if status.success() {
                 Ok(output)
             } else {
-                Err(format!("{executable} rejected the operation"))
+                Err(format!("{name} rejected the operation"))
             };
         }
         if started.elapsed() > Duration::from_secs(timeout) {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("{executable} timed out"));
+            return Err(format!("{name} timed out"));
         }
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
 async fn rc_update(args: &[&'static str]) -> Result<serde_json::Value> {
-    run_openrc("rc-update", args).await
+    run_openrc(uflinux_rds_common::openrc::rc_update(), args).await
 }
 
 async fn rc_service(args: &[&'static str]) -> Result<serde_json::Value> {
-    run_openrc("rc-service", args).await
+    run_openrc(uflinux_rds_common::openrc::rc_service(), args).await
 }
 
-async fn run_openrc(executable: &'static str, args: &[&'static str]) -> Result<serde_json::Value> {
+async fn run_openrc(
+    executable: std::path::PathBuf,
+    args: &[&'static str],
+) -> Result<serde_json::Value> {
     let args = args.to_vec();
-    gio::spawn_blocking(move || command(executable, &args, 30).map(|_| certificate::ok()))
+    gio::spawn_blocking(move || command(&executable, &args, 30).map(|_| certificate::ok()))
         .await
         .map_err(|_| "System worker failed".to_string())?
 }

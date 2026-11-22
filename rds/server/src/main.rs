@@ -429,7 +429,8 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
     session.publish(Some(size.width), Some(size.height));
 
     // --- connection --------------------------------------------------------
-    let security = session_security(config, &session.args, runtime_dir)?;
+    let security = session_security(config, runtime_dir)?;
+    let security_is_hybrid = security.is_hybrid();
     let parts = ServerParts {
         security,
         display,
@@ -441,6 +442,15 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
         factory: Some(factory),
     };
     let mut server = build_server(parts);
+    if security_is_hybrid {
+        let credentials = hybrid_credentials(&session.args);
+        warn!(
+            username = %credentials.username,
+            "NLA is required but this session has no secret to answer CredSSP with; \
+             NLA-only clients will be refused with a logon failure"
+        );
+        server.set_credentials(Some(credentials));
+    }
     let connection_events = server.event_sender().clone();
 
     let watchdog = tokio::spawn(idle_watchdog(
@@ -495,18 +505,36 @@ async fn serve(args: Args, plan: Plan<'_>) -> Result<(), String> {
 /// Which security layer the server terminates itself.
 #[derive(Clone)]
 enum Security {
-    /// Plain RDP security with no encryption: the web gateway already did TLS.
-    None,
     /// Server-authenticated TLS.
     Tls(tokio_rustls::TlsAcceptor),
     /// NLA: CredSSP on top of TLS, which needs the certificate's public key.
     Hybrid(tokio_rustls::TlsAcceptor, Vec<u8>),
 }
 
-fn session_security(config: &Config, args: &Args, runtime_dir: &Path) -> Result<Security, String> {
-    if !config.nla_required {
-        return Ok(Security::None);
+impl Security {
+    /// `true` when the session negotiated CredSSP, i.e. when the server needs
+    /// an identity of its own to answer the client's NTLM challenge.
+    fn is_hybrid(&self) -> bool {
+        matches!(self, Self::Hybrid(..))
     }
+}
+
+/// The security layer for one connection.
+///
+/// The default is server-authenticated TLS, not NLA. IronRDP's CredSSP server
+/// verifies the client's NTLM Type-3 against a password held by *this* process,
+/// and a session host has none: it learns who the user is only from the
+/// credentials in the connection, which is exactly what PAM is there to check.
+/// Handing CredSSP a placeholder password therefore fails every NLA client with
+/// `LOGON_FAILURE`, so NLA stays off until there is a secret store to read a
+/// real one from. TLS still encrypts the session and still authenticates the
+/// server; the user simply authenticates in the Client Info PDU, which is where
+/// the web client already sends the login form.
+///
+/// A client that merely *prefers* NLA (the mstsc default) accepts the TLS
+/// fallback. A client configured to *require* NLA is refused, and
+/// [`crate::ctl`] says so.
+fn session_security(config: &Config, runtime_dir: &Path) -> Result<Security, String> {
     // Reuse the key so a client that accepted it once is not warned again; fall
     // back to the session runtime directory when the state directory is not
     // writable for this process.
@@ -517,10 +545,24 @@ fn session_security(config: &Config, args: &Args, runtime_dir: &Path) -> Result<
     let acceptor = identity
         .acceptor()
         .map_err(|e| format!("cannot build the session TLS acceptor: {e}"))?;
-    if args.transport == Transport::Web {
-        Ok(Security::Tls(acceptor))
-    } else {
+    if config.nla_required {
         Ok(Security::Hybrid(acceptor, identity.spki().to_owned()))
+    } else {
+        Ok(Security::Tls(acceptor))
+    }
+}
+
+/// The identity CredSSP answers with when NLA is required.
+///
+/// There is no secret to put in it, so the password is empty and the username
+/// is the session's fallback user. NTLM then rejects the client's Type-3 with a
+/// clean `LOGON_FAILURE` rather than the connection dying on
+/// "no credentials while doing credssp"; the warning below names the reason.
+fn hybrid_credentials(args: &Args) -> Credentials {
+    Credentials {
+        username: args.session_user().unwrap_or_default().to_owned(),
+        password: String::new(),
+        domain: None,
     }
 }
 
@@ -562,7 +604,6 @@ fn build_server(parts: ServerParts) -> RdpServer {
 
     let started = RdpServer::builder().with_addr(addr);
     let secured = match security {
-        Security::None => started.with_no_security(),
         Security::Tls(acceptor) => started.with_tls(acceptor),
         Security::Hybrid(acceptor, public_key) => started.with_hybrid(acceptor, public_key),
     };

@@ -2,7 +2,7 @@
   "enabled": false,
   "rdp_port": 3389,
   "rdp_bind": "0.0.0.0",
-  "nla_required": true,
+  "nla_required": false,
   "allowed_users": [],
   "allowed_groups": [],
   "max_sessions": 4,

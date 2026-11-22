@@ -27,7 +27,8 @@ connection and are torn down again when the last client leaves.
 overrides a few common values for people who prefer shell syntax. The keys are
 the ones the Remote Desktop page in `uflinux-settings` edits:
 
-* `enabled`, `rdp_port`, `rdp_bind`, `nla_required`
+* `enabled`, `rdp_port`, `rdp_bind`, `nla_required` (off by default; see the
+  note about CredSSP in `rds/server/src/main.rs`)
 * `allowed_users`, `allowed_groups`, `max_sessions`, `idle_timeout_secs`,
   `linger_secs`, `session_command`
 * `codec.h264` (`auto`/`force`/`off`), `codec.allow_remotefx`, `codec.rfx_quant`,

@@ -17,6 +17,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
+use uflinux_rds_common::openrc;
 use uflinux_rds_common::{Config, Reply, Request, SystemAction};
 
 use crate::cli::Args;
@@ -284,7 +285,7 @@ fn set_running(state: &State, args: &Args, running: bool) -> Reply {
     if running_as_root() {
         let verb = if running { "start" } else { "stop" };
         tokio::spawn(async move {
-            if let Err(message) = openrc("rc-service", &[SERVICE, verb]).await {
+            if let Err(message) = run_openrc(&openrc::rc_service(), &[SERVICE, verb]).await {
                 warn!("rc-service {SERVICE} {verb}: {message}");
             }
         });
@@ -312,7 +313,7 @@ async fn set_enabled(state: &State, enabled: bool) -> Reply {
     } else {
         ["del", SERVICE, RUNLEVEL]
     };
-    match openrc("rc-update", &args).await {
+    match run_openrc(&openrc::rc_update(), &args).await {
         Ok(()) => {
             state.set_enabled(enabled);
             state.notify_change();
@@ -333,7 +334,11 @@ fn running_as_root() -> bool {
 
 /// Run one OpenRC command, argv-only, exactly like `rds/ctl` does. `rc-service`
 /// wants the service name before the verb; `rc-update` wants verb, name, runlevel.
-async fn openrc(executable: &str, args: &[&str]) -> std::result::Result<(), String> {
+async fn run_openrc(executable: &Path, args: &[&str]) -> std::result::Result<(), String> {
+    let name = executable
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| executable.display().to_string());
     let mut command = tokio::process::Command::new(executable);
     command
         .args(args)
@@ -343,12 +348,12 @@ async fn openrc(executable: &str, args: &[&str]) -> std::result::Result<(), Stri
         .stderr(std::process::Stdio::null());
     let status = timeout(OPENRC_TIMEOUT, command.status())
         .await
-        .map_err(|_| format!("{executable} {} timed out", args.join(" ")))?
-        .map_err(|_| format!("cannot run {executable}"))?;
+        .map_err(|_| format!("{name} {} timed out", args.join(" ")))?
+        .map_err(|_| format!("cannot run {name}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("{executable} {} failed", args.join(" ")))
+        Err(format!("{name} {} failed", args.join(" ")))
     }
 }
 
