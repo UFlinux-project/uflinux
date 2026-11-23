@@ -84,7 +84,7 @@ class ApkTests(unittest.TestCase):
 
     def test_default_repository_url_uses_custom_domain(self):
         expected = "https://repo.uflinux.org/apk/" + builder.LOCK["alpine"]["branch"] + "/uflinux"
-        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "UFlinux-project/uflinux3"}):
+        with patch.dict(os.environ, {"GITHUB_REPOSITORY": "UFlinux-project/uflinux"}):
             self.assertEqual(builder.repository_url(""), expected)
         with patch.dict(os.environ, {"GITHUB_REPOSITORY": "someone-else/uflinux3"}):
             self.assertEqual(builder.repository_url(""),

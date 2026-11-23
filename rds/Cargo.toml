@@ -9,7 +9,7 @@ license = "GPL-3.0-only"
 # ironrdp-server 0.14 requires 1.94.
 rust-version = "1.94"
 homepage = "https://uflinux.org"
-repository = "https://github.com/UFlinux-project/uflinux3"
+repository = "https://github.com/UFlinux-project/uflinux"
 
 # Use one upstream source for all IronRDP crates, including the unpublished
 # web client. Cargo.lock records the resolved revision for distro builds.

@@ -11,7 +11,7 @@
   },
   "musl": {
     "version": "99.1.2.6",
-    "revision": "2",
+    "revision": "3",
     "upstream_version": "1.2.6",
     "upstream_revision": 3,
     "mimalloc_version": "3.7.0",

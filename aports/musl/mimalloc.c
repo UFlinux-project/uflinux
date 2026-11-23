@@ -8,6 +8,9 @@
 #define MI_DEBUG 0
 #define MI_PADDING 0
 
+/* mlockall(MCL_CURRENT) faults in writable arena pages, including unused ones. */
+#define MI_DEFAULT_ARENA_EAGER_COMMIT 0
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 

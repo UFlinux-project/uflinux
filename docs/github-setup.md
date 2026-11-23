@@ -1,6 +1,6 @@
 # UFLinux repository setup
 
-Repository: https://github.com/UFlinux-project/uflinux3
+Repository: https://github.com/UFlinux-project/uflinux
 
 The build points images at the custom Pages domain by default:
 `https://repo.uflinux.org/apk/v3.24/uflinux`. Point the `repo` DNS record at
