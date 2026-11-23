@@ -28,7 +28,7 @@ profile_uflinux() {
 	# initializes to bring the systemd-boot menu up on demand.
 	kernel_cmdline="$kernel_cmdline quiet"
 	modloop_addons="$modloop_addons uflinux-initramfs"
-	apks="$apks uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang linux-lts $(grep -v '^#' /project/config/firmware-packages.txt)
+	apks="$apks musl musl-utils uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang linux-lts $(grep -v '^#' /project/config/firmware-packages.txt)
 		systemd-boot xfsprogs e2fsprogs dosfstools util-linux vulkan-loader mesa-vulkan-ati"
 	# Alpine builds firefox for every target architecture except riscv64, which
 	# only gets firefox-esr. ublock-origin is a noarch xpi that installs into

@@ -1,0 +1,95 @@
+/* Embed mimalloc in musl using musl-owned thread storage. */
+#define MI_LIBC_BUILD 1
+#define MI_LIBC_MUSL 1
+#define MI_TLS_MODEL_MUSL 1
+#define MI_NO_GETENV 1
+#define MI_PRIM_HAS_PROCESS_ATTACH 1
+#define MI_SECURE 0
+#define MI_DEBUG 0
+#define MI_PADDING 0
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+
+#include <features.h>
+/* small workaround for musl includes */
+#ifdef weak
+#undef weak
+#endif
+
+#include "pthread_impl.h"
+
+/* since we are internal we can make syscalls more direct (via macros) */
+#include "syscall.h"
+#define madvise __madvise
+#define MADV_DONTNEED POSIX_MADV_DONTNEED
+
+/* some verification whether we can make a valid build */
+#include <stdatomic.h>
+
+#if ATOMIC_LONG_LOCK_FREE != 2 || ATOMIC_CHAR_LOCK_FREE != 2
+#error Words and bytes must always be lock-free in this context
+#endif
+
+/* arena purge timing stuff (may fix later), stats (can patch out) */
+#if ATOMIC_LLONG_LOCK_FREE != 2
+#error 64-bit atomics must be lock-free for now
+#endif
+
+/* the whole mimalloc source */
+#include "static.c"
+
+/* chimera entrypoints */
+
+#define INTERFACE __attribute__((visibility("default")))
+
+extern int __malloc_replaced;
+extern int __aligned_alloc_replaced;
+
+void * const __malloc_tls_default = NULL;
+
+void __malloc_init(pthread_t thread) {
+    (void)thread;
+    _mi_auto_process_init();
+}
+
+void __malloc_tls_teardown(pthread_t thread) {
+    (void)thread;
+    mi_thread_done();
+}
+
+/* we have no way to implement this AFAICT */
+void __malloc_donate(char *a, char *b) { (void)a; (void)b; }
+
+void *__libc_calloc(size_t m, size_t n) {
+    return mi_calloc(m, n);
+}
+
+void __libc_free(void *ptr) {
+    mi_free(ptr);
+}
+
+void *__libc_malloc_impl(size_t len) {
+    return mi_malloc(len);
+}
+
+void *__libc_realloc(void *ptr, size_t len) {
+    return mi_realloc(ptr, len);
+}
+
+/* technically mi_aligned_alloc and mi_memalign are the same in mimalloc
+ * which is good for us because musl implements memalign with aligned_alloc
+ */
+INTERFACE void *aligned_alloc(size_t align, size_t len) {
+    if (mi_unlikely(__malloc_replaced && !__aligned_alloc_replaced)) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    void *p = mi_malloc_aligned(len, align);
+    mi_assert_internal(((uintptr_t)p % align) == 0);
+    return p;
+}
+
+INTERFACE size_t malloc_usable_size(void *p) {
+    return mi_usable_size(p);
+}

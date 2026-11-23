@@ -159,7 +159,8 @@ class PublicationTests(unittest.TestCase):
             declared = re.search(r'^subpackages="([^"]*)"', text, re.M)
             if declared:
                 for item in shlex.split(declared.group(1)):
-                    name, _, function = item.partition(":")
+                    name, _, split_function = item.partition(":")
+                    function = split_function.partition(":")[0]
                     split[name.replace("$pkgname", pkgname)] = function or None
             for name, function in split.items():
                 if function is None:

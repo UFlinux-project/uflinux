@@ -3,11 +3,10 @@
 import argparse
 import json
 from pathlib import Path
-import re
 import shutil
 import tempfile
 
-from builder import ARCHES, BUILD_KEY, CARGO_ORIGINS, LOCK, PACKAGE_NAMES, PROJECT, link_or_copy, package_version, sha, unsigned_digest
+from builder import ARCHES, BUILD_KEY, CARGO_ORIGINS, LOCK, MUSL_BOLT_ARCHES, PACKAGE_NAMES, link_or_copy, package_revision, package_version, sha, unsigned_digest
 from sbom import apk_metadata
 
 
@@ -28,8 +27,7 @@ def collect(out, arch, version):
         if identity is not None and current_identity != identity:
             raise ValueError('Package shards come from different builds')
         identity = current_identity
-        recipe = (PROJECT / 'aports' / origin / 'APKBUILD').read_text()
-        revision = re.search(r'^pkgrel=([0-9]+)$', recipe, re.M)[1]
+        revision = package_revision(origin)
         upstream = package_version(origin, version)
         names, payloads = set(), {}
         key = (source / BUILD_KEY).read_text()
@@ -50,6 +48,8 @@ def collect(out, arch, version):
             raise ValueError('Incomplete or unexpected package set for ' + origin)
         inputs = shard / 'inputs' / arch
         required = {'build-apks.tar.gz', 'sources.tar.gz'}
+        if origin == 'musl' and arch in MUSL_BOLT_ARCHES:
+            required.add('musl-bolt-profiles.tar.gz')
         if origin in CARGO_ORIGINS:
             required.add('cargo-sources.tar.gz')
         if record.get('settings_pgo'):

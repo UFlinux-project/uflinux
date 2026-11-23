@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from builder import ARCHES, CARGO_ORIGINS, PACKAGE_NAMES, check_asset_size, link_or_copy, sha
+from builder import ARCHES, CARGO_ORIGINS, MUSL_BOLT_ARCHES, PACKAGE_NAMES, check_asset_size, link_or_copy, sha
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--arch", choices=ARCHES, required=True)
@@ -24,6 +24,9 @@ else:
     # Non-Rust jobs may retain an existing Cargo cache during local builds.
     expected.update(str(p.relative_to(directory)) for p in inputs
                     if p.name == "cargo-sources.tar.gz" and p.parent.name in PACKAGE_NAMES)
+if args.arch in MUSL_BOLT_ARCHES:
+    expected.add("musl-bolt-profiles.tar.gz" if (directory / "build-apks.tar.gz").exists()
+                 else "musl/musl-bolt-profiles.tar.gz")
 record = out / "metadata" / args.arch / "package-shards" / "uflinux-settings" / "compile.json"
 if record.is_file() and json.loads(record.read_text()).get("settings_pgo"):
     expected.add("uflinux-settings/settings-pgo-profiles.tar.gz")

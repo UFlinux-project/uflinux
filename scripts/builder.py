@@ -174,7 +174,7 @@ def device_packages(device, arch):
     packages += ["musl-locales", "musl-locales-lang", "glib-lang", "gtk4.0-lang",
                  "labwc-lang", "vulkan-loader", "xfsprogs"]
     packages += browser_packages(arch)
-    packages += ["alpine-base", "apk-tools", "zstd", "util-linux", "dosfstools", "mtools",
+    packages += ["alpine-base", "musl", "musl-utils", "apk-tools", "zstd", "util-linux", "dosfstools", "mtools",
                  "e2fsprogs", "e2fsprogs-extra", "cloud-utils-growpart"]
     packages += firmware_packages()
     # f2fs-tools provides resize.f2fs, which the initramfs runs offline to
@@ -454,7 +454,9 @@ BUILD_KEY = "build.ec.pub"
 APPS_KEY = "uflinux3.ec384.pub"
 APPS_TRUSTED_KEY = "etc/apk/keys/" + APPS_KEY
 APPS_BUNDLED_KEY = PROJECT / ("aports/uflinux/" + APPS_KEY)
+MUSL_BOLT_ARCHES = {"x86_64", "aarch64", "riscv64"}
 PACKAGE_NAMES = {
+    "musl": {"musl", "musl-dev", "musl-dbg", "musl-utils", "musl-libintl"},
     "connman": {"connman", "connman-dbg", "connman-dev", "connman-doc", "connman-openrc",
                 "connman-vpn", "connman-vpn-openrc"},
     "uflinux-regreet": {"uflinux-regreet"},
@@ -479,6 +481,30 @@ def package_version(origin, distribution_version):
     if origin == "uflinux-settings":
         return LOCK["settings"]["version"]
     return LOCK[origin]["version"]
+
+
+def package_revision(origin):
+    recipe = (PROJECT / "aports" / origin / "APKBUILD").read_text()
+    return re.search(r"^pkgrel=([0-9]+)$", recipe, re.M)[1]
+
+
+def stage_musl_aport(archive, destination):
+    """Supply the recipe's unchanged Alpine files from the pinned aports archive."""
+    recipe = (destination / "APKBUILD").read_text()
+    checksums = re.search(r'^sha512sums="([^"]+)"', recipe, re.M)[1]
+    names = {line.split()[1] for line in checksums.splitlines() if line.strip()}
+    missing = {name for name in names if not name.endswith(".tar.gz") and not (destination / name).is_file()}
+    with tarfile.open(archive) as source:
+        for member in source:
+            parts = Path(member.name).parts
+            if len(parts) == 4 and parts[1:3] == ("main", "musl") and parts[-1] in missing and member.isfile():
+                member.name = parts[-1]
+                source.extract(member, destination, filter="data")
+                missing.remove(parts[-1])
+                if not missing:
+                    break
+    if missing:
+        raise RuntimeError("Pinned Alpine aports is missing musl sources: " + ", ".join(sorted(missing)))
 
 
 # Custom packages that are published to the signed repository but are not part of
@@ -624,6 +650,36 @@ def download(spec, cache):
     algorithm = "sha512" if "sha512" in spec else "sha256"
     expected = spec[algorithm]
     return download_pinned(spec["url"], expected, algorithm, cache / (expected + ".tar.gz"))
+
+
+def git_source_archive(spec, prefix, cache):
+    """Fetch a locked Git commit and retain the exact archive used by abuild."""
+    commit, expected = spec["commit"], spec["sha512"]
+    cache.mkdir(parents=True, exist_ok=True)
+    destination = cache / (expected + ".tar.gz")
+    if not destination.exists():
+        with tempfile.TemporaryDirectory(prefix="git-source-", dir=cache) as directory:
+            root = Path(directory)
+            repository = root / "repo"
+            run(["git", "init", "--bare", repository])
+            git = ["git", "-C", repository]
+            run([*git, "fetch", "--depth=1", "--no-tags", spec["git"], commit])
+            resolved = run([*git, "rev-parse", "FETCH_HEAD^{commit}"], capture_output=True, text=True).stdout.strip()
+            if resolved != commit:
+                raise RuntimeError(f"Git source resolved to {resolved}, expected {commit}")
+            archive = root / "source.tar"
+            compressed = root / "source.tar.gz"
+            with archive.open("wb") as stream:
+                run([*git, "-c", "tar.umask=0002", "archive", "--format=tar",
+                     "--prefix=" + prefix + "/", commit], stdout=stream)
+            with compressed.open("wb") as stream:
+                run(["gzip", "-n", "-9", "-c", archive], stdout=stream)
+            if sha(compressed, "sha512") != expected:
+                raise RuntimeError("Git source archive checksum mismatch: " + spec["git"])
+            compressed.replace(destination)
+    if sha(destination, "sha512") != expected:
+        raise RuntimeError("Corrupt cached Git source: " + str(destination))
+    return destination
 
 
 def download_pinned(url, expected, algorithm, path):
@@ -896,11 +952,35 @@ class Builder:
         # Resolve dependencies as root, but run every compilation/check/package
         # hook unprivileged. Plain abuild still checks that dependencies exist.
         directory = f"cd /project/aports/{origin} && "
+        if origin == "musl":
+            env = dict(env, SOURCE_DATE_EPOCH=str(LOCK["musl"]["source_date_epoch"]))
         dependency_env = dict(env, SUDO_APK="apk", REPODEST="/home/builder/packages")
         self.chroot("sh", "-ec", directory + "abuild -F deps", extra_env=dependency_env)
         try:
-            self.chroot("su", "-s", "/bin/sh", "builder", "-c",
-                        directory + "abuild", extra_env=env)
+            if origin == "musl" and self.args.arch in MUSL_BOLT_ARCHES:
+                self.chroot("su", "-s", "/bin/sh", "builder", "-c",
+                            directory + "abuild validate clean unpack prepare build", extra_env=env)
+                build = self.root / "project/aports/musl/src" / ("musl-" + LOCK["musl"]["upstream_version"])
+                profile = self.root / "tmp/musl-bolt-profile"
+                remove_tree(profile)
+                replay = getattr(self.args, "musl_bolt_profiles", None)
+                if not replay and not getattr(self.args, "refresh_musl_bolt_profile", False):
+                    pinned = PROJECT / "profiles/musl-bolt" / (self.args.arch + ".tar.gz")
+                    if pinned.is_file():
+                        replay = pinned
+                if replay:
+                    profile.mkdir()
+                    with tarfile.open(replay, "r:gz") as archive:
+                        archive.extractall(profile, filter="data")
+                run([sys.executable, PROJECT / "scripts/musl-bolt.py", self.args.arch,
+                     self.root, build, profile, *(["--replay"] if replay else [])])
+                relative = "/" + build.relative_to(self.root).as_posix()
+                self.chroot("su", "-s", "/bin/sh", "builder", "-c",
+                            directory + f"{relative}/lib/libc.bolt.so {relative}/allocator-test && abuild rootpkg",
+                            extra_env=env)
+            else:
+                self.chroot("su", "-s", "/bin/sh", "builder", "-c",
+                            directory + "abuild", extra_env=env)
         finally:
             self.chroot("sh", "-ec", directory + "abuild -F undeps", extra_env=dependency_env)
 
@@ -918,6 +998,11 @@ class Builder:
         self.chroot("sh", "-ec", "id builder >/dev/null 2>&1 || adduser -D -u 1000 builder; addgroup builder abuild")
         self.signing_key(owner=1000)
         source = self.root / "project/aports"
+        # Only stage the Alpine port for builds that include musl.
+        selected = (self.args.package,) if getattr(self.args, "package", None) else tuple(PACKAGE_NAMES)
+        if "musl" in selected:
+            archive = download(LOCK["sources"]["aports"], self.cache / "downloads")
+            stage_musl_aport(archive, source / "musl")
         for path in (source, *source.rglob("*")):
             os.chown(path, 1000, 1000)
         # Restored Actions caches belong to the host runner, not uid 1000 here.
@@ -927,12 +1012,18 @@ class Builder:
         apkbuild = source / "uflinux/APKBUILD"
         apkbuild.write_text(re.sub(r"^pkgver=.*$", "pkgver=" + self.args.version, apkbuild.read_text(), flags=re.M))
         # Only fetch the selected origin's sources in a package shard.
-        selected = (self.args.package,) if getattr(self.args, "package", None) else tuple(PACKAGE_NAMES)
         for origin in ("connman", "uflinux-regreet", "gpu-screen-recorder", "xdg-desktop-portal-gtk4"):
             if origin in selected:
                 archive = download(LOCK["sources"][origin], self.cache / "downloads")
                 suffix = "tar.xz" if origin == "connman" else "tar.gz"
                 shutil.copy2(archive, self.root / "var/cache/distfiles" / f"{origin}-{LOCK[origin]['version']}.{suffix}")
+        if "musl" in selected:
+            archive = download(LOCK["sources"]["musl"], self.cache / "downloads")
+            shutil.copy2(archive, self.root / "var/cache/distfiles" /
+                         f"musl-{LOCK['musl']['upstream_version']}.tar.gz")
+            mimalloc = "mimalloc-" + LOCK["musl"]["mimalloc_version"]
+            archive = git_source_archive(LOCK["sources"]["mimalloc"], mimalloc, self.cache / "downloads")
+            shutil.copy2(archive, source / "musl" / (mimalloc + ".tar.gz"))
         if "uflinux" in selected:
             artwork = download(LOCK["sources"]["gnome-backgrounds"], self.cache / "downloads")
             shutil.copy2(artwork, self.root / "var/cache/distfiles/gnome-backgrounds-3.38.0.tar.xz")
@@ -1059,6 +1150,8 @@ class Builder:
         rds_training_archive.unlink(missing_ok=True)
         if getattr(self.args, "rds_pgo", False):
             archive_tree(rds_profile_dir, rds_training_archive, self.epoch)
+        if "musl" in selected and self.args.arch in MUSL_BOLT_ARCHES:
+            archive_tree(self.root / "tmp/musl-bolt-profile", inputs / "musl-bolt-profiles.tar.gz", self.epoch)
         cargo = self.cache / self.args.arch / "cargo"
         names = [str(p.relative_to(cargo)) for p in (cargo / "registry/cache", cargo / "registry/index", cargo / "git/db") if p.exists()]
         if names:
@@ -1165,8 +1258,11 @@ class Builder:
                 promote_apk(path, self.cache / self.args.arch / "image-apk")
         # A development key may change while APK control hashes stay the same.
         # Always fetch custom packages from the freshly signed local repository.
+        local_prefixes = ("uflinux-", "connman-", "gpu-screen-recorder-",
+                          "xdg-desktop-portal-gtk4-", "simp1e-cursors-")
         for path in (self.cache / self.args.arch / "image-apk").glob("*.apk"):
-            if path.name.startswith(("uflinux-", "connman-", "gpu-screen-recorder-", "xdg-desktop-portal-gtk4-", "simp1e-cursors-")):
+            if path.name.startswith(local_prefixes) or (
+                    path.name.startswith("musl-") and "-" + LOCK["musl"]["version"] + "-r" in path.name):
                 path.unlink()
         if (self.root / "image-work").exists():
             shutil.rmtree(self.root / "image-work")
@@ -1213,6 +1309,7 @@ class Builder:
         self.chroot("xorriso", "-osirrox", "on", "-indev", "/image-out/uflinux-" + self.args.version + "-" + self.args.arch + ".iso",
                     "-extract", "/apks/" + self.args.arch, "/iso-apks")
         self.chroot("apk", "verify", *["/iso-apks/" + path.name for path in sorted(extracted.glob("*.apk"))])
+        self.verify_musl_media(extracted, repo)
         from sbom import generate
         generate(extracted, self.out / "metadata" / self.args.arch / f"uflinux-{self.args.version}-{self.args.arch}.spdx.json", self.args.version, self.args.arch, self.epoch)
 
@@ -1343,8 +1440,11 @@ class Builder:
         name = self.args.device
         device = device_target(DEVICES, name, self.args.arch)
         arch = self.args.arch
-        self.tools("dosfstools", "mtools", "zstd", "util-linux", "e2fsprogs",
-                   "f2fs-tools", "xfsprogs", "syslinux")
+        tools = ["dosfstools", "mtools", "zstd", "util-linux", "e2fsprogs",
+                 "f2fs-tools", "xfsprogs"]
+        if device["boot"] == "pc":
+            tools.append("syslinux")
+        self.tools(*tools)
         uuids = device_uuids(f"{self.args.version}:{name}:{arch}")
         layout = device_partitions(device["img_size_mib"])
         args = argparse.Namespace(**vars(self.args))
@@ -1361,6 +1461,7 @@ class Builder:
                                    DEVICE_ESP),
                 features_dir="/project/aports/uflinux /etc/mkinitfs/features.d",
                 complevel_zstd="-" + str(LOCK["image"]["initramfs_level"])))
+            root.verify_musl_installed()
             root.device_info = {"device": name, "device_label": device["label"],
                                 "device_status": device["status"]}
             root.manifest("device")
@@ -1445,6 +1546,18 @@ class Builder:
             with runtime.mounted():
                 runtime.verify_installed()
 
+    def verify_musl_media(self, extracted, repo):
+        for name in ("musl", "musl-utils"):
+            filename = name + "-" + LOCK["musl"]["version"] + "-r" + LOCK["musl"]["revision"] + ".apk"
+            if sha(extracted / filename) != sha(repo / filename):
+                raise RuntimeError("Live media does not contain the signed UFLinux " + filename)
+
+    def verify_musl_installed(self):
+        version = LOCK["musl"]["version"] + "-r" + LOCK["musl"]["revision"]
+        self.chroot("apk", "info", "-e", "musl=" + version, "musl-utils=" + version)
+        self.chroot("busybox", "true")
+        self.chroot("apk", "--version")
+
     def verify_installed(self):
         (self.out / "checks" / self.args.arch / "verified.json").unlink(missing_ok=True)
         self.tools("pax-utils", "file", "dbus", "shadow", "wayland-utils", "wlrctl", "wlr-randr", "grim", "procps", "pulseaudio-utils", "libnotify", "py3-gobject3", "py3-atspi", "wtype", "gcc", "musl-dev", "wayland-dev", "libxkbcommon-dev", "desktop-file-utils")
@@ -1462,6 +1575,8 @@ class Builder:
             if LOCK["apps"]["url"] not in text:
                 repositories.write_text(text + LOCK["apps"]["url"] + "\n")
             self.chroot("apk", "update")
+        self.chroot("apk", "upgrade", "--repository", "/repo")
+        self.verify_musl_installed()
         self.chroot("apk", "add", "--repository", "/repo", "uflinux", "uflinux-live", "uflinux-installer", "uflinux-installer-ui")
         # Damaging a signed archive must fail verification before installation.
         sample = sorted(repo.glob("uflinux-defaults-*.apk"))[0]
@@ -1627,7 +1742,14 @@ def main(argv=None):
     parser.add_argument("--settings-pgo-profiles", type=Path, help="Replay archived Settings training profiles")
     parser.add_argument("--rds-pgo", action="store_true", help="Build the native Remote Desktop shard with PGO and BOLT")
     parser.add_argument("--rds-pgo-profiles", type=Path, help="Replay archived Remote Desktop training profiles")
+    musl_profiles = parser.add_mutually_exclusive_group()
+    musl_profiles.add_argument("--musl-bolt-profiles", type=Path, help="Replay an archived musl BOLT profile")
+    musl_profiles.add_argument("--refresh-musl-bolt-profile", action="store_true", help="Record a fresh musl BOLT profile")
     args = parser.parse_args(argv)
+    if (args.musl_bolt_profiles or args.refresh_musl_bolt_profile) and (
+            args.stage not in {"packages", "all"} or args.package not in {None, "musl"}
+            or args.arch not in MUSL_BOLT_ARCHES):
+        parser.error("musl profiling requires a musl package build on x86_64, aarch64, or riscv64")
     if args.settings_pgo and (args.stage != "packages" or args.package != "uflinux-settings"
                               or args.arch not in {"x86_64", "aarch64"} or platform.machine() != args.arch):
         parser.error("--settings-pgo requires the Settings package stage on native x86_64 or aarch64")

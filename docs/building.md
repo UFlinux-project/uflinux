@@ -254,3 +254,42 @@ systems. `uflinux-defaults` supplies `rc_parallel="YES"` in
 `/etc/rc.conf.d/uflinux.conf`; dependencies still determine service ordering.
 Edit this file to set `rc_parallel="NO"` when diagnosing boot issues. APK preserves
 local edits during upgrades. This setting takes effect on the next boot.
+
+### UFLinux musl
+
+`aports/musl` contains the APKBUILD and UFLinux-specific sources. The builder
+supplies the unchanged Alpine files from the pinned aports archive. The signed
+repository publishes the package set with a `99.`
+version prefix so APK selects it during normal installs and upgrades. The loader
+reports the original musl version. The shared and static libraries use mimalloc
+3.7.0 with `MI_SECURE=0` on all six targets. The builder fetches the pinned
+mimalloc Git commit in `config/sources.lock.json`, verifies the generated archive's
+checksum, and includes it in the offline rebuild inputs. The shared library also uses BOLT on
+x86_64, aarch64, and riscv64.
+
+On an Ubuntu 26.04 build host, install `bolt-22` and `linux-tools-generic`. The
+RISC-V job additionally needs `qemu-system-misc`, `opensbi`, and `cpio`. Build
+the shard and collect a new profile with:
+
+```sh
+sudo bash scripts/build.sh --arch x86_64 --stage packages --package musl --refresh-musl-bolt-profile
+```
+
+Use the native runner for aarch64 and the x86_64 runner for riscv64. The profiling
+command needs permission to use Linux perf events. The profile is saved in
+`out/package-shards/ARCH/musl/inputs/ARCH/musl-bolt-profiles.tar.gz`. Pass that
+archive as `--musl-bolt-profiles PATH` to reproduce the rewrite on an identical
+input ELF and BOLT version. To make a profile the default for subsequent
+builds, add its archive at `profiles/musl-bolt/ARCH.tar.gz`. When that archive is
+absent, the package job records a fresh profile.
+
+When Alpine updates musl, refresh the pinned recipe and patches, update the
+upstream fields in `config/sources.lock.json`, and regenerate the BOLT profiles.
+Start a new UFLinux package revision whenever the input or profile changes.
+The repository rejects changes to a package with an already published version.
+
+To return to Alpine musl, disable the UFLinux repository temporarily and use
+`apk add` with explicit Alpine versions for `musl` and every installed musl split
+package in one transaction. Remove those version constraints before resuming
+normal Alpine updates. Re-enabling the UFLinux repository makes its `99.`
+packages eligible again.

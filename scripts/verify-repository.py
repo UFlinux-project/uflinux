@@ -97,6 +97,7 @@ def main():
         world.write_text('\n'.join('uflinux-defaults' if entry.startswith('uflinux-defaults=') else entry
                                    for entry in world.read_text().splitlines()) + '\n')
         apk('upgrade')
+        builder.verify_musl_installed()
         apk('info', '-e', 'uflinux-defaults=' + versions[0])
         if marker not in system_config.read_text() or user_config.read_text() != '# personal override\n':
             raise RuntimeError('Repository upgrade changed local configuration')

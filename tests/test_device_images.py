@@ -1,4 +1,5 @@
 """Device disk images are laid out, described and checked deterministically."""
+import argparse
 import contextlib
 import errno
 import gzip
@@ -74,6 +75,23 @@ class DeviceLayoutTests(unittest.TestCase):
 
 
 class DeviceRootfsTests(unittest.TestCase):
+    def test_only_pc_images_install_syslinux_in_the_build_root(self):
+        with tempfile.TemporaryDirectory() as workdir:
+            for name, device in DEVICES.items():
+                for arch in device["arches"]:
+                    with self.subTest(device=name, arch=arch):
+                        args = argparse.Namespace(device=name, arch=arch, version="0.1.0",
+                                                  workdir=workdir, cache=workdir, outdir=workdir,
+                                                  repository_url=None)
+                        image = builder.Builder(args)
+                        with patch.object(image, "chroot") as chroot, patch.object(
+                            builder.Builder, "device_bootstrap", side_effect=RuntimeError("stop before bootstrap")
+                        ):
+                            with self.assertRaisesRegex(RuntimeError, "stop before bootstrap"):
+                                image.device_image()
+                        chroot.assert_called_once()
+                        self.assertEqual("syslinux" in chroot.call_args.args, device["boot"] == "pc")
+
     def test_root_snapshot_preserves_mountpoints_without_build_mount_contents(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "source"

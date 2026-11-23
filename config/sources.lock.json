@@ -9,7 +9,24 @@
     "branch": "v3.24",
     "mirror": "https://dl-cdn.alpinelinux.org/alpine"
   },
+  "musl": {
+    "version": "99.1.2.6",
+    "revision": "1",
+    "upstream_version": "1.2.6",
+    "upstream_revision": 3,
+    "mimalloc_version": "3.7.0",
+    "source_date_epoch": 1792597816
+  },
   "sources": {
+    "musl": {
+      "url": "https://musl.libc.org/releases/musl-1.2.6.tar.gz",
+      "sha512": "1adad96eddb3a2eb0cacb3e363b0046568925fcdd75cf8b0503f2139df1f693d64730779ca0ce8131b7624ab2d37f4247bb1d3393c523de6e30d2b1d7732555c"
+    },
+    "mimalloc": {
+      "git": "https://github.com/microsoft/mimalloc.git",
+      "commit": "1ed67b5156a763441d2ec3c20221a7b3cd866129",
+      "sha512": "74d6f155944337aef80676f220be9dd243e90e30a41af5cf56d62bd2a35a991f8279acd43f9c9d0d6bde9d14d55e70194ccc43cce972a0a2cbe9b7c7959a8cff"
+    },
     "aports": {
       "url": "https://codeload.github.com/alpinelinux/aports/tar.gz/3db0a46d5ef507f6faaa9c0c0fc52181a277e9b7",
       "sha512": "e702e6178555f29d30fb7494cbc108d46b724f39684fbfb4751601e271170ce2ce4a602d0f0b96726b03baf7bd3032f12b75df164bbe594153d946aa0763486d"

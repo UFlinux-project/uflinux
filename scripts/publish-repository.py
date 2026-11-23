@@ -48,7 +48,7 @@ def required_in_iso(pkgname):
     the device-only set is installed by device images from the published
     repository rather than by the live system, so neither is in the ISO inventory.
     """
-    return not pkgname.endswith(("-dbg", "-doc", "-dev")) and pkgname not in ISO_EXCLUDED_PACKAGES
+    return not pkgname.endswith(("-dbg", "-doc", "-dev", "-libintl")) and pkgname not in ISO_EXCLUDED_PACKAGES
 
 
 def main():
@@ -111,6 +111,8 @@ def main():
                 for mode in boot_modes(arch):
                     result = json.loads((out / "vm" / arch / mode / "verified.json").read_text())
                     iso = out / "images" / arch / f"uflinux-{args.version}-{arch}.iso"
+                    if result.get("musl") != LOCK["musl"]["version"] + "-r" + LOCK["musl"]["revision"]:
+                        raise ValueError("Missing installed musl verification for " + arch)
                     if not result.get("xfs_install_reboot") or result.get("iso_sha256") != sha(iso):
                         raise ValueError("Missing installed-system boot verification for " + arch)
                     if arch == "x86_64":
@@ -142,6 +144,10 @@ def main():
                         if Path(name).name != name or not name.endswith(".apk"):
                             raise ValueError("Invalid APK snapshot filename")
                         if name in names:
+                            if name.startswith("musl-"):
+                                retained = previous / arch / name
+                                if unsigned_digest(retained) != unsigned_digest(staging / name):
+                                    raise ValueError("Bump the revision for changed musl package " + name)
                             continue
                         names.add(name)
                         source = (out / "repository" / arch if release is current else previous / arch) / name

@@ -29,11 +29,14 @@ optimization_args = []
 if compile_record.get("settings_pgo"):
     if not training.is_file():
         raise RuntimeError("Settings optimization profiles are missing")
-    optimization_args = ["--settings-pgo", "--settings-pgo-profiles", str(training)]
+    optimization_args += ["--settings-pgo", "--settings-pgo-profiles", str(training)]
 if compile_record.get("rds_pgo"):
     if not rds_training.is_file():
         raise RuntimeError("Remote Desktop optimization profiles are missing")
-    optimization_args = ["--rds-pgo", "--rds-pgo-profiles", str(rds_training)]
+    optimization_args += ["--rds-pgo", "--rds-pgo-profiles", str(rds_training)]
+musl_training = out / "inputs" / args.arch / "musl-bolt-profiles.tar.gz"
+if musl_training.is_file():
+    optimization_args += ["--musl-bolt-profiles", str(musl_training)]
 suffix = args.package or "all"
 cache = PROJECT / ".cache/reproducibility" / suffix
 if cache.exists():

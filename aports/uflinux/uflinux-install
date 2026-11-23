@@ -231,7 +231,7 @@ def firmware_world():
 
 def make_overlay(directory, args, repositories=None, uefi=False):
     write(directory, "etc/hostname", args.hostname + "\n")
-    world = "alpine-base\nuflinux\nxfsprogs\n" + firmware_world()
+    world = "alpine-base\nmusl\nmusl-utils\nuflinux\nxfsprogs\n" + firmware_world()
     if args.arch in {"x86", "x86_64", "aarch64", "armv7", "ppc64le", "riscv64"}:
         world += browser_world(args.arch)
     if uefi:

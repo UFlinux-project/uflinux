@@ -107,13 +107,13 @@ class MatrixTests(unittest.TestCase):
             for job in result['packages']['include']:
                 self.assertEqual(job['cargo_jobs'],expected[job['arch']])
 
-    def test_each_architecture_has_eight_independent_jobs(self):
-        for event,ref,full,count in [('pull_request','refs/heads/main',False,8),
-                                     ('workflow_dispatch','refs/heads/main',True,48)]:
+    def test_each_architecture_has_nine_independent_jobs(self):
+        for event,ref,full,count in [('pull_request','refs/heads/main',False,9),
+                                     ('workflow_dispatch','refs/heads/main',True,54)]:
             result=ci.configuration(event,ref,full)
             jobs=result['packages']['include']
             self.assertEqual(len(jobs),count)
             for architecture in result['matrix']['include']:
                 selected=[job for job in jobs if job['arch']==architecture['arch']]
-                self.assertEqual({job['package'] for job in selected},{'connman','gpu-screen-recorder','simp1e-cursors','uflinux-regreet','uflinux-rds','uflinux-settings','uflinux','xdg-desktop-portal-gtk4'})
+                self.assertEqual({job['package'] for job in selected},{'musl','connman','gpu-screen-recorder','simp1e-cursors','uflinux-regreet','uflinux-rds','uflinux-settings','uflinux','xdg-desktop-portal-gtk4'})
                 self.assertTrue(all(job['runner']==architecture['runner'] for job in selected))

@@ -22,7 +22,7 @@ EOF
 # The firmware list replaces Alpine's metapackage, which pins the Snapdragon-only
 # linux-firmware-qcom; see config/firmware-packages.txt.
 {
-	printf '%s\n' alpine-base uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang
+	printf '%s\n' alpine-base musl musl-utils uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang
 	grep -v '^#' /project/config/firmware-packages.txt
 } > "$tmp/etc/apk/world"
 case "$ARCH" in

@@ -1,0 +1,90 @@
+diff --git a/mimalloc/include/mimalloc/prim/prim-tls.h b/mimalloc/include/mimalloc/prim/prim-tls.h
+index ae92078..40018f2 100644
+--- a/mimalloc/include/mimalloc/prim/prim-tls.h
++++ b/mimalloc/include/mimalloc/prim/prim-tls.h
+@@ -53,7 +53,7 @@ static inline bool mi_theap_matches_thread(mi_theap_t* theap) {
+ 
+ 
+ // Default TLS model
+-#if !defined(MI_TLS_MODEL_LOCAL) && !defined(MI_TLS_MODEL_PTHREADS) && !defined(MI_TLS_MODEL_FIXED) && !defined(MI_TLS_MODEL_WIN32)
++#if !defined(MI_TLS_MODEL_MUSL) && !defined(MI_TLS_MODEL_LOCAL) && !defined(MI_TLS_MODEL_PTHREADS) && !defined(MI_TLS_MODEL_FIXED) && !defined(MI_TLS_MODEL_WIN32)
+ #if defined(_WIN32)
+ #define MI_TLS_MODEL_WIN32        1
+ #elif defined(__APPLE__) || defined(__OpenBSD__) || defined(__ANDROID__)  // and FreeBSD?
+@@ -307,7 +307,15 @@ static inline mi_theap_t* __mi_theap_empty(void) {
+   #endif
+ }
+ 
+-#if MI_TLS_MODEL_LOCAL
++#if MI_TLS_MODEL_MUSL
++#define MI_THEAP_INITASNULL 1
++static inline void* mi_prim_theap_default_raw(void) {
++  return __pthread_self()->malloc_tls;
++}
++static inline void* mi_prim_theap_cached_raw(void) {
++  return __pthread_self()->malloc_aux[0];
++}
++#elif MI_TLS_MODEL_LOCAL
+ // Thread local with an initial value (default on Linux). Very efficient.
+ extern mi_decl_hidden mi_decl_thread mi_theap_t* __mi_theap_default;  // default theap to allocate from
+ extern mi_decl_hidden mi_decl_thread mi_theap_t* __mi_theap_cached;   // theap from the last used heap
+diff --git a/mimalloc/src/prim/prim-tls.c b/mimalloc/src/prim/prim-tls.c
+index 185e850..88181ca 100644
+--- a/mimalloc/src/prim/prim-tls.c
++++ b/mimalloc/src/prim/prim-tls.c
+@@ -222,7 +222,9 @@ void _mi_theap_cached_set(mi_theap_t* theap) {
+   // set
+   _mi_tls_slots_init();
+   void* const x = mi_tls_sign(theap, MI_TLS_TAG_THEAP_CACHED);
+-  #if MI_TLS_MODEL_LOCAL
++  #if MI_TLS_MODEL_MUSL
++    __pthread_self()->malloc_aux[0] = x;
++  #elif MI_TLS_MODEL_LOCAL
+     __mi_theap_cached = (mi_theap_t*)x;
+   #elif MI_TLS_MODEL_FIXED
+     mi_prim_tls_slot_set(MI_TLS_MODEL_FIXED_CACHED, x);
+@@ -243,7 +245,9 @@ void _mi_theap_default_set(mi_theap_t* theap)  {
+   mi_assert_internal(mi_theap_matches_thread(theap));
+   _mi_tls_slots_init();
+   void* const x = mi_tls_sign(theap, MI_TLS_TAG_THEAP_DEFAULT);
+-  #if MI_TLS_MODEL_LOCAL
++  #if MI_TLS_MODEL_MUSL
++    __pthread_self()->malloc_tls = x;
++  #elif MI_TLS_MODEL_LOCAL
+     __mi_theap_default = (mi_theap_t*)x;
+   #elif MI_TLS_MODEL_FIXED
+     mi_prim_tls_slot_set(MI_TLS_MODEL_FIXED_DEFAULT, x);
+diff --git a/mimalloc/src/prim/unix/prim.c b/mimalloc/src/prim/unix/prim.c
+index 922417b..f5d8324 100644
+--- a/mimalloc/src/prim/unix/prim.c
++++ b/mimalloc/src/prim/unix/prim.c
+@@ -1299,7 +1299,7 @@ bool _mi_prim_random_buf(void* buf, size_t buf_len) {
+ // Thread init/done
+ //----------------------------------------------------------------
+ 
+-#if defined(MI_USE_PTHREADS)
++#if defined(MI_USE_PTHREADS) && !MI_TLS_MODEL_MUSL
+ 
+ // use pthread local storage keys to detect thread ending
+ // (and used with MI_TLS_PTHREADS for the default theap)
+diff --git a/mimalloc/src/util/threadlocal.c b/mimalloc/src/util/threadlocal.c
+index 88911d4..4d5f036 100644
+--- a/mimalloc/src/util/threadlocal.c
++++ b/mimalloc/src/util/threadlocal.c
+@@ -47,7 +47,15 @@ static const mi_thread_locals_t mi_thread_locals_empty = mi_init_struct_zero;
+   initially `NULL` (where `name_get` returns the `initval` instead).
+ ----------------------------------------------------------- */
+ 
+-#if MI_TLS_MODEL_PTHREADS || defined(__APPLE__)   // macOS has fast pthreads
++#if MI_TLS_MODEL_MUSL
++#define mi_tls_mi_thread_locals 1
++#define mi_tls_mi_slot_fast 2
++#define mi_define_thread_local(tp,name,initval,tag) \
++  static inline tp name##_peek(void) { return (tp)mi_tls_auth(__pthread_self()->malloc_aux[mi_tls_##name], tag); } \
++  static inline tp name##_get(void) { tp value = name##_peek(); return value != NULL ? value : initval; } \
++  static inline bool name##_set(tp val) { __pthread_self()->malloc_aux[mi_tls_##name] = mi_tls_sign(val, tag); return true; } \
++  static inline void name##_delete(void) { __pthread_self()->malloc_aux[mi_tls_##name] = NULL; }
++#elif MI_TLS_MODEL_PTHREADS || defined(__APPLE__)   // macOS has fast pthreads
+ // Use pthreads
+ #define mi_define_thread_local(tp,name,initval,tag) \
+   static pthread_key_t __##name##_key = MI_PTHREAD_KEY_INVALID; \

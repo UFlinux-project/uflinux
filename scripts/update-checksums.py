@@ -18,7 +18,7 @@ for source in sources:
     if not separator:
         url = source
     if url.startswith("https://"):
-        spec = next((spec for spec in lock["sources"].values() if spec["url"] == url), None)
+        spec = next((spec for spec in lock["sources"].values() if spec.get("url") == url), None)
         if not spec or "sha512" not in spec:
             raise SystemExit("Remote package sources require a locked SHA-512: " + source)
         name, digest = (alias if separator else Path(urlsplit(url).path).name), spec["sha512"]

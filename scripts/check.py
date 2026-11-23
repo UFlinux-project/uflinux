@@ -178,7 +178,14 @@ assert 'depends="$pkgname=$pkgver-r$pkgrel"' in cursors.split("adw_dark() {", 1)
 # The generator sanitizes scheme names, so the built directory is hyphenated.
 assert 'mv "$pkgdir"/usr/share/icons/Simp1e-Adw-Dark ' in cursors
 assert "libadwaita" not in (ROOT / "settings/Cargo.lock").read_text()
-for origin in ("connman", "gpu-screen-recorder", "uflinux-regreet", "uflinux-settings", "xdg-desktop-portal-gtk4"):
+musl = (ROOT / "aports/musl/APKBUILD").read_text()
+for variable, key in (("pkgver", "version"), ("pkgrel", "revision"), ("_upstreamver", "upstream_version"),
+                      ("_mimallocver", "mimalloc_version")):
+    assert f'{variable}={lock["musl"][key]}\n' in musl, f"musl {variable} differs from the source lock"
+mimalloc = lock["sources"]["mimalloc"]
+assert re.fullmatch(r"[0-9a-f]{40}", mimalloc["commit"]), "mimalloc must pin a full Git commit"
+assert mimalloc["sha512"] in musl, "musl must verify the locked mimalloc archive"
+for origin in ("musl", "connman", "gpu-screen-recorder", "uflinux-regreet", "uflinux-settings", "xdg-desktop-portal-gtk4"):
     recipe_arches = re.search(r'^arch="([^"]+)"$', (ROOT / "aports" / origin / "APKBUILD").read_text(), re.M)
     assert recipe_arches and set(recipe_arches.group(1).split()) == set(arches), f"{origin} architecture list differs from build matrix"
 for name, digest in lock["image"]["patches"].items():

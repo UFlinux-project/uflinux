@@ -78,6 +78,10 @@ def alpine_index(arch):
 
 def check(arch):
     found, versions = alpine_index(arch)
+    baseline = lock["musl"]
+    upstream = f"{baseline['upstream_version']}-r{baseline['upstream_revision']}"
+    if versions.get("musl") != upstream:
+        raise RuntimeError(f"{arch}: Alpine musl is {versions.get('musl')}, but UFLinux is based on {upstream}. Rebase the recipe.")
     # The firmware list replaces the metapackage, so it has to keep up with
     # Alpine: every published subpackage except the Snapdragon-only qcom and the
     # empty none. Anything new that Alpine ships would otherwise go missing.

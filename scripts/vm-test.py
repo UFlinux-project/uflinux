@@ -15,7 +15,7 @@ import tempfile
 import time
 
 import pexpect
-from builder import sha
+from builder import LOCK, sha
 from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -205,6 +205,8 @@ def main():
             check_boot_errors(Path(log.name).read_text())
             guest(child, "df -h /; df -i /")
             guest(child, "test -e /run/uflinux-live; test $(id -un) = root; ! rc-service sshd status")
+            musl = LOCK["musl"]["version"] + "-r" + LOCK["musl"]["revision"]
+            guest(child, f"apk info -e musl={musl} musl-utils={musl}")
             guest(child, "apk info -e uflinux uflinux-desktop labwc")
             guest(child, '. /etc/rc.conf.d/uflinux.conf; test "$rc_parallel" = YES; apk info -e linux-firmware-i915 linux-firmware-amdgpu linux-firmware-ath11k')
             guest(child, "test -x /usr/bin/uflinux-desktop")
@@ -255,6 +257,7 @@ def main():
             child.close()
             child = start(args, state, log, installed=True)
             login(child, "alice", "uflinux-test-password")
+            guest(child, f"apk info -e musl={musl} musl-utils={musl}", admin=False)
             guest(child, "awk '$2 == \"/\" && $3 == \"xfs\" {ok=1} END {exit !ok}' /proc/mounts; test ! -e /run/uflinux-live; ! id live; apk info -e uflinux uflinux-desktop labwc linux-firmware-i915 linux-firmware-amdgpu linux-firmware-ath11k", admin=False)
             # Authenticate doas normally before invoking the root-only test harness.
             guest(child, '. /etc/rc.conf.d/uflinux.conf; test "$rc_parallel" = YES', admin=False)
@@ -346,6 +349,7 @@ def main():
             "iso_sha256": iso_digest,
             "live_memory_mib": memory_mib(),
             "installed_memory_mib": memory_mib(installed=True),
+            "musl": musl,
             "iso_boot": True, "xfs_install_reboot": True, "unrelated_partition_preserved": True,
             "bootsplash": splash_report,
             "settings_512m": settings_metrics, "network_clock": network_clock, "power": power_report}, indent=2) + "\n")
