@@ -1,9 +1,7 @@
 //! WebAssembly RDP client for the UFLinux RDS web gateway.
 //!
-//! This crate is a thin [`wasm_bindgen`] façade over `ironrdp-web`. It does not
-//! reimplement any RDP logic: it drives IronRDP's own session, input and
-//! clipboard machinery and only exposes a small, JS-friendly surface
-//! (`init`, `connect`, `Client`, `ConnectOptions`).
+//! The session page controller lives in Rust and drives IronRDP’s session,
+//! input and clipboard machinery through a small [`wasm_bindgen`] façade.
 //!
 //! # Why the bridge objects are driven through `Reflect`
 //!
@@ -38,6 +36,8 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
+#[cfg(target_arch = "wasm32")]
+mod console;
 pub mod error;
 mod input;
 

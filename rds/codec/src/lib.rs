@@ -22,13 +22,8 @@
 //!
 //! # Web clients never get an AVC tier
 //!
-//! The browser client is the wasm build of this workspace, and at the pinned
-//! IronRDP revision (`b13befa0db`, `ironrdp-egfx` 0.5.0) neither `ironrdp-egfx`
-//! nor `ironrdp-server` ships a wasm-compatible EGFX/H.264 *decoder*: the AVC
-//! paths need native surfaces that a canvas-based client does not have. The web
-//! client therefore negotiates no EGFX and no AVC profile, which lands it on
-//! QOI or RemoteFX by construction — see [`ClientCaps::web_client`]. It is not a
-//! fallback we rely on; it is the only honest answer at this pin.
+//! The session host restricts browser connections to QOI or RemoteFX.
+//! Native RDP clients can negotiate the AVC graphics pipeline.
 //!
 //! # Serde
 //!

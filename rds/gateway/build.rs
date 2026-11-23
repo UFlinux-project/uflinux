@@ -12,10 +12,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Files the gateway serves from `assets/`, and therefore compresses.
-const ASSETS: [&str; 5] = [
+const ASSETS: [&str; 4] = [
     "app.css",
     "login.js",
-    "console.js",
     "uflinux_rds_web.js",
     "uflinux_rds_web_bg.wasm",
 ];
@@ -25,6 +24,14 @@ fn main() {
     let out_dir = std::env::var_os("OUT_DIR")
         .map(PathBuf::from)
         .expect("OUT_DIR");
+    for name in ["uflinux_rds_web.js", "uflinux_rds_web_bg.wasm"] {
+        let path = Path::new("assets").join(name);
+        assert!(
+            path.is_file(),
+            "missing {}: run rds/scripts/build-wasm.sh before compiling the gateway",
+            path.display()
+        );
+    }
     for name in ASSETS {
         println!("cargo:rerun-if-changed=assets/{name}");
         println!("cargo:rerun-if-changed=assets/{name}.br");

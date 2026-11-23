@@ -304,8 +304,7 @@ body.console {
   flex: 1 1 auto;
 }
 
-/* Connection state. The dot is a pseudo-element so that console.js can keep
- * writing plain text into the pill. */
+/* The pseudo-element keeps the state indicator separate from the label. */
 .pill {
   display: inline-flex;
   align-items: center;

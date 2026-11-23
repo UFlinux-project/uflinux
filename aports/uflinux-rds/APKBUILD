@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-rds
 pkgver=0.1.0
-pkgrel=9
+pkgrel=12
 pkgdesc="UFLinux Remote Desktop Services broker (IronRDP)"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
@@ -12,9 +12,10 @@ depends="$pkgname-server=$pkgver-r$pkgrel $pkgname-web=$pkgver-r$pkgrel $pkgname
 # unversioned libclang.so plus the libpam headers. wayland-dev: wayland-sys
 # resolves its libraries with pkg-config at build time. cmake and perl: aws-lc-sys
 # (through rustls) builds with CMake. rust-wasm and wasm-bindgen: the browser
-# client, compiled in prepare() before the gateway embeds it.
+# client, compiled in prepare() before the gateway embeds it. Binaryen and
+# Brotli optimize the Wasm and precompress the assets in the package build.
 makedepends="cargo cargo-auditable pkgconf musl-dev gcc cmake perl clang22-dev linux-pam-dev
-	wayland-dev glib-dev zlib-dev zstd-dev rust-wasm wasm-bindgen"
+	wayland-dev glib-dev zlib-dev zstd-dev rust-wasm wasm-bindgen binaryen brotli"
 subpackages="$pkgname-dbg $pkgname-doc $pkgname-server:server $pkgname-web:web
 	$pkgname-system:system $pkgname-vaapi:vaapi"
 options="net"

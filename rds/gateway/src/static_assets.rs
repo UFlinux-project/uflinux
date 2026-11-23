@@ -6,18 +6,16 @@
 //! script and the shared stylesheet.
 //!
 //! The two `uflinux_rds_web*` files are build products of the wasm client
-//! crate: `rds/scripts/build-wasm.sh` writes them here. Committed placeholders
-//! keep the gateway compilable without a wasm toolchain, but a real image must
-//! ship both, or the console page cannot start a session.
+//! crate. Run `rds/scripts/build-wasm.sh` before compiling the gateway.
 //!
 //! Each served file may also have a brotli-compressed twin (`<name>.br`) from
 //! the same script. Those twins are gitignored build products, so `build.rs`
 //! copies them into `OUT_DIR` — empty when absent — and they are embedded from
-//! there: the crate always compiles, and an empty body means "no brotli
+//! there. An empty body means "no brotli
 //! variant, serve identity".
 
 /// Number of files in [`asset`]'s whitelist.
-const ASSET_COUNT: usize = 5;
+const ASSET_COUNT: usize = 4;
 
 /// Which representation of an asset a client is served.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,8 +95,6 @@ pub const SESSION_HTML: &str = include_str!("../templates/session.html");
 pub const APP_CSS: &str = include_str!("../assets/app.css");
 /// Login form handler.
 pub const LOGIN_JS: &str = include_str!("../assets/login.js");
-/// Console script: hands the one-time token to the wasm RDP client.
-pub const CONSOLE_JS: &str = include_str!("../assets/console.js");
 /// wasm-bindgen glue for the RDP client (build product).
 pub const WASM_JS: &[u8] = include_bytes!("../assets/uflinux_rds_web.js");
 /// The RDP client itself (build product).
@@ -108,7 +104,6 @@ pub const WASM_BINARY: &[u8] = include_bytes!("../assets/uflinux_rds_web_bg.wasm
 /// was built without the `brotli` CLI.
 const APP_CSS_BR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.css.br"));
 const LOGIN_JS_BR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/login.js.br"));
-const CONSOLE_JS_BR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/console.js.br"));
 const WASM_JS_BR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/uflinux_rds_web.js.br"));
 const WASM_BINARY_BR: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/uflinux_rds_web_bg.wasm.br"));
@@ -133,9 +128,8 @@ pub fn asset(path: &str) -> Option<Asset> {
     let (body, brotli, index, extension) = match path {
         "app.css" => (APP_CSS.as_bytes(), APP_CSS_BR, 0, "css"),
         "login.js" => (LOGIN_JS.as_bytes(), LOGIN_JS_BR, 1, "js"),
-        "console.js" => (CONSOLE_JS.as_bytes(), CONSOLE_JS_BR, 2, "js"),
-        "uflinux_rds_web.js" => (WASM_JS, WASM_JS_BR, 3, "js"),
-        "uflinux_rds_web_bg.wasm" => (WASM_BINARY, WASM_BINARY_BR, 4, "wasm"),
+        "uflinux_rds_web.js" => (WASM_JS, WASM_JS_BR, 2, "js"),
+        "uflinux_rds_web_bg.wasm" => (WASM_BINARY, WASM_BINARY_BR, 3, "wasm"),
         _ => return None,
     };
     let content_type = match extension {
@@ -161,7 +155,7 @@ mod tests {
         let sheet = std::str::from_utf8(css.body).expect("app.css is UTF-8");
         assert!(sheet.contains("--bg"));
         assert_eq!(css.content_type, "text/css; charset=utf-8");
-        for name in ["login.js", "console.js", "uflinux_rds_web.js"] {
+        for name in ["login.js", "uflinux_rds_web.js"] {
             let js = asset(name).expect(name);
             assert_eq!(js.content_type, "text/javascript; charset=utf-8");
         }
@@ -184,7 +178,12 @@ mod tests {
     #[test]
     fn every_asset_has_its_own_strong_etag() {
         let mut tags = Vec::new();
-        for name in ["app.css", "login.js", "console.js", "uflinux_rds_web.js"] {
+        for name in [
+            "app.css",
+            "login.js",
+            "uflinux_rds_web.js",
+            "uflinux_rds_web_bg.wasm",
+        ] {
             let asset = asset(name).expect(name);
             let tag = asset.etag(Encoding::Identity);
             // Strong validator: quoted, no `W/` prefix.
@@ -203,7 +202,7 @@ mod tests {
     fn pages_are_embedded_and_self_contained() {
         assert!(LOGIN_HTML.contains("<form"));
         assert!(LOGIN_HTML.contains("/assets/login.js"));
-        assert!(SESSION_HTML.contains("/assets/console.js"));
+        assert!(SESSION_HTML.contains("/assets/uflinux_rds_web.js"));
         // The CSP we ship forbids inline scripts, inline styles and inline
         // event handlers, so the pages must not use any.
         for page in [LOGIN_HTML, SESSION_HTML] {

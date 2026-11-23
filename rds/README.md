@@ -164,6 +164,16 @@ be pointed at any local RDP server.
 
 ## Building
 
+RDS uses IronRDP's upstream Git repository because `ironrdp-web` is unpublished.
+From this directory, run `cargo update -p ironrdp` to refresh the upstream
+revision in `Cargo.lock`, then rebuild the browser assets and gateway.
+
+The GitHub Actions package build regenerates the browser bundle in the RDS
+package's `prepare()` step. It runs Binaryen's `wasm-opt -Os` after
+wasm-bindgen, then generates Brotli assets before compiling the gateway. The Wasm module
+and its generated JavaScript loader are build outputs. The console controller
+lives in the Rust web client.
+
 ```sh
 sh scripts/build-wasm.sh        # client into gateway/assets
 cargo build --workspace --bins --features "$_rds_features"

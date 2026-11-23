@@ -4,12 +4,12 @@
 #
 # The gateway serves every asset out of the binary (include_bytes!), so the
 # wasm and its wasm-bindgen glue must exist in rds/gateway/assets before the
-# gateway is compiled. Committed placeholders keep a plain `cargo build`
-# working; run this script to replace them with a real client.
+# gateway is compiled. Run this script before building the gateway.
 #
 # Usage (from anywhere):  rds/scripts/build-wasm.sh
 # Environment:
 #   WASM_BINDGEN       path to the wasm-bindgen CLI (default: wasm-bindgen on PATH)
+#   WASM_OPT           path to Binaryen wasm-opt (default: wasm-opt on PATH)
 #   CARGO              cargo binary to use (default: cargo)
 #   PROFILE            cargo profile directory name (default: release)
 #   CARGO_TARGET_DIR   cargo's target directory (default: ./target)
@@ -36,6 +36,7 @@ cd "$workspace" || exit 1
 CARGO="${CARGO:-cargo}"
 PROFILE="${PROFILE:-release}"
 WASM_BINDGEN="${WASM_BINDGEN:-wasm-bindgen}"
+WASM_OPT="${WASM_OPT:-wasm-opt}"
 target_dir="${CARGO_TARGET_DIR:-target}"
 
 # Distributions inject distro-wide rustflags for native packages (Alpine's
@@ -46,7 +47,7 @@ unset CARGO_ENCODED_RUSTFLAGS
 RUSTFLAGS=""
 export RUSTFLAGS
 
-if ! "$CARGO" build -p "$CRATE" --target "$TARGET" --"$PROFILE"; then
+if ! "$CARGO" build --locked -p "$CRATE" --target "$TARGET" --"$PROFILE"; then
   echo "build-wasm: cargo build failed" >&2
   echo "build-wasm: is the $TARGET target installed?  rustup target add $TARGET" >&2
   exit 1
@@ -84,8 +85,35 @@ if [ "$bindgen_version" != "$BINDGEN_VERSION" ]; then
   exit 1
 fi
 
-mkdir -p "$out_dir" || exit 1
-"$WASM_BINDGEN" --target web --out-dir "$out_dir" "$wasm_input"
+if ! command -v "$WASM_OPT" >/dev/null 2>&1; then
+  echo "build-wasm: wasm-opt not found; install Binaryen or set WASM_OPT" >&2
+  exit 1
+fi
+
+mkdir -p "$out_dir"
+asset_stage=$(mktemp -d "$out_dir/.wasm-build.XXXXXX")
+trap 'rm -rf "$asset_stage"' EXIT
+"$WASM_BINDGEN" --target web --no-typescript --out-dir "$asset_stage" "$wasm_input"
+
+wasm="$asset_stage/${lib_name}_bg.wasm"
+before=$(wc -c <"$wasm")
+"$WASM_OPT" -Os "$wasm" -o "$asset_stage/optimized.wasm"
+after=$(wc -c <"$asset_stage/optimized.wasm")
+printf '  wasm-opt -Os %d -> %d bytes\n' "$before" "$after"
+mv "$asset_stage/optimized.wasm" "$out_dir/${lib_name}_bg.wasm"
+# The ES module namespace contains the private IronRDP bridge exported by
+# wasm-bindgen. Pass it to Rust after initialization to start the page.
+cat >>"$asset_stage/$lib_name.js" <<'JS'
+
+import(import.meta.url).then(async (bridge) => {
+    await bridge.default();
+    await bridge.startConsole(bridge);
+}).catch(() => {
+    const status = document.getElementById("status");
+    if (status) status.textContent = "Could not load the RDP client.";
+});
+JS
+mv "$asset_stage/$lib_name.js" "$out_dir/$lib_name.js"
 
 # --- brotli ---------------------------------------------------------------
 #
@@ -99,7 +127,7 @@ mkdir -p "$out_dir" || exit 1
 # only, which is why the gateway treats a missing .br as "no compressed
 # variant" rather than as an error.
 BROTLI_LEVEL=11
-ASSETS="app.css login.js console.js $lib_name.js ${lib_name}_bg.wasm"
+ASSETS="app.css login.js $lib_name.js ${lib_name}_bg.wasm"
 
 if command -v brotli >/dev/null 2>&1; then
   for name in $ASSETS; do
@@ -109,7 +137,7 @@ if command -v brotli >/dev/null 2>&1; then
       continue
     fi
     before=$(wc -c <"$file")
-    if brotli -q "$BROTLI_LEVEL" -o "$file.br" "$file"; then
+    if brotli -f -q "$BROTLI_LEVEL" -o "$file.br" "$file"; then
       after=$(wc -c <"$file.br")
       printf '  brotli %-28s %8d -> %8d bytes\n' "$name" "$before" "$after"
     else
@@ -125,12 +153,11 @@ fi
 # --- report ---------------------------------------------------------------
 
 echo "build-wasm: wrote into $out_dir"
-for name in "$lib_name.js" "${lib_name}_bg.wasm" "$lib_name.d.ts" "${lib_name}_bg.wasm.d.ts"; do
+for name in "$lib_name.js" "${lib_name}_bg.wasm"; do
   file="$out_dir/$name"
   if [ -f "$file" ]; then
     printf '  %-32s %8d bytes\n' "$name" "$(wc -c <"$file")"
   fi
 done
 
-# The .d.ts files are development aids; the gateway only embeds the two above.
 echo "build-wasm: done. Rebuild the gateway to embed the new client."

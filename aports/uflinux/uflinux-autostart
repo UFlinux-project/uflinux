@@ -8,7 +8,7 @@ if [ "${UFLINUX_RDS_SESSION:-0}" = 1 ]; then
 	# Each remote desktop has its own runtime directory. Run only the
 	# routing policy here, leaving hardware and the local session alone.
 	/usr/bin/pipewire &
-	for attempt in 1 2 3 4 5 6 7 8 9 10; do
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
 		[ ! -S "$XDG_RUNTIME_DIR/pipewire-0" ] || break
 		sleep 0.1
 	done

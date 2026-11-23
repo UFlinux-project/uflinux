@@ -19,7 +19,14 @@ def bundle():
     for path in sorted(source.rglob("*")):
         relative = path.relative_to(source)
         if any(
-            part in {"target", "dist", "test-tmp", "__pycache__", ".git"} for part in relative.parts
+            part in {"target", "dist", "test-tmp", "__pycache__", ".git"}
+            or part.startswith(".wasm-build.")
+            for part in relative.parts
+        ):
+            continue
+        if relative.parent == Path("gateway/assets") and (
+            relative.name in {"uflinux_rds_web.js", "uflinux_rds_web_bg.wasm"}
+            or relative.name.endswith((".br", ".d.ts"))
         ):
             continue
         if path.is_symlink():

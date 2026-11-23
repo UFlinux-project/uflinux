@@ -2,7 +2,7 @@
 //
 // POSTs the credentials to /api/login, keeps the returned one-time token in
 // sessionStorage (never in the URL, so it cannot leak via referrer or history)
-// and hands over to /session, where console.js picks it up.
+// and hands over to /session, where the Wasm client picks it up.
 (function () {
   "use strict";
 
@@ -59,7 +59,7 @@
         }
         try {
           // The password rides along because RDP's own logon still needs it
-          // and the gateway token does not carry it. console.js deletes the
+          // and the gateway token does not carry it. the Wasm client deletes the
           // whole record before it connects, so it lives in storage only for
           // the redirect.
           sessionStorage.setItem(

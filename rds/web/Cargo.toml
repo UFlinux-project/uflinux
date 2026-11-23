@@ -20,14 +20,19 @@ path = "src/lib.rs"
 # readable console message instead of a bare `abort()`.
 ironrdp-web = { workspace = true, features = ["qoi", "panic_hook"] }
 # Concrete wasm-bindgen types (DesktopSize, Extension, IronErrorKind,
-# internal::setup) that ironrdp-web's private bridge is built on. Same rev as
-# the workspace `ironrdp-git` pin, so no extra copy of anything is compiled.
-iron-remote-desktop = { git = "https://github.com/Devolutions/IronRDP", rev = "b13befa0db86f48f523a0b2b007e399f9811e0ec" }
+# internal::setup) that ironrdp-web's private bridge is built on. Use the same source as
+# the workspace IronRDP dependencies.
+iron-remote-desktop = { git = "https://github.com/Devolutions/IronRDP" }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
 web-sys = { workspace = true, features = [
     "console",
+    "AddEventListenerOptions",
+    "ClipboardEvent",
+    "DataTransfer",
+    "DomTokenList",
+    "ResizeObserver",
     "Clipboard",
     "CssStyleDeclaration",
     "Document",

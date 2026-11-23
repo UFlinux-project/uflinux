@@ -4,3 +4,8 @@
 # serves identity when they are not. Committing them would bloat the source
 # bundle that scripts/rds-source.py tars out of rds/.
 *.br
+
+# Generated browser bundle.
+uflinux_rds_web.js
+uflinux_rds_web_bg.wasm
+.wasm-build.*/
