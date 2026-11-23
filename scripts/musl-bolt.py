@@ -87,6 +87,10 @@ def abi(path):
         fields = line.split()
         if len(fields) >= 8 and re.fullmatch(r"\d+:", fields[0]):
             _, _, size, kind, binding, visibility, index, name, *_ = fields
+            # AArch64 has a local .text section symbol in .dynsym. BOLT
+            # renames the original section to .bolt.org.text.
+            if binding == "LOCAL":
+                continue
             symbols.add((name, kind, binding, visibility, index == "UND", size if kind in {"OBJECT", "TLS"} else ""))
     tags = re.findall(r"\((?:NEEDED|SONAME)\).*?\[(.*?)\]", output)
     headers = []
@@ -140,8 +144,13 @@ def main():
     run(tool, "lib/libc.so", "-o", "lib/libc.bolt.so", "-data=libc.fdata",
         "--reorder-functions=exec-count", "--update-debug-sections", cwd=args.build)
     sections = run("readelf", "-SW", optimized, capture_output=True, text=True).stdout
-    if ".bolt" not in sections or abi(loader) != abi(optimized):
-        raise RuntimeError("musl BOLT output is missing its rewrite or changes the ELF ABI")
+    if ".bolt" not in sections:
+        raise RuntimeError("musl BOLT output is missing its rewrite")
+    before = abi(loader)
+    after = abi(optimized)
+    for name, original, rewritten in zip(("dynamic symbols", "dynamic tags", "program headers"), before, after):
+        if original != rewritten:
+            raise RuntimeError(f"musl BOLT output changes ELF ABI {name}")
 
 
 if __name__ == "__main__":

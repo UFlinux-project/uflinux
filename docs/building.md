@@ -268,7 +268,7 @@ checksum, and includes it in the offline rebuild inputs. The shared library also
 x86_64, aarch64, and riscv64.
 
 On an Ubuntu 26.04 build host, install `bolt-22` and `linux-tools-generic`. The
-RISC-V job additionally needs `qemu-system-misc`, `opensbi`, and `cpio`. Build
+RISC-V job additionally needs `qemu-system-riscv`, `opensbi`, and `cpio`. Build
 the shard and collect a new profile with:
 
 ```sh

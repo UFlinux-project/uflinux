@@ -84,7 +84,8 @@ jobs:
         run: |
           sudo apt-get install --no-install-recommends -y bolt-22 linux-tools-generic
           if [ '${{ matrix.arch }}' = riscv64 ]; then
-            sudo apt-get install --no-install-recommends -y qemu-system-misc opensbi cpio
+            sudo apt-get install --no-install-recommends -y qemu-system-riscv opensbi cpio
+            qemu-system-riscv64 --version
           fi
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cache
