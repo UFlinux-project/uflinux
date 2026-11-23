@@ -36,6 +36,8 @@
 #error 64-bit atomics must be lock-free for now
 #endif
 
+#define MI_PRIM_THREAD_ID() ((uintptr_t)__pthread_self()->malloc_thread_id)
+
 /* the whole mimalloc source */
 #include "static.c"
 

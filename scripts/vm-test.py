@@ -211,7 +211,10 @@ def main():
             guest(child, '. /etc/rc.conf.d/uflinux.conf; test "$rc_parallel" = YES; apk info -e linux-firmware-i915 linux-firmware-amdgpu linux-firmware-ath11k')
             guest(child, "test -x /usr/bin/uflinux-desktop")
             guest(child, "apk info -e connman iwd busybox-openrc uflinux-settings uflinux-settings-daemon uflinux-settings-system; connmanctl state; connmanctl services; ! pgrep -x ntpd; ! pgrep -x NetworkManager; ! pgrep -x chronyd; ! pgrep -x openntpd; ! pgrep -x wpa_supplicant")
-            guest(child, "for n in $(seq 1 30); do pgrep -x labwc >/dev/null && pgrep -f '[u]flinux-desktop --daemon' >/dev/null && break; sleep 1; done; if ! pgrep -x labwc || ! pgrep -f '[u]flinux-desktop --daemon'; then rc-status; cat /var/log/messages; exit 1; fi")
+            guest(child, "for n in $(seq 1 30); do pgrep -x labwc >/dev/null && pgrep -f '[u]flinux-desktop --daemon' >/dev/null && break; sleep 1; done; if ! pgrep -x labwc || ! pgrep -f '[u]flinux-desktop --daemon'; then "
+                         "rc-status; cat /var/log/messages; "
+                         "find /var/log -type f \\( -name '*greet*' -o -path '*/regreet/*' \\) "
+                         "-exec tail -80 {} ';'; dmesg | tail -100; exit 1; fi")
             splash_report = splash_smoke(child, state, out)
             if args.network_tests:
                 guest(child, "touch /run/uflinux-test-vm; apk add hostapd dnsmasq iw py3-gobject3")

@@ -10,7 +10,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static _Thread_local volatile unsigned thread_slot;
+/* Force the loader to replace its bootstrap TLS with a larger block. */
+static _Thread_local volatile unsigned thread_storage[16384];
+#define thread_slot thread_storage[16383]
 
 static void exercise(void)
 {
