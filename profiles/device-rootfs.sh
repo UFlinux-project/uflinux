@@ -12,8 +12,10 @@
 # UFLINUX_INITRAMFS_COMPRESSION (defaults to zstd), UFLINUX_NURA_PACKAGES
 # (with UFLINUX_NURA_REPOSITORY), UFLINUX_DTBLOADER, UFLINUX_INITRAMFS_FILES,
 # UFLINUX_INITRAMFS_MODULES, and the device tree the boot loader is told about:
-# UFLINUX_DTB for extlinux, UFLINUX_DEVICETREE for systemd-boot.
+# UFLINUX_DTB for extlinux, UFLINUX_DEVICETREE for GRUB.
 set -eu
+# shellcheck source=aports/uflinux/uflinux-boot-menu
+. /usr/libexec/uflinux-boot-menu
 
 device="$UFLINUX_DEVICE"
 arch="$UFLINUX_ARCH"
@@ -81,34 +83,14 @@ write_mkinitfs_conf
 apk add --no-progress $UFLINUX_PACKAGES
 /usr/libexec/uflinux-image-user
 
-# Optional extras that only exist in the pinned Nura repository. They are
-# unpacked rather than installed, and fetched with an explicit --repository so
-# that no solver run ever sees Nura: it carries its own mkinitfs replacement
-# (postmarketos-mkinitfs) which conflicts with the Alpine one that
-# uflinux-initramfs requires, so any solver run that sees both repositories
-# refuses to select packages. apk fetch resolves the file directly from the
-# pinned index and tar lays it down at the package's own paths. On qcs6490 the
-# kernel itself comes this way, which is why the boot partition below is
-# assembled from whatever ended up in /boot: no update-kernel hook runs for a
-# package apk knows nothing about. Alpine's mkinitfs only ever looks at
-# /lib/modules/$version and its modules.dep, so it builds an initramfs for the
-# Nura kernel like it does for an Alpine one.
+# Fetch the Qualcomm EFI fixup driver without adding the Nura repository to
+# the solver. Nura also publishes a conflicting mkinitfs implementation.
 if [ -n "${UFLINUX_NURA_PACKAGES:-}" ]; then
 	# shellcheck disable=SC2086
 	for package in $UFLINUX_NURA_PACKAGES; do
 		apk fetch --quiet --stdout --repository "$UFLINUX_NURA_REPOSITORY" "$package" |
 			tar -C / -xz
 	done
-
-	# postmarketOS is a merged-usr distro and ships its modules under
-	# /usr/lib/modules, while Alpine keeps /lib as its own directory, so the
-	# unpack above lands the modules where nothing looks for them. Linking
-	# the two gives mkinitfs, depmod and, on the board, modprobe the
-	# /lib/modules/$version they all assume. Only needed while the kernel
-	# comes from Nura; an Alpine kernel installs into /lib/modules itself.
-	if [ -d /usr/lib/modules ] && [ ! -e /lib/modules ]; then
-		ln -s /usr/lib/modules /lib/modules
-	fi
 fi
 
 # mkinitfs owns /etc/mkinitfs/mkinitfs.conf and ships no protect entry for it,
@@ -144,12 +126,9 @@ if [ "$(printf '%s\n' "$kversion" | wc -l)" != 1 ]; then
 	echo "device-rootfs: expected exactly one kernel for $device, got: $kversion" >&2
 	exit 1
 fi
-kflavor=${kversion##*-}
+kflavor=${UFLINUX_KERNEL_FLAVOR:?}
+case "$kversion" in *-"$kflavor") ;; *) echo "Unexpected kernel ABI: $kversion" >&2; exit 1 ;; esac
 
-# Rebuild the index after unpacking: the Nura 7.0.8 package ships modules.dep
-# entries with no dependency lists (including wireguard). Merely finding the
-# file is not sufficient; mkinitfs otherwise trusts it and modprobe loads
-# modules without their crypto/network prerequisites, causing unknown symbols.
 depmod -a "$kversion"
 
 # The marker is what arms the first-boot partition growth; the packaged
@@ -189,9 +168,13 @@ enable_service() {
 	done
 }
 
-enable_service sysinit devfs dmesg udev udev-trigger udev-settle hwdrivers
+enable_service sysinit uflinux-splash devfs dmesg udev udev-trigger udev-settle hwdrivers
 enable_service boot hwclock modules sysctl hostname bootmisc syslog uflinux-device uflinux-zram gsr-kms-capability
-enable_service default dbus elogind iwd connman connman-vpn bluetooth tlp uflinux-acpid uflinux-routes greetd
+enable_service default uflinux-splash-stop dbus elogind iwd connman connman-vpn bluetooth tlp uflinux-acpid uflinux-routes greetd
+mkdir -p /etc/runlevels/tty
+for service in /etc/runlevels/default/*; do
+	[ "${service##*/}" = greetd ] || cp -P "$service" /etc/runlevels/tty/
+done
 enable_service shutdown killprocs mount-ro
 
 # A firmware, module list or splash repackaging that loses one of these files
@@ -208,50 +191,28 @@ done
 # The initramfs is built by hand rather than through update-kernel: the
 # --media option that update-kernel always passes is what produces the
 # squashfs modloop, and a device image has no modloop.
-# Compression must match the kernel's CONFIG_RD_* support. The Nura SC7280
-# kernel supports gzip but has CONFIG_RD_ZSTD disabled, so qcs6490 overrides
-# the usual zstd setting through its board configuration.
 rm -f "/boot/initramfs-$kflavor"
 # shellcheck disable=SC2086
 /sbin/mkinitfs -q -b / -C "$initramfs_compression" -F "$features" \
 	-i /project/aports/uflinux/uflinux-initramfs-init \
 	-o "/boot/initramfs-$kflavor" "$kversion"
 
-# The boot partition is staged as a plain directory so that the image
-# assembly step stays independent of the boot scheme. The kernel image is
-# looked up under the names the kernels in use ship: the Alpine flavours are
-# suffixed with the version or flavour, the Nura one is a flat /boot/vmlinuz.
-# EFI boards take the EFI stub when the kernel ships one, because systemd-boot
-# can only load a PE/COFF executable and a bare arm64 Image is not one.
+# GRUB needs the uncompressed EFI stub from gzip-wrapped ARM64 images.
 mkdir -p "$esp/boot"
-kernel_image=""
-if [ "$boot" = efi ] && [ -f /boot/linux.efi ]; then
-	kernel_image=/boot/linux.efi
+kernel_image="/boot/vmlinuz-$kflavor"
+if [ "$boot" = efi ] && [ "$arch" = aarch64 ] &&
+	[ "$(head -c 2 "$kernel_image")" != MZ ]; then
+	gzip -dc "$kernel_image" > "$esp/boot/vmlinuz"
+	[ "$(head -c 2 "$esp/boot/vmlinuz")" = MZ ]
+else
+	cp -a "$kernel_image" "$esp/boot/vmlinuz"
 fi
-[ -n "$kernel_image" ] || kernel_image="/boot/vmlinuz-$kversion"
-[ -f "$kernel_image" ] || kernel_image="/boot/vmlinuz-$kflavor"
-[ -f "$kernel_image" ] || kernel_image=/boot/vmlinuz
-[ -f "$kernel_image" ] || {
-	echo "device-rootfs: no kernel image for $device" >&2
-	exit 1
-}
-cp -a "$kernel_image" "$esp/boot/vmlinuz"
 cp -a "/boot/initramfs-$kflavor" "$esp/boot/initramfs"
 
-# Board device trees travel with the kernel package. The generic kernel keeps
-# them in vendor subdirectories under dtbs-lts, the Nura one under dtbs, and
-# the Raspberry Pi kernel ships them next to the kernel image together with
-# the overlays the firmware expects.
-for dtb_dir in /boot/dtbs-lts /boot/dtbs; do
-	if [ -d "$dtb_dir" ]; then
-		mkdir -p "$esp/dtbs"
-		cp -a "$dtb_dir/." "$esp/dtbs/"
-	fi
-done
-if [ -d /boot/overlays ]; then
-	mkdir -p "$esp/overlays"
-	cp -a /boot/overlays/. "$esp/overlays/"
-	cp -a /boot/*.dtb "$esp/"
+dtb_dir="/boot/dtbs-$kflavor"
+if [ -d "$dtb_dir" ]; then
+	mkdir -p "$esp/dtbs"
+	cp -a "$dtb_dir/." "$esp/dtbs/"
 fi
 
 # The root is found by filesystem UUID rather than device name, and has to be
@@ -278,83 +239,47 @@ case "$cmdline" in
 *) consoleargs=" console=$serial,115200n8 console=tty0" ;;
 esac
 
-# systemd-boot ships as a bare EFI binary named after the firmware architecture.
-# The table matches EFI_SUFFIX in scripts/builder.py.
-systemd_boot_suffix() {
-	case "$arch" in
-	aarch64) printf 'aa64' ;;
-	x86) printf 'ia32' ;;
-	x86_64) printf 'x64' ;;
-	*) return 1 ;;
-	esac
-}
-
-# Microcode has to lead the initrd list, and the two PC loaders spell a list of
-# images differently: syslinux separates them with commas, systemd-boot wants
-# one initrd line per file. A machine whose CPU needs no patch simply has no
-# ucode package installed, and the boot entries then name only the initramfs.
-ucode_syslinux=""
-ucode_systemd=""
-for image in amd-ucode intel-ucode; do
-	[ -f "/boot/$image.img" ] || continue
-	cp -a "/boot/$image.img" "$esp/boot/$image.img"
-	[ -z "$ucode_syslinux" ] || ucode_syslinux="$ucode_syslinux,"
-	ucode_syslinux="$ucode_syslinux/boot/$image.img"
-	ucode_systemd="$ucode_systemd /boot/$image.img"
-done
-if [ -n "$ucode_syslinux" ]; then
-	syslinux_initrd="$ucode_syslinux,/boot/initramfs"
-else
-	syslinux_initrd="/boot/initramfs"
-fi
-
 case "$boot" in
-efi)
-	# systemd-boot ships as a bare EFI binary; the install step that would
-	# copy it onto a real ESP needs firmware variables, so it is copied here.
-	suffix=$(systemd_boot_suffix) || {
-		echo "device-rootfs: no systemd-boot binary for $arch" >&2
-		exit 1
-	}
-	installer_efi="/usr/lib/systemd/boot/efi/systemd-boot$suffix.efi"
-	[ -f "$installer_efi" ] || {
-		echo "device-rootfs: missing $installer_efi" >&2
-		exit 1
-	}
-	mkdir -p "$esp/EFI/boot" "$esp/loader/entries"
-	cp -a "$installer_efi" "$esp/EFI/boot/boot$suffix.efi"
-	printf 'timeout 3\n' > "$esp/loader/loader.conf"
-	{
-		printf 'title\tUFLinux %s (%s)\n' "$version" "$device"
-		printf 'linux\t/boot/vmlinuz\n'
-		printf 'initrd\t/boot/initramfs\n'
-		# Qualcomm boards get no usable device tree from their firmware, so
-		# the entry names the one from the kernel package explicitly. Passing
-		# it here rather than relying on the dtbloader driver alone means the
-		# board boots even when no ESP driver is picked up.
-		if [ -n "${UFLINUX_DEVICETREE:-}" ]; then
-			[ -f "$esp/dtbs/$UFLINUX_DEVICETREE" ] || {
-				echo "device-rootfs: $esp/dtbs/$UFLINUX_DEVICETREE is missing" >&2
-				exit 1
-			}
-			printf 'devicetree\t/dtbs/%s\n' "$UFLINUX_DEVICETREE"
-		fi
-		printf 'options\t%s%s %s\n' "$cmdline" "$consoleargs" "$rootargs"
-	} > "$esp/loader/entries/uflinux.conf"
-
-	# The Nura dtbloader EFI driver applies the DT fixups that Qualcomm
-	# boards need and can supply a tree of its own for models whose kernel
-	# ships none. The builder points at the file only for boards that ship
-	# the driver, so that the path is not guessed here.
-	if [ -n "${UFLINUX_DTBLOADER:-}" ]; then
-		[ -f "$UFLINUX_DTBLOADER" ] || {
-			echo "device-rootfs: dtbloader $UFLINUX_DTBLOADER is missing" >&2
-			exit 1
-		}
-		mkdir -p "$esp/EFI/systemd/drivers"
-		cp -a "$UFLINUX_DTBLOADER" \
-			"$esp/EFI/systemd/drivers/dtbloader$suffix.efi"
+efi|pc)
+	case "$arch" in
+		x86_64) platform=x86_64-efi; fallback=BOOTX64.EFI ;;
+		aarch64) platform=arm64-efi; fallback=BOOTAA64.EFI ;;
+		*) exit 1 ;;
+	esac
+	mkdir -p "$esp/EFI/BOOT" "$esp/boot/grub/themes"
+	cp -a /usr/share/uflinux/grub-theme "$esp/boot/grub/themes/uflinux"
+	initrds=""
+	for image in amd-ucode intel-ucode; do
+		[ -f "/boot/$image.img" ] || continue
+		cp -a "/boot/$image.img" "$esp/boot/$image.img"
+		initrds="$initrds/boot/$image.img "
+	done
+	dtb=""
+	if [ -n "${UFLINUX_DEVICETREE:-}" ]; then
+		dtb="/dtbs/$UFLINUX_DEVICETREE"
+		test -f "$esp$dtb"
 	fi
+	if [ -n "${UFLINUX_DTBLOADER:-}" ]; then
+		mkdir -p "$esp/EFI/uflinux"
+		cp "$UFLINUX_DTBLOADER" "$esp/EFI/uflinux/dtbloader.efi"
+	fi
+	if [ -f /opt/uflinux/memtest86plus ] && [ -z "$dtb" ]; then
+		cp /opt/uflinux/memtest86plus "$esp/boot/grub/"
+	fi
+	grub_menu /boot/vmlinuz "${initrds}/boot/initramfs" "$dtb" \
+		"$cmdline$consoleargs $rootargs" /boot/grub > "$esp/boot/grub/grub.cfg"
+	touch "$esp/boot/grub/$root_partuuid"
+	early=/tmp/uflinux-grub-early.cfg
+	printf '%s\n' "search --file --set=root /boot/grub/$root_partuuid" > "$early"
+	set -- -O "$platform"
+	if [ -n "${UFLINUX_DTBLOADER:-}" ]; then
+		set -- "$@" -d /opt/uflinux/grub-q6a/grub-core
+		printf '%s\n' 'insmod chain' 'uflinux_efi_driver /EFI/uflinux/dtbloader.efi' \
+			'set uflinux_dt_fixup=1' 'export uflinux_dt_fixup' >> "$early"
+	fi
+	printf '%s\n' 'configfile /boot/grub/grub.cfg' >> "$early"
+	grub-mkstandalone --locales="" --fonts="" "$@" -o "$esp/EFI/BOOT/$fallback" \
+		"boot/grub/grub.cfg=$early"
 	;;
 rpi)
 	# The VideoCore firmware reads the kernel, initramfs, device tree and
@@ -365,12 +290,15 @@ rpi)
 		'disable_overscan=1' \
 		'arm_64bit=1' \
 		'enable_uart=1' \
-		'kernel=boot/vmlinuz' \
+		'kernel=kernel8.img' \
 		'initramfs boot/initramfs followkernel' \
 		'include usercfg.txt' > "$esp/config.txt"
 	printf 'UFLinux board overrides. This file is not replaced on upgrade.\n' \
 		> "$esp/usercfg.txt"
-	printf '%s%s %s\n' "$cmdline" "$consoleargs" "$rootargs" > "$esp/cmdline.txt"
+	printf '%s\n' "$(boot_arguments standard "$cmdline$consoleargs $rootargs")" > "$esp/cmdline.txt"
+	for mode in debug tty; do
+		printf '%s\n' "$(boot_arguments "$mode" "$cmdline$consoleargs $rootargs")" > "$esp/cmdline-$mode.txt"
+	done
 
 	# The firmware blobs are packaged for an update tool rather than for a
 	# boot partition layout, so they are unpacked straight out of the APKs.
@@ -378,6 +306,11 @@ rpi)
 		apk fetch --quiet --stdout "$package" |
 			tar -C "$esp" -xz --strip=1 boot/
 	done
+	cp -a /boot/kernel8.img "$esp/kernel8.img"
+	cp -a "$dtb_dir"/broadcom/*.dtb "$esp/"
+	mkdir -p "$esp/overlays"
+	cp -a "$dtb_dir"/overlays/. "$esp/overlays/"
+
 	;;
 extlinux)
 	# U-Boot distro boot reads this file, so the board's existing bootloader
@@ -393,69 +326,25 @@ extlinux)
 	mkdir -p "$esp/extlinux"
 	{
 		printf 'TIMEOUT 30\n'
-		printf 'DEFAULT uflinux\n'
-		printf 'LABEL uflinux\n'
-		printf '\tMENU LABEL UFLinux %s (%s)\n' "$version" "$device"
-		printf '\tLINUX /boot/vmlinuz\n'
-		printf '\tINITRD /boot/initramfs\n'
-		printf '\tFDT /dtbs/%s\n' "$UFLINUX_DTB"
-		printf '\tAPPEND %s%s %s\n' "$cmdline" "$consoleargs" "$rootargs"
-	} > "$esp/extlinux/extlinux.conf"
-	;;
-pc)
-	# One GPT disk that boots from either firmware. UEFI loads systemd-boot
-	# from the removable-media path, so nothing has to be written into the
-	# firmware's boot list. Legacy BIOS runs the syslinux MBR bootstrap that
-	# the builder installs into the protective MBR; it chainloads ldlinux.sys
-	# at the start of this same ESP. Both loaders point at the same kernel,
-	# initramfs and microcode images, so only the config syntax differs.
-	suffix=$(systemd_boot_suffix) || {
-		echo "device-rootfs: no systemd-boot binary for $arch" >&2
-		exit 1
-	}
-	installer_efi="/usr/lib/systemd/boot/efi/systemd-boot$suffix.efi"
-	[ -f "$installer_efi" ] || {
-		echo "device-rootfs: missing $installer_efi" >&2
-		exit 1
-	}
-	mkdir -p "$esp/EFI/boot" "$esp/loader/entries"
-	cp -a "$installer_efi" "$esp/EFI/boot/boot$suffix.efi"
-	printf 'default uflinux.conf\ntimeout 3\n' > "$esp/loader/loader.conf"
-	{
-		printf 'title\tUFLinux %s (%s)\n' "$version" "$device"
-		printf 'linux\t/boot/vmlinuz\n'
-		for image in $ucode_systemd; do
-			printf 'initrd\t%s\n' "$image"
+		printf 'DEFAULT uflinux-standard\n'
+		for board in uflinux orangepi-r2s bananapi-f3; do
+		for mode in $boot_modes; do
+			printf 'LABEL %s-%s\n' "$board" "$mode"
+			case "$board" in
+				uflinux) label="Orange Pi RV2"; dtb="$UFLINUX_DTB" ;;
+				orangepi-r2s) label="Orange Pi R2S"; dtb="ky/x1_orangepi-r2s.dtb" ;;
+				bananapi-f3) label="Banana Pi F3 (firmware DTB, unverified)"; dtb="" ;;
+			esac
+			printf '\tMENU LABEL UFLinux %s (%s, %s)\n' "$version" "$label" "$(boot_label "$mode")"
+			printf '\tLINUX /boot/vmlinuz\n\tINITRD /boot/initramfs\n'
+			if [ -n "$dtb" ]; then
+				[ -f "$esp/dtbs/$dtb" ] || exit 1
+				printf '\tFDT /dtbs/%s\n' "$dtb"
+			fi
+			printf '\tAPPEND %s\n' "$(boot_arguments "$mode" "$cmdline$consoleargs $rootargs")"
 		done
-		printf 'initrd\t/boot/initramfs\n'
-		printf 'options\t%s%s %s\n' "$cmdline" "$consoleargs" "$rootargs"
-	} > "$esp/loader/entries/uflinux.conf"
-
-	# syslinux --install writes ldlinux.sys and ldlinux.c32 itself, but the
-	# com32 libraries a configuration with menus pulls in are not copied, so
-	# they are placed alongside. The trigger that ships with the package runs
-	# update-extlinux on every kernel or syslinux transaction and would rewrite
-	# /boot/extlinux.conf and the ESP it finds mounted there; the config here
-	# is generated once, so the trigger is switched off.
-	for module in libcom32.c32 libutil.c32; do
-		[ -f "/usr/share/syslinux/$module" ] || {
-			echo "device-rootfs: missing /usr/share/syslinux/$module" >&2
-			exit 1
-		}
-		cp -a "/usr/share/syslinux/$module" "$esp/$module"
-	done
-	sed -i 's/^disable_trigger=.*/disable_trigger=1/' /etc/update-extlinux.conf
-	{
-		printf 'SERIAL 0 115200\n'
-		printf 'TIMEOUT 30\n'
-		printf 'PROMPT 1\n'
-		printf 'DEFAULT uflinux\n'
-		printf 'LABEL uflinux\n'
-		printf '\tMENU LABEL UFLinux %s (%s)\n' "$version" "$device"
-		printf '\tKERNEL /boot/vmlinuz\n'
-		printf '\tINITRD %s\n' "$syslinux_initrd"
-		printf '\tAPPEND %s%s %s\n' "$cmdline" "$consoleargs" "$rootargs"
-	} > "$esp/syslinux.cfg"
+		done
+	} > "$esp/extlinux/extlinux.conf"
 	;;
 *)
 	echo "device-rootfs: unsupported boot mode $boot" >&2

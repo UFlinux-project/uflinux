@@ -45,5 +45,4 @@ The regression suite passed 40 Python tests, including cleanup after compiler
 failure. Actionlint, ShellCheck for the build entry point, and whitespace checks
 passed. Local logs are in `.cache/emulated-fix.log`, with APKs and input records
 under `.cache/emulated-fix-out/`. This validates the shared package execution
-path under emulation; the reported armv7 GitHub job and the complete architecture
-matrix still require rerunning with this change. No ISO was rebuilt for this fix.
+path under emulation. The complete architecture matrix still requires validation. No ISO was rebuilt for this fix.

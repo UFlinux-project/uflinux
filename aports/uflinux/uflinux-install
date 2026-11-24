@@ -75,35 +75,20 @@ def walk_devices(devices):
         yield from walk_devices(device.get("children", []))
 
 
-def bios_mbr_code(table, boot_source):
-    """Choose Syslinux MBR code only when exactly the boot partition is marked."""
-    label = table.get("label")
-    if label not in {"gpt", "dos"}:
-        raise InstallError("Syslinux BIOS boot requires a GPT or DOS partition table")
-    partitions = table.get("partitions", [])
-    marked = [part for part in partitions if
-              ("LegacyBIOSBootable" in (attr.strip() for attr in part.get("attrs", "").split(",")) if label == "gpt"
-               else part.get("bootable", False))]
-    boot = Path(boot_source).resolve()
-    if len(marked) != 1 or Path(marked[0]["node"]).resolve() != boot:
-        flag = "LegacyBIOSBootable GPT attribute" if label == "gpt" else "bootable MBR flag"
-        raise InstallError(f"Set the {flag} on /boot only before installing Syslinux")
-    if label == "dos":
-        number = re.search(r"(\d+)$", marked[0]["node"])
-        if not number or int(number.group(1)) > 4:
-            raise InstallError("Syslinux BIOS on MBR requires /boot on a primary partition")
-    return "/usr/share/syslinux/gptmbr.bin" if label == "gpt" else "/usr/share/syslinux/mbr.bin"
+BIOS_BOOT_GUID = "21686148-6449-6e6f-744e-656564454649"
 
 
-def install_bios_mbr(disk, code_path):
-    # Syslinux's MBR is exactly the boot code: preserve disk ID and partition table.
-    code = Path(code_path).read_bytes()
-    if len(code) != 440:
-        raise InstallError("Unexpected Syslinux MBR size; refusing to write the disk")
-    with open(disk, "r+b", buffering=0) as device:
-        if device.write(code) != len(code):
-            raise InstallError("Could not write the complete Syslinux MBR")
-        os.fsync(device.fileno())
+def validate_bios_disk(table):
+    parts = table.get("partitions", [])
+    sector_bytes = int(table.get("sectorsize", 512))
+    if table.get("label") == "gpt":
+        candidates = [part for part in parts if part.get("type", "").lower() == BIOS_BOOT_GUID]
+        if len(candidates) == 1 and candidates[0]["size"] * sector_bytes >= 1024 * 1024:
+            return
+        raise InstallError("BIOS on GPT requires one dedicated BIOS boot partition of at least 1 MiB")
+    if table.get("label") == "dos" and parts and min(part["start"] for part in parts) * sector_bytes >= 1024 * 1024:
+        return
+    raise InstallError("BIOS on MBR requires at least 1 MiB before the first partition")
 
 
 def efi_partition(source):
@@ -140,17 +125,19 @@ def preflight(args):
     mode = args.boot_mode
     if mode == "auto":
         mode = "uefi" if Path("/sys/firmware/efi").exists() else "native"
-    boot = mounted(target / "boot", "vfat" if mode == "uefi" else "ext4")
+    arch = output("apk", "--print-arch")
+    if mode == "native" and arch == "x86_64":
+        mode = "bios"
+    boot = mounted(target / "boot", "vfat" if mode in {"uefi", "bios"} else "ext4")
     if root["source"] == boot["source"]:
         raise InstallError("/boot must be a separate filesystem")
     unexpected = {p.name for p in target.iterdir()} - {"boot", "lost+found"}
     if unexpected:
         raise InstallError("Target root must be empty apart from boot and lost+found")
-    arch = output("apk", "--print-arch")
-    if mode == "native" and arch in {"x86", "x86_64"}:
-        mode = "bios"  # Keep the old spelling usable for existing scripts.
-    if mode == "bios" and arch not in {"x86", "x86_64"}:
-        raise InstallError("BIOS mode is only available for x86 and x86_64")
+    if arch not in SUPPORTED_ARCHES:
+        raise InstallError(f"Unsupported architecture: {arch}")
+    if mode == "bios" and arch != "x86_64":
+        raise InstallError("BIOS mode is only available for x86_64")
     esp = None
     efi_target = None
     if mode == "uefi":
@@ -160,14 +147,13 @@ def preflight(args):
         if output("blkid", "--probe", "-s", "VERSION", "-o", "value", esp["source"]) != "FAT32":
             raise InstallError("The EFI system partition must be FAT32")
         efi_target = efi_partition(esp["source"])
-        loader = "systemd-boot"
-    elif arch in {"x86", "x86_64", "ppc64le"}:
-        loader = "grub" if arch == "ppc64le" else "syslinux"
+        loader = "grub"
+    elif arch in {"x86_64", "ppc64le"}:
+        loader = "grub"
         if not args.boot_disk:
             raise InstallError("--boot-disk is required for BIOS and PowerPC installations")
     else:
         raise InstallError(f"Boot the {arch} ISO through UEFI; board-specific U-Boot installation is outside this installer")
-    mbr_code = None
     if args.boot_disk:
         disk = Path(args.boot_disk).resolve()
         if not disk.exists() or not stat.S_ISBLK(disk.stat().st_mode):
@@ -186,14 +172,16 @@ def preflight(args):
         types = {str(entry.get("parttype", "")).lower() for entry in entries}
         if arch == "ppc64le" and not types.intersection({"0x41", "41", "9e1a2d38-c612-4316-aa26-8b49521e5a8b"}):
             raise InstallError("PowerPC requires an existing PReP boot partition")
-        if loader == "syslinux":
+        if mode == "bios":
             try:
                 table = json.loads(output("sfdisk", "--json", str(disk)))["partitiontable"]
             except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as exc:
                 raise InstallError("Cannot inspect the BIOS boot disk partition table") from exc
-            mbr_code = bios_mbr_code(table, boot["source"])
+            validate_bios_disk(table)
+            if output("blkid", "--probe", "-s", "VERSION", "-o", "value", boot["source"]) != "FAT32":
+                raise InstallError("BIOS /boot must be FAT32")
     return {"target": str(target), "root": root, "boot": boot, "esp": esp,
-            "arch": arch, "mode": mode, "loader": loader, "boot_disk": args.boot_disk, "mbr_code": mbr_code, "efi_target": efi_target}
+            "arch": arch, "mode": mode, "loader": loader, "boot_disk": args.boot_disk, "efi_target": efi_target}
 
 
 def write(root, name, value, mode=0o644):
@@ -232,16 +220,21 @@ def firmware_world():
 def make_overlay(directory, args, repositories=None, uefi=False):
     write(directory, "etc/hostname", args.hostname + "\n")
     world = "alpine-base\nmusl\nmusl-utils\nuflinux\nxfsprogs\n" + firmware_world()
-    if args.arch in {"x86", "x86_64", "aarch64", "armv7", "ppc64le", "riscv64"}:
-        world += browser_world(args.arch)
+    world += browser_world(args.arch)
     if uefi:
-        world += "systemd-boot\n"
+        world += "grub-efi\n"
+    elif args.arch == "x86_64":
+        world += "grub-bios\n"
+    elif args.arch == "ppc64le":
+        world += "grub-ieee1275\n"
+    if args.arch == "x86_64":
+        world += "amd-ucode\nintel-ucode\n"
     if getattr(args, "gui_locale", False):
         world += "musl-locales\nmusl-locales-lang\nglib-lang\ngtk4.0-lang\nlabwc-lang\n"
     write(directory, "etc/apk/world", world)
     write(directory, "etc/shadow", "root:!:19000:0:99999:7:::\n", 0o600)
     write(directory, "etc/network/interfaces", "auto lo\niface lo inet loopback\n")
-    serial = {"aarch64": "ttyAMA0", "armv7": "ttyAMA0", "ppc64le": "hvc0"}.get(args.arch, "ttyS0")
+    serial = {"aarch64": "ttyAMA0", "ppc64le": "hvc0"}.get(args.arch, "ttyS0")
     write(directory, "etc/inittab", "::sysinit:/sbin/openrc sysinit\n::sysinit:/sbin/openrc boot\n"
           "::wait:/sbin/openrc default\ntty2::respawn:/sbin/getty 38400 tty2\n"
           f"{serial}::respawn:/sbin/getty -L 115200 {serial} vt100\n"
@@ -265,6 +258,10 @@ def make_overlay(directory, args, repositories=None, uefi=False):
         path = directory / "etc/runlevels" / level / service
         path.parent.mkdir(parents=True, exist_ok=True)
         path.symlink_to("/etc/init.d/" + service)
+        if level == "default" and service != "greetd":
+            tty = directory / "etc/runlevels/tty" / service
+            tty.parent.mkdir(parents=True, exist_ok=True)
+            tty.symlink_to("/etc/init.d/" + service)
 
 
 @contextlib.contextmanager
@@ -277,23 +274,70 @@ def temporary_repositories(path, text):
         path.write_bytes(original)
 
 
-EFI_ARCH = {"x86": "ia32", "x86_64": "x64", "aarch64": "aa64",
-            "armv7": "arm", "riscv64": "riscv64"}
+EFI_ARCH = {"x86_64": "x64", "aarch64": "aa64", "riscv64": "riscv64"}
+SUPPORTED_ARCHES = {*EFI_ARCH, "ppc64le"}
 
 
-def install_systemd_boot(target, plan):
-    """Use the removable-media fallback path; kernel updates write directly to the ESP."""
-    suffix = EFI_ARCH[plan["arch"]]
+def kernel_flavor(arch):
+    return {"x86_64": "uflinux-x86_64", "aarch64": "uflinux-aarch64"}.get(arch, "lts")
+
+
+def install_arm64_efi_hook(target, flavor):
+    hook = target / "etc/apk/commit_hooks.d/uflinux-efi-kernel"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text("""#!/bin/sh
+set -eu
+[ "$1" = post-commit ] || exit 0
+source=/boot/vmlinuz-FLAVOR
+[ -s "$source" ] || exit 1
+temporary=$(mktemp /boot/.uflinux-kernel.XXXXXX)
+trap 'unlink "$temporary" 2>/dev/null || :' EXIT
+if [ "$(head -c 2 "$source")" = MZ ]; then
+    cp "$source" "$temporary"
+else
+    gzip -dc "$source" > "$temporary"
+fi
+[ "$(head -c 2 "$temporary")" = MZ ]
+mv "$temporary" /boot/vmlinuz-FLAVOR.efi
+""".replace("FLAVOR", flavor))
+    hook.chmod(0o755)
+    run("chroot", str(target), "/etc/apk/commit_hooks.d/uflinux-efi-kernel", "post-commit")
+
+
+def install_grub(target, plan, media):
+    arch, mode = plan["arch"], plan["mode"]
     boot = target / "boot"
-    binary = target / "usr/lib/systemd/boot/efi" / f"systemd-boot{suffix}.efi"
+    grub = boot / "grub"
+    shutil.copytree(target / "usr/share/uflinux/grub-theme", grub / "themes/uflinux", dirs_exist_ok=True)
+    for repository in map(Path, media):
+        memtest = repository.parent / "boot/grub/memtest86plus"
+        if memtest.is_file():
+            shutil.copy2(memtest, grub)
+            break
+    flavor = kernel_flavor(arch)
+    extension = ".efi" if arch == "aarch64" else ""
+    initrds = ["/" + name for name in ("amd-ucode.img", "intel-ucode.img") if (boot / name).is_file()]
+    initrds.append(f"/initramfs-{flavor}")
+    serial = {"aarch64": "ttyAMA0", "ppc64le": "hvc0"}.get(arch, "ttyS0")
+    config = output("chroot", str(target), "/usr/libexec/uflinux-boot-menu",
+                    f"/vmlinuz-{flavor}{extension}", " ".join(initrds), "",
+                    f"root=UUID={plan['root']['uuid']} rootfstype=xfs rw console=tty0 console={serial},115200", "/grub")
+    write(boot, "grub/grub.cfg", config + "\n")
+    write(target, "etc/update-grub.conf", "disable_trigger=1\n")
+    if mode == "bios":
+        run("grub-install", "--target=i386-pc", "--boot-directory=" + str(boot), plan["boot_disk"])
+        return
+    if mode != "uefi":
+        return  # Alpine setup-disk installs GRUB to the PowerPC PReP partition.
+    platform = {"x86_64": "x86_64-efi", "aarch64": "arm64-efi", "riscv64": "riscv64-efi"}[arch]
+    run("grub-install", "--target=" + platform, "--no-nvram", "--bootloader-id=UFLinux",
+        "--efi-directory=" + str(boot), "--boot-directory=" + str(boot))
+    suffix = EFI_ARCH[arch]
+    binary = boot / "EFI/UFLinux" / f"grub{suffix}.efi"
     fallback = boot / "EFI/BOOT" / f"BOOT{suffix.upper()}.EFI"
-    fallback.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(binary, fallback)
-    write(boot, "loader/loader.conf", "default uflinux.conf\ntimeout 0\n")
-    serial = {"aarch64": "ttyAMA0", "armv7": "ttyAMA0"}.get(plan["arch"], "ttyS0")
-    write(boot, "loader/entries/uflinux.conf", "title UFLinux\nlinux /vmlinuz-lts\n"
-          "initrd /initramfs-lts\n"
-          f"options root=UUID={plan['root']['uuid']} rootfstype=xfs rw quiet console=tty0 console={serial},115200\n")
+    if not fallback.exists():
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(binary, fallback)
     target_disk = plan["efi_target"]
     variables = Path("/sys/firmware/efi/efivars")
     if not variables.is_dir():
@@ -302,12 +346,13 @@ def install_systemd_boot(target, plan):
         run("mount", "-t", "efivarfs", "efivarfs", str(variables))
     run("efibootmgr", "--create", "--disk", target_disk["disk"],
         "--part", str(target_disk["partition"]), "--label", "UFLinux",
-        "--loader", "\\EFI\\BOOT\\" + fallback.name)
+        "--loader", "\\EFI\\UFLinux\\" + binary.name)
 
 
 def install(args, plan, password):
     target = Path(plan["target"])
     args.arch = plan["arch"]
+    flavor = kernel_flavor(args.arch)
     full_repositories = Path("/usr/share/uflinux/repositories").read_text()
     source_repositories = Path("/etc/apk/repositories")
     media = [line.strip() for line in source_repositories.read_text().splitlines()
@@ -315,7 +360,12 @@ def install(args, plan, password):
     if media:
         # A first release is tested before its public custom repository exists.
         # Its custom packages come from the signed ISO instead.
-        repositories = media + (full_repositories.splitlines()[1:] if args.online else [])
+        kernel_indexes = [str(path) for directory in media
+                          if (path := Path(directory) / "kernels" / args.arch / "Packages.adb").is_file()]
+        if flavor != "lts" and not kernel_indexes:
+            raise InstallError("Installation media is missing its kernel repository")
+        online = [line for line in full_repositories.splitlines()[1:] if not line.endswith("/Packages.adb")]
+        repositories = media + kernel_indexes + (online if args.online else [])
         install_repositories = "\n".join(repositories) + "\n"
     else:
         install_repositories = full_repositories
@@ -328,28 +378,27 @@ def install(args, plan, password):
         archive = temporary / "install.apkovl.tar.gz"
         with tarfile.open(archive, "w:gz", dereference=False) as tar:
             tar.add(overlay / "etc", arcname="etc")
-        command = ["setup-disk", "-m", "sys", "-k", "lts", "-B", "none" if plan["mode"] == "uefi" else plan["loader"], "-o", str(archive)]
+        command = ["setup-disk", "-m", "sys", "-k", flavor, "-B", "none" if plan["mode"] in {"uefi", "bios"} else "grub", "-o", str(archive)]
         if plan["boot_disk"]:
             command.extend(["-b", plan["boot_disk"]])
         command.append(str(target))
-        env = dict(os.environ, ROOTFS="xfs", BOOTFS="ext4")
+        env = dict(os.environ, ROOTFS="xfs", BOOTFS="vfat" if plan["mode"] in {"uefi", "bios"} else "ext4")
         if plan["mode"] == "uefi":
             env["USE_EFI"] = "1"
         with temporary_repositories(source_repositories, install_repositories):
             run(*command, env=env)
     # setup-disk generates its own mkinitfs.conf, so extend it after installation.
     initfs_conf = target / "etc/mkinitfs/mkinitfs.conf"
-    kernels = sorted((target / "lib/modules").glob("*-lts"))
+    kernels = sorted((target / "lib/modules").glob("*-" + flavor))
     if not kernels:
-        raise InstallError("Installed LTS kernel modules are missing; cannot build initramfs")
+        raise InstallError("Installed kernel modules are missing; cannot build initramfs")
     configure_early_graphics(target, kernels[-1].name)
     with initfs_conf.open("a") as config:
         config.write('\nfeatures="$features uflinux-graphics uflinux-plymouth"\ninit=/usr/libexec/uflinux-initramfs-init\n')
-    run("chroot", str(target), "mkinitfs", "-o", "/boot/initramfs-lts", kernels[-1].name)
-    if plan["mode"] == "uefi":
-        install_systemd_boot(target, plan)
-    elif plan["loader"] == "syslinux":
-        install_bios_mbr(plan["boot_disk"], plan["mbr_code"])
+    run("chroot", str(target), "mkinitfs", "-o", f"/boot/initramfs-{flavor}", kernels[-1].name)
+    if plan["mode"] == "uefi" and args.arch == "aarch64":
+        install_arm64_efi_hook(target, flavor)
+    install_grub(target, plan, media)
     write(target, "etc/apk/repositories", full_repositories)
     user_command = ["chroot", str(target), "adduser", "-D", "-s", "/bin/ash", "-G", "users"]
     if getattr(args, "display_name", None):

@@ -15,11 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 arches = json.loads((ROOT / "config/architectures.json").read_text())
 lock = json.loads((ROOT / "config/sources.lock.json").read_text())
 assert set(arches) == set(lock["rootfs"])
-assert set(arches) == {"x86", "x86_64", "aarch64", "armv7", "ppc64le", "riscv64"}
+assert set(arches) == {"x86_64", "aarch64", "ppc64le", "riscv64"}
 for architecture, config in arches.items():
     jobs = config["jobs"]
     assert isinstance(jobs, int) and not isinstance(jobs, bool) and jobs > 0, \
         f"{architecture} needs a positive integer jobs count"
+kernels = json.loads((ROOT / "config/kernels.lock.json").read_text())
 devices = json.loads((ROOT / "config/devices.json").read_text())
 device_lock = json.loads((ROOT / "config/devices.lock.json").read_text())
 assert device_lock["schema"] == 1
@@ -27,21 +28,18 @@ for device_id, device in devices.items():
     assert re.fullmatch(r"[a-z0-9][a-z0-9-]*", device_id), f"Device id must be a lowercase slug: {device_id}"
     assert device["label"], f"{device_id} needs a label"
     assert device["arches"] and set(device["arches"]) <= set(arches), f"{device_id} lists an unknown architecture"
-    # Alpine flavours are installed; a "postmarketos-*" flavour comes from the
-    # pinned Nura suite and is fetched and unpacked by the device profile.
-    assert device["kernel"] in {"lts", "rpi", "virt"} or device["kernel"].startswith("postmarketos-"), \
-        f"{device_id} must use a known kernel flavour"
+    for arch in device["arches"]:
+        assert device["kernel"].format(arch=arch) in kernels["packages"][arch], \
+            f"{device_id} needs a pinned kernel for {arch}"
     assert device["boot"] in {"efi", "rpi", "extlinux", "pc"}, f"{device_id} must use a known boot mode"
     if device["boot"] == "extlinux":
         assert re.fullmatch(r"[a-z0-9][a-z0-9._/-]*\.dtb", device.get("dtb", "")), \
             f"{device_id} boots with extlinux and needs the dtb path it loads"
     if device["boot"] == "pc":
-        # The pc mode chains syslinux's MBR code into systemd-boot on one ESP, which
-        # only makes sense on the PC firmware of the two x86 architectures.
-        assert set(device["arches"]) <= {"x86", "x86_64"}, \
-            f"{device_id} boots PC firmware but lists non-x86 architectures"
-        assert device["kernel"] == "lts", \
-            f"{device_id} boots a PC kernel and needs the generic lts flavour"
+        assert set(device["arches"]) == {"x86_64"}, \
+            f"{device_id} requires x86_64 for PC firmware"
+        assert device["kernel"] == "x86_64", \
+            f"{device_id} boots a PC kernel and needs the generic x86_64 flavour"
         assert not device.get("dtb"), f"{device_id} boots PC firmware and cannot use a device tree"
     if device.get("dtb"):
         assert re.fullmatch(r"[a-z0-9][a-z0-9._/-]*\.dtb", device["dtb"]), \
@@ -77,13 +75,12 @@ assert set(nura["arches"]) <= set(arches)
 # release branch's index regularly, so device packages are checked against the
 # live index of the pinned branch instead (see scripts/check-packages.py).
 assert "index_sha256" not in nura, "The Nura repository index must not be pinned by sha256"
-# The apps repository is UFLinux's own, so it may only carry architectures that
-# ship a UFLinux release.
+# Every image uses the apps repository for the file manager.
 apps = lock["apps"]
 assert apps["url"].startswith("https://") and not apps["url"].endswith("/")
 assert apps["repository_key"] == apps["url"] + "/uflinux3.ec384.pub"
 assert re.fullmatch(r"[0-9a-f]{64}", apps["repository_key_sha256"])
-assert set(apps["arches"]) <= set(arches)
+assert set(apps["arches"]) == set(arches)
 # Like the Nura suite, the apps index is deliberately not pinned by hash: the
 # repository is republished whenever its packages are rebuilt, so the URL is the
 # stable input and uflinux-files is checked against the live index instead (see
@@ -180,11 +177,17 @@ assert 'mv "$pkgdir"/usr/share/icons/Simp1e-Adw-Dark ' in cursors
 assert "libadwaita" not in (ROOT / "settings/Cargo.lock").read_text()
 musl = (ROOT / "aports/musl/APKBUILD").read_text()
 for variable, key in (("pkgver", "version"), ("pkgrel", "revision"), ("_upstreamver", "upstream_version"),
-                      ("_mimallocver", "mimalloc_version")):
+                      ("_mimallocver", "mimalloc_version"),
+                      ("_glibc_stringver", "glibc_string_version")):
     assert f'{variable}={lock["musl"][key]}\n' in musl, f"musl {variable} differs from the source lock"
 mimalloc = lock["sources"]["mimalloc"]
 assert re.fullmatch(r"[0-9a-f]{40}", mimalloc["commit"]), "mimalloc must pin a full Git commit"
 assert mimalloc["sha512"] in musl, "musl must verify the locked mimalloc archive"
+glibc_string = lock["sources"]["glibc-string"]
+assert glibc_string["sha512"] in musl, "musl must verify the locked glibc-string archive"
+assert glibc_string["url"].replace(lock["musl"]["glibc_string_version"], "$_glibc_stringver") in musl, (
+    "musl glibc-string source URL differs from the source lock"
+)
 for origin in ("musl", "connman", "gpu-screen-recorder", "uflinux-regreet", "uflinux-settings", "xdg-desktop-portal-gtk4"):
     recipe_arches = re.search(r'^arch="([^"]+)"$', (ROOT / "aports" / origin / "APKBUILD").read_text(), re.M)
     assert recipe_arches and set(recipe_arches.group(1).split()) == set(arches), f"{origin} architecture list differs from build matrix"

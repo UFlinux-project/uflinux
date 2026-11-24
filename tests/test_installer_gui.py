@@ -39,15 +39,15 @@ class InstallerGuiTests(unittest.TestCase):
         self.assertEqual(result['disks'][0]['device']['children'][0]['path'], '/dev/vda1')
 
     def test_layouts_cover_supported_firmware(self):
-        for arch in ('x86', 'x86_64', 'aarch64', 'armv7', 'riscv64'):
+        for arch in ('x86_64', 'aarch64', 'riscv64'):
             with self.subTest(arch=arch):
                 layout, boot, root = backend.storage_plan(arch, 'uefi')
                 self.assertEqual(layout[0], 'size=1G,type=U')
                 self.assertEqual((boot, root), (1, 2))
-        self.assertIn('LegacyBIOSBootable', backend.storage_plan('x86_64', 'bios')[0][0])
+        self.assertIn(backend.cli.BIOS_BOOT_GUID, backend.storage_plan('x86_64', 'bios')[0][0])
         self.assertEqual(backend.storage_plan('ppc64le', 'native')[1:], (2, 3))
         with self.assertRaises(backend.cli.InstallError):
-            backend.storage_plan('armv7', 'native')
+            backend.storage_plan('aarch64', 'native')
         with self.assertRaises(backend.cli.InstallError):
             backend.storage_plan('mips64', 'native')
 

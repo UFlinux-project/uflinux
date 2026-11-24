@@ -1,0 +1,70 @@
+#!/bin/sh
+# shellcheck disable=SC2086
+# Render entries using paths relative to the GRUB root or U-Boot partition.
+boot_modes='standard debug tty'
+boot_label() {
+	case "$1" in
+	standard) printf 'Standard' ;;
+	debug) printf 'Debug' ;;
+	tty) printf 'TTY only' ;;
+	esac
+}
+boot_arguments() {
+	local mode="$1" word
+	shift
+	for word in $*; do
+		case "$word" in quiet|splash|loglevel=*|debug_init|plymouth.enable=*|rc_runlevel=*) ;; *) printf '%s ' "$word" ;; esac
+	done
+	case "$mode" in
+	standard) printf 'quiet splash' ;;
+	debug) printf 'loglevel=7 ignore_loglevel debug_init plymouth.enable=0' ;;
+	tty) printf 'plymouth.enable=0 rc_runlevel=tty' ;;
+	esac
+}
+
+grub_menu() {
+	local kernel="$1" initrds="$2" dtb="$3" options="$4" dir="$5" mode hotkey
+	cat <<CONFIG
+set default=0
+set timeout=5
+if [ "\$grub_cpu" = i386 -o "\$grub_cpu" = x86_64 ]; then
+    if serial --unit=0 --speed=115200; then
+        terminal_input --append serial
+        terminal_output --append serial
+    fi
+fi
+set gfxmode=1024x768,800x600,640x480,auto
+if loadfont (\$root)$dir/themes/uflinux/Ubuntu.pf2; then
+    insmod all_video
+    insmod png
+    insmod gfxmenu
+    if terminal_output --append gfxterm; then
+        terminal_output --remove console
+        set theme=(\$root)$dir/themes/uflinux/theme.txt
+        export theme
+    fi
+fi
+CONFIG
+	for mode in $boot_modes; do
+		case "$mode" in standard) hotkey=s ;; debug) hotkey=d ;; tty) hotkey=t ;; esac
+		printf "menuentry 'UFLinux (%s)' --id uflinux-%s --hotkey=%s {\n" "$(boot_label "$mode")" "$mode" "$hotkey"
+		[ -z "$dtb" ] || printf '    devicetree %s\n' "$dtb"
+		printf '    linux %s %s\n    initrd %s\n}\n' "$kernel" "$(boot_arguments "$mode" "$options")" "$initrds"
+	done
+	cat <<CONFIG
+if [ "\$grub_platform" = efi ]; then
+    if fwsetup --is-supported; then
+        menuentry 'UEFI Firmware Settings' --id firmware { fwsetup; }
+    fi
+    if [ -f $dir/memtest86plus ]; then
+        menuentry 'Memtest86+ 9.00' --id memtest { chainloader $dir/memtest86plus; }
+    fi
+elif [ "\$grub_platform" = pc -a -f $dir/memtest86plus ]; then
+    menuentry 'Memtest86+ 9.00' --id memtest { linux16 $dir/memtest86plus; }
+fi
+CONFIG
+}
+
+if [ "${0##*/}" = uflinux-boot-menu ]; then
+	grub_menu "$@"
+fi

@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import urllib.request
 
+from kernel_packages import KEY, KEY_FILE, KERNELS, kernel_index
+
 from builder import ARCHES, Builder, PROJECT, SIGNING_KEY, TRUSTED_KEY, repository_url, sha, temporary_tree
 
 
@@ -83,6 +85,29 @@ def main():
         def apk(*command):
             return builder.chroot('apk', '--no-cache', *command)
         apk('update')
+        kernel_metadata = ((staging / 'kernels.json').read_bytes() if args.staging
+                           else bounded_download(repository + '/kernels.json'))
+        if json.loads(kernel_metadata) != KERNELS:
+            raise ValueError('Kernel repository generation differs from the input lock')
+        kernel_public = ((staging / KEY).read_bytes() if args.staging
+                         else bounded_download(repository + '/' + KEY, 16384))
+        if kernel_public != KEY_FILE.read_bytes():
+            raise ValueError('Kernel repository key differs from the bundled release key')
+        builder.put('etc/apk/keys/' + KEY, kernel_public.decode())
+        for arch, targets in KERNELS['packages'].items():
+            if args.staging and arch != args.arch:
+                shutil.copytree(staging / arch, root / 'published' / arch)
+            index = kernel_index(source, arch)
+            for target, item in targets.items():
+                package = 'linux-uflinux-' + target
+                version = item['name'].removeprefix(package + '-').removesuffix('.apk')
+                # apk can fetch packages for another architecture without executing its scripts.
+                apk('--arch', arch, '--repository', index, 'fetch', '--output', '/tmp', package + '=' + version)
+                apk('verify', '/tmp/' + item['name'])
+                (root / 'tmp' / item['name']).unlink()
+                if arch == args.arch:
+                    apk('--repository', index, 'add', '--simulate', package + '=' + version)
+
         # The oldest retained generation exercises a real version upgrade after
         # the first release. Initial publication has no previous version to test.
         initial = versions[-1]

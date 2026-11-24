@@ -486,7 +486,7 @@ fn build(app: &gtk::Application) {
                         rv.push(path.to_string());
                     }
                     if p["fstype"]
-                        == if data["mode"] == "uefi" {
+                        == if data["mode"] == "uefi" || data["mode"] == "bios" {
                             "vfat"
                         } else {
                             "ext4"

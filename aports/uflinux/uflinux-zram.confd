@@ -7,7 +7,7 @@
 #RAM_SPLIT_MIB=4096
 
 # Compression algorithm. Leave empty to choose from the CPU: lz4 on low-end
-# machines (32-bit ARM, riscv64, or two cores or fewer) and zstd elsewhere.
+# machines (riscv64 or two cores or fewer) and zstd elsewhere.
 # Both are built into the UFLinux kernels, so either name works; an unknown
 # name makes the kernel keep its own default and the service only warns.
 #ZRAM_COMP=""

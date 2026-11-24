@@ -189,11 +189,18 @@ class PublicationTests(unittest.TestCase):
                 self.assertIn(name, reachable, f"{name} is published but never installed")
 
     def test_retention_keeps_current_and_two_previous_generations(self):
-        releases = publisher.selection({"version": "0.4.0"}, [{"version": v} for v in ["0.3.0", "0.2.0", "0.1.0"]])
+        packages = {arch: ["uflinux-0.1.0-r0.apk"] for arch in publisher.ARCHES}
+        history = [{"version": version, "packages": dict(packages, x86=[], armv7=[])}
+                   for version in ("0.3.0", "0.2.0", "0.1.0")]
+        releases = publisher.selection({"version": "0.4.0", "packages": packages}, history)
         self.assertEqual([r["version"] for r in releases], ["0.4.0", "0.3.0", "0.2.0"])
+        self.assertTrue(all(r["packages"] == packages for r in releases))
 
     def test_rerun_does_not_duplicate_generation(self):
-        releases = publisher.selection({"version": "0.4.0"}, [{"version": "0.4.0"}, {"version": "0.3.0"}])
+        packages = {arch: [] for arch in publisher.ARCHES}
+        releases = publisher.selection({"version": "0.4.0", "packages": packages},
+                                       [{"version": "0.4.0", "packages": packages},
+                                        {"version": "0.3.0", "packages": packages}])
         self.assertEqual([r["version"] for r in releases], ["0.4.0", "0.3.0"])
 
     def test_snapshot_symlinks_rejected(self):
@@ -255,15 +262,10 @@ class DesktopDependencyTests(unittest.TestCase):
         self.assertIn("connman-vpn=2.0-r4", self.pinned)
 
     def test_live_iso_profile_keeps_the_release_asset_within_its_limit(self):
-        # The EFI image stores the kernel, initramfs and microcode a second time,
-        # so its FAT base used to waste 48 MiB of every release ISO, and the kernel
-        # packages' symbol map and build config rode along for nothing.
         profile = (Path(builder.PROJECT) / "profiles/mkimg.uflinux.sh").read_text()
         iso_function = profile.split("create_image_iso() {", 1)[1].split("\n}", 1)[0]
-        base = re.search(r"size=\$\(\((\d+) \* 1024 \* 1024\)\)", iso_function)
-        self.assertIsNotNone(base, "the EFI image must start from an explicit base size")
-        self.assertLessEqual(int(base.group(1)) * 1024 * 1024, 16 * 1024 * 1024,
-                             "the EFI image leaves too much FAT32 slack in the ISO")
+        self.assertIn("grub-mkrescue", iso_function)
+        self.assertNotIn("mcopy", iso_function)
         self.assertIn('rm -f "$DESTDIR"/boot/System.map-* "$DESTDIR"/boot/config-*', iso_function)
 
     def test_firmware_list_keeps_the_release_asset_off_the_metapackage(self):

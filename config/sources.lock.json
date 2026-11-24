@@ -11,13 +11,22 @@
   },
   "musl": {
     "version": "99.1.2.6",
-    "revision": "3",
+    "revision": "5",
     "upstream_version": "1.2.6",
     "upstream_revision": 3,
     "mimalloc_version": "3.7.0",
+    "glibc_string_version": "2.43.1",
     "source_date_epoch": 1792597816
   },
   "sources": {
+    "grub-q6a": {
+      "url": "https://ftp.gnu.org/gnu/grub/grub-2.14.tar.xz",
+      "sha512": "5008e3b70072798d2b34301219fe174cc6bcfead40a9ab25fe32f30c62a392ffb7bf2eb629d481f4a6c19c2925324af3f08d7043e62623e746be2d8b3cbd1182"
+    },
+    "memtest86plus": {
+      "url": "https://memtest.org/download/v9.00/mt86plus_9.00.binaries.zip",
+      "sha512": "d454b3d1e4a7cf365cb2f97ea645d0299d7a39e428684ca0cae548c3b640f26e89226b9f87a3719faa562368f85d30b1571defefe3ab5153ab6bbe47929fcd7b"
+    },
     "musl": {
       "url": "https://musl.libc.org/releases/musl-1.2.6.tar.gz",
       "sha512": "1adad96eddb3a2eb0cacb3e363b0046568925fcdd75cf8b0503f2139df1f693d64730779ca0ce8131b7624ab2d37f4247bb1d3393c523de6e30d2b1d7732555c"
@@ -26,6 +35,10 @@
       "git": "https://github.com/microsoft/mimalloc.git",
       "commit": "1ed67b5156a763441d2ec3c20221a7b3cd866129",
       "sha512": "74d6f155944337aef80676f220be9dd243e90e30a41af5cf56d62bd2a35a991f8279acd43f9c9d0d6bde9d14d55e70194ccc43cce972a0a2cbe9b7c7959a8cff"
+    },
+    "glibc-string": {
+      "url": "https://codeload.github.com/bell-sw/glibc-string/tar.gz/refs/tags/2.43.1",
+      "sha512": "34f47ffc9a429573b80de50d6dab8de77f2a706105f9ea82c1b9a4ce727156de1566bf56fa1804e1a2b47f1784aceb088d350914d4375b218571be2a3c0d27ac"
     },
     "aports": {
       "url": "https://codeload.github.com/alpinelinux/aports/tar.gz/3db0a46d5ef507f6faaa9c0c0fc52181a277e9b7",
@@ -65,10 +78,6 @@
     }
   },
   "rootfs": {
-    "x86": {
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86/alpine-minirootfs-3.24.4-x86.tar.gz",
-      "sha256": "df793865bf166c10acaad3a4d5d40498f9ee3f89fa405d39c7f540464fb3b0c1"
-    },
     "x86_64": {
       "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-minirootfs-3.24.4-x86_64.tar.gz",
       "sha256": "cdaa38cb8de3537967ee5b6c9b6cd00cc962da2b018e6eea48696bb274923012"
@@ -76,10 +85,6 @@
     "aarch64": {
       "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.4-aarch64.tar.gz",
       "sha256": "4b14c18f7e90a063b61462ea1462a5732c154bf6adad594974fe6487cd98a8de"
-    },
-    "armv7": {
-      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/armv7/alpine-minirootfs-3.24.4-armv7.tar.gz",
-      "sha256": "2054061dafea7fe4cd38015701ee77119e780dd0382d0c32fad56986fe31b699"
     },
     "ppc64le": {
       "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/ppc64le/alpine-minirootfs-3.24.4-ppc64le.tar.gz",

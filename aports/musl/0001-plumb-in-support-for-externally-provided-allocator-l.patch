@@ -78,7 +78,7 @@ index e8cc443..dac39ca 100644
  
 +ifneq (mallocng,$(MALLOC_DIR))
 +$(EXTRA_OBJ): $(GENH) $(IMPH)
-+	$(CC) -I$(srcdir)/mimalloc/include $(CFLAGS_ALL) $(MIMALLOC_CFLAGS) -std=gnu11 -fPIC -O3 -DNDEBUG -fvisibility=hidden -isystem `$(CC) -print-file-name=include` -c -o $(EXTRA_OBJ) $(srcdir)/mimalloc/src/mimalloc.c
++	$(CC) -I$(srcdir)/mimalloc/include $(CFLAGS_ALL) -std=gnu11 -fPIC -O3 -DNDEBUG -fvisibility=hidden -isystem `$(CC) -print-file-name=include` -c -o $(EXTRA_OBJ) $(srcdir)/mimalloc/src/mimalloc.c
 +	sh $(srcdir)/mimalloc-verify-syms.sh $(EXTRA_OBJ)
 +endif
 +

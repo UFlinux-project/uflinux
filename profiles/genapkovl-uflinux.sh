@@ -6,7 +6,7 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 mkdir -p "$tmp/etc/apk" "$tmp/etc/runlevels"
 printf '%s\n' "$hostname" > "$tmp/etc/hostname"
 case "${ARCH:?}" in
-	armv7|aarch64) serial=ttyAMA0 ;;
+	aarch64) serial=ttyAMA0 ;;
 	ppc64le) serial=hvc0 ;;
 	*) serial=ttyS0 ;;
 esac
@@ -26,19 +26,12 @@ EOF
 	grep -v '^#' /project/config/firmware-packages.txt
 } > "$tmp/etc/apk/world"
 case "$ARCH" in
-	x86|x86_64|aarch64|armv7|riscv64) printf '%s\n' efibootmgr >> "$tmp/etc/apk/world" ;;
+	x86_64|aarch64|riscv64) printf '%s\n' efibootmgr >> "$tmp/etc/apk/world" ;;
 esac
 printf '%s\n' "${UFLINUX_REPOSITORY_URL:?}" \
 	'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' \
-	'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' > "$tmp/etc/apk/repositories"
-# The apps repository has indexes for these architectures only, and apk fails
-# outright on a repository line that 404s, so x86 and armv7 live systems must
-# not list it. uflinux-release installs the matching signing key on disk.
-case "$ARCH" in
-	x86_64|aarch64|ppc64le|riscv64)
-		printf '%s\n' 'https://apps-repo.uflinux.org/apk/v3.24/uflinux-apps' >> "$tmp/etc/apk/repositories"
-		;;
-esac
+	'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' \
+	'https://apps-repo.uflinux.org/apk/v3.24/uflinux-apps' > "$tmp/etc/apk/repositories"
 # The signed ISO boot repository is discovered by Alpine's initramfs.
 # Installed repository URLs are supplied by uflinux-release.
 for entry in \
@@ -54,6 +47,10 @@ for entry in \
 	set -- $entry
 	mkdir -p "$tmp/etc/runlevels/$2"
 	ln -s "/etc/init.d/$1" "$tmp/etc/runlevels/$2/$1"
+	if [ "$2" = default ] && [ "$1" != greetd ]; then
+		mkdir -p "$tmp/etc/runlevels/tty"
+		ln -s "/etc/init.d/$1" "$tmp/etc/runlevels/tty/$1"
+	fi
 done
 tar --sort=name --mtime="@${SOURCE_DATE_EPOCH:?}" --owner=0 --group=0 --numeric-owner \
 	-C "$tmp" -cf - etc | gzip -9n > "$hostname.apkovl.tar.gz"

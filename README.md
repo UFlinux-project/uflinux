@@ -3,9 +3,8 @@
 A minimal Alpine Linux desktop with labwc and a Windows 10-inspired taskbar built in
 plain GTK4. The initial source baseline is Alpine **3.24.4**.
 
-The repository builds real Alpine packages and ISO images for `x86`, `x86_64`,
-`aarch64`, `armv7`, `ppc64le`, and `riscv64`.
-`armhf` is excluded because Alpine does not provide a standard ISO profile for it.
+The repository builds Alpine packages and ISO images for `x86_64`, `aarch64`,
+`ppc64le`, and `riscv64`.
 On release tags it additionally builds installed disk images for four device
 targets: Dragon Q6A-class QCOM boards, Raspberry Pi 3–5, SpacemiT K1 boards such
 as the Orange Pi RV2, and virtual machines.
@@ -51,8 +50,9 @@ right, and the clock opens a calendar with a notification centre. Taskbar button
 pinned, reordered by dragging and previewed on hover. Print Screen opens a GNOME-style screenshot and recording tool that saves WebP
 images to your Pictures folder, copies them to the clipboard and records video through a
 patched GPU screen recorder; only the Settings tab for it is always available, the capture
-tool itself runs on demand. GTK3 and GTK4 apps use Alpine’s adw-gtk3 dark theme. Firefox and uBlock Origin are included on x86, x86_64, aarch64, armv7, ppc64le,
-and riscv64. Firefox uses a streamlined toolbar with horizontal tabs and a hidden
+tool itself runs on demand. GTK3 and GTK4 apps use Alpine’s adw-gtk3 dark theme.
+Firefox and uBlock Origin are included on x86_64, aarch64, and ppc64le. The
+riscv64 image ships Firefox ESR. Firefox uses a streamlined toolbar with horizontal tabs and a hidden
 bookmarks bar; users can change these defaults.
 Settings offers TLP Power saver, Balanced and Performance modes. Physical
 power-button actions are configured in Settings and handled by BusyBox acpid.

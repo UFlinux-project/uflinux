@@ -35,7 +35,7 @@ def locate(patterns, description):
     raise RuntimeError("Missing " + description + ": " + ", ".join(patterns))
 
 
-def command(args, state, installed=False):
+def command(args, state, installed=False, usb=False):
     emulator = "qemu-system-x86_64"
     if not shutil.which(emulator):
         raise RuntimeError("Missing " + emulator)
@@ -54,7 +54,11 @@ def command(args, state, installed=False):
     cmd += ["-drive", f"if=none,id=target,format=raw,file={state / 'target.raw'}",
             "-device", f"virtio-blk-pci,drive=target,serial=uflinux-test,bootindex={'1' if installed else '2'}",
             "-netdev", "user,id=net", "-device", "virtio-net-pci,netdev=net"]
-    if not installed:
+    if not installed and usb:
+        cmd += ["-device", "qemu-xhci", "-drive",
+                f"if=none,id=usbiso,format=raw,readonly=on,file={Path(args.iso).resolve()}",
+                "-device", "usb-storage,drive=usbiso,bootindex=1"]
+    elif not installed:
         cmd += ["-device", "virtio-scsi-pci,id=scsi",
                 "-drive", f"if=none,id=cd,format=raw,readonly=on,file={Path(args.iso).resolve()}",
                 "-device", "scsi-cd,drive=cd,bus=scsi.0,bootindex=1"]
@@ -133,12 +137,48 @@ def graphical_login(child, state):
     guest(child, "for i in $(seq 1 90); do pgrep -u alice -f /usr/libexec/uflinux-settingsd >/dev/null && exit 0; sleep 1; done; echo 'Installed graphical session did not start'; exit 1")
 
 
-def start(args, state, log, installed=False):
-    cmd = command(args, state, installed)
+def start(args, state, log, installed=False, usb=False):
+    cmd = command(args, state, installed, usb)
     log.write(shlex.join(cmd) + "\n")
     child = pexpect.spawn(cmd[0], cmd[1:], encoding="utf-8", codec_errors="replace", timeout=args.timeout)
     child.logfile = log
     return child
+
+
+def grub_mode_smoke(args, state, log, installed, key, expected):
+    child = start(args, state, log, installed=installed, usb=not installed)
+    try:
+        child.expect_exact("UFLinux (Standard)")
+        child.send(key)
+        login(child, "alice" if installed else "live",
+              "uflinux-test-password" if installed else "live")
+        if installed:
+            child.sendline("doas true")
+            child.expect("Password:")
+            child.sendline("uflinux-test-password")
+            child.expect(r"[$#] ")
+        guest(child, "grep -qw plymouth.enable=0 /proc/cmdline; " + expected)
+        child.sendline("doas poweroff")
+        child.expect(pexpect.EOF)
+    finally:
+        child.close(force=True)
+
+
+def gui_install_smoke(args, state, log):
+    state = state / "gui"
+    state.mkdir()
+    with (state / "target.raw").open("wb") as disk:
+        disk.truncate(12 * 1024**3)
+    with start(args, state, log) as child:
+        login(child, "live", "live")
+        transfer(child, ROOT / "tests/gui-install-smoke.py", "/run/gui-install-smoke.py")
+        guest(child, f"python3 /run/gui-install-smoke.py {args.mode}")
+        child.sendline("doas poweroff")
+        child.expect(pexpect.EOF)
+    with start(args, state, log, installed=True) as child:
+        login(child, "alice", "uflinux-test-password")
+        guest(child, "test $(hostname) = uflinux-gui; test $(findmnt -no FSTYPE /) = xfs",
+              admin=False)
 
 
 def splash_smoke(child, state, out):
@@ -229,13 +269,13 @@ def main():
                 layout = ["size=512M,type=U", "size=1G,type=L", "size=4G,type=L", "size=64M,type=L"]
                 root_part, boot_part, keep_part = 3, 2, 4
             else:
-                layout = ["size=1G,type=L,attrs=LegacyBIOSBootable", "size=4G,type=L", "size=64M,type=L"]
-                root_part, boot_part, keep_part = 2, 1, 3
+                layout = ["size=1M,type=21686148-6449-6e6f-744e-656564454649", "size=1G,type=L", "size=4G,type=L", "size=64M,type=L"]
+                root_part, boot_part, keep_part = 3, 2, 4
             guest(child, "test -b /dev/vda; printf '%s\\n' " + " ".join(shlex.quote(x) for x in ["label: gpt", *layout]) + " | sfdisk /dev/vda")
             if args.mode == "uefi":
                 guest(child, f"mkfs.xfs -f /dev/vda{root_part}; mkfs.vfat -F32 /dev/vda1; mount /dev/vda{root_part} /mnt; mkdir /mnt/boot; mount /dev/vda1 /mnt/boot")
             else:
-                guest(child, f"mkfs.xfs -f /dev/vda{root_part}; mkfs.ext4 -q /dev/vda{boot_part}; mount /dev/vda{root_part} /mnt; mkdir /mnt/boot; mount /dev/vda{boot_part} /mnt/boot")
+                guest(child, f"mkfs.xfs -f /dev/vda{root_part}; mkfs.vfat -F32 /dev/vda{boot_part}; mount /dev/vda{root_part} /mnt; mkdir /mnt/boot; mount /dev/vda{boot_part} /mnt/boot")
             guest(child, f"printf UFLINUX_PRESERVE_PARTITION | dd of=/dev/vda{keep_part} conv=notrunc status=none")
             hash_output = guest(child, f"sha256sum /dev/vda{keep_part} | tee /tmp/preserved.sha256; sfdisk --dump /dev/vda > /tmp/table.before")
             preserved_hash = re.search(r"([0-9a-f]{64})\s+/dev/vda" + str(keep_part), hash_output).group(1)
@@ -250,7 +290,8 @@ def main():
             child.expect(r"\r*\nUFLINUX_RC:0\r*\n")
             guest(child, "test $(findmnt -n -o FSTYPE /mnt) = xfs; ! grep -q '^live:' /mnt/etc/passwd; ! grep -q initial_session /mnt/etc/greetd/config.toml; sha256sum -c /tmp/preserved.sha256; sfdisk --dump /dev/vda > /tmp/table.after; cmp /tmp/table.before /tmp/table.after")
             if args.mode == "uefi":
-                guest(child, "test -s /mnt/boot/EFI/BOOT/BOOT*.EFI; test -s /mnt/boot/loader/entries/uflinux.conf; ls -lh /mnt/boot/initramfs-lts; efibootmgr -v")
+                guest(child, "test -s /mnt/boot/EFI/BOOT/BOOT*.EFI; test -s /mnt/boot/grub/grub.cfg; ls -lh /mnt/boot/initramfs-uflinux-x86_64; efibootmgr -v")
+            guest(child, "grep -q uflinux-debug /mnt/boot/grub/grub.cfg; grep -q rc_runlevel=tty /mnt/boot/grub/grub.cfg; test -s /mnt/boot/grub/themes/uflinux/splash.png")
             # Install only the measurement harness interpreter from the signed
             # media. Opening the complete online index can pull kernel firmware
             # recommendations unrelated to this controlled memory test.
@@ -260,6 +301,7 @@ def main():
             child.close()
             child = start(args, state, log, installed=True)
             login(child, "alice", "uflinux-test-password")
+            guest(child, 'case "$(uname -r)" in *-uflinux-x86_64) ;; *) exit 1 ;; esac', admin=False)
             guest(child, f"apk info -e musl={musl} musl-utils={musl}", admin=False)
             guest(child, "awk '$2 == \"/\" && $3 == \"xfs\" {ok=1} END {exit !ok}' /proc/mounts; test ! -e /run/uflinux-live; ! id live; apk info -e uflinux uflinux-desktop labwc linux-firmware-i915 linux-firmware-amdgpu linux-firmware-ath11k", admin=False)
             # Authenticate doas normally before invoking the root-only test harness.
@@ -345,6 +387,11 @@ def main():
                 (out / "power.json").write_text(json.dumps(power_report, indent=2) + "\n")
             child.close()
             child = None
+            grub_mode_smoke(args, state, log, installed=False, key="t",
+                            expected="grep -qw rc_runlevel=tty /proc/cmdline; ! rc-service greetd status")
+            grub_mode_smoke(args, state, log, installed=True, key="d",
+                            expected="grep -qw debug_init /proc/cmdline; rc-service greetd status")
+            gui_install_smoke(args, state, log)
             if sha(snapshot)!=iso_digest:
                 raise RuntimeError("The ISO changed while the VM was being tested")
         (out / "verified.json").write_text(json.dumps({"arch": args.arch, "mode": args.mode,
@@ -353,7 +400,7 @@ def main():
             "live_memory_mib": memory_mib(),
             "installed_memory_mib": memory_mib(installed=True),
             "musl": musl,
-            "iso_boot": True, "xfs_install_reboot": True, "unrelated_partition_preserved": True,
+            "iso_boot": True, "grub_usb_tty": True, "grub_installed_debug": True, "gui_install_reboot": True, "xfs_install_reboot": True, "unrelated_partition_preserved": True,
             "bootsplash": splash_report,
             "settings_512m": settings_metrics, "network_clock": network_clock, "power": power_report}, indent=2) + "\n")
         return 0

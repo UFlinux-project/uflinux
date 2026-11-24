@@ -27,9 +27,10 @@ def configuration(event, ref, full=False, device_builds=False):
                              "settings_pgo": release and package == "uflinux-settings" and arch in {"x86_64", "aarch64"},
                              "rds_pgo": release and package == "uflinux-rds" and arch in {"x86_64", "aarch64"}}
                              for arch in selected for package in PACKAGE_NAMES]}
-    # Only the x86_64 ISO is boot-tested, in both firmware modes, whatever the
-    # build matrix covers. Other architectures are built but never started.
-    vm = {"include": [{"arch": "x86_64", "mode": mode} for mode in ("bios", "uefi")]}
+    boot_modes = {"x86_64": ("bios", "uefi"), "aarch64": ("uefi",),
+                  "ppc64le": ("native",), "riscv64": ("uefi",)}
+    vm = {"include": [{"arch": arch, "mode": mode}
+                      for arch in selected for mode in boot_modes[arch]]}
     # Device images are supplementary artifacts: they build on release tags and on an
     # explicit manual request, and never gate the release itself.
     enabled = release or (full and device_builds)

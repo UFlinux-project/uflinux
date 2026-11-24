@@ -91,12 +91,12 @@ def check(arch):
         raise RuntimeError(f"{arch}: firmware list is out of date: "
                            f"missing {', '.join(sorted(expected - set(firmware_packages()))) or '-'}; "
                            f"stale {', '.join(sorted(set(firmware_packages()) - expected)) or '-'}")
-    boots = {"grub-ieee1275"} if arch == "ppc64le" else {"systemd-boot"}
-    if arch in {"x86", "x86_64", "aarch64", "armv7", "riscv64"}:
+    boots = {"grub-ieee1275"} if arch == "ppc64le" else {"grub-efi"}
+    if arch in {"x86_64", "aarch64", "riscv64"}:
         boots.add("efibootmgr")
-    if arch in {"x86", "x86_64"}:
-        boots.update({"syslinux", "amd-ucode", "intel-ucode"})
-    if arch in {"x86", "x86_64"}:
+    if arch == "x86_64":
+        boots.update({"grub-bios", "amd-ucode", "intel-ucode"})
+    if arch == "x86_64":
         boots.update({"mesa-vulkan-intel", "mesa-vulkan-nouveau", "mesa-vulkan-virtio"})
     if arch == "aarch64":
         boots.update({"mesa-vulkan-asahi", "mesa-vulkan-broadcom", "mesa-vulkan-freedreno",
@@ -159,7 +159,7 @@ def check_device(device_id):
         # The UFLinux subpackages are built from this repository's own aports tree,
         # and the Nura extras are validated against the pinned Nura index below.
         installed = [name for name in device_packages(device, arch)
-                     if not name.startswith("uflinux") and name not in device["nura_packages"]]
+                     if not name.startswith(("uflinux", "linux-uflinux-")) and name not in device["nura_packages"]]
         missing = set(installed) - found - local
         if missing:
             raise RuntimeError(f"{device_id} ({arch}): unavailable device packages: {', '.join(sorted(missing))}")

@@ -46,7 +46,7 @@ and Area. Shift or Ctrl plus Print Screen starts a screen recording directly whe
 is selected in Settings. Click the red timer in the taskbar to stop the recording, or
 right-click it to pause and resume.
 Hardware encoding needs a VA-API driver; the desktop meta ships the Mesa gallium driver
-plus both Intel VA-API drivers (x86) so recording works out of the box on AMD and Intel GPUs.
+plus both Intel VA-API drivers (x86_64) so recording works out of the box on AMD and Intel GPUs.
 On boards whose encoder is the Qualcomm Iris/Venus V4L2 device (for example the Arrow
 Dragon Q6A), the capture buffer is aligned to 128 by 32 before it reaches the encoder,
 which is what that device requires and what removes the padding artefact seen at other

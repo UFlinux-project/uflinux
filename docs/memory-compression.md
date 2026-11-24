@@ -27,8 +27,7 @@ sets up zram *and* a `/swapfile` at priority 10, and turns on zswap so the
 pages heading for that file are compressed first and written out only when the
 cache is full.
 
-**Compressor.** LZ4 on low-end CPUs: `armv7`, `armv6`, `armv8l`, `riscv32`,
-`riscv64`, `mips`, or any CPU with two cores or fewer. Zstandard everywhere
+**Compressor.** LZ4 on low-end CPUs: `riscv64` or any CPU with two cores or fewer. Zstandard everywhere
 else. LZ4 wins where cores are scarce because it needs far less work per page;
 Zstandard gives a better ratio where there are cores to spare. Both backends
 are built into the kernels this project ships, so the choice is always

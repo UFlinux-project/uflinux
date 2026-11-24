@@ -21,6 +21,9 @@ import time
 import urllib.parse
 import urllib.request
 import zlib
+import zipfile
+
+from kernel_packages import KEY as KERNEL_KEY, KERNELS, LIVE_TARGET, kernel_index, live_flavor, stage_kernels
 
 PROJECT = Path(__file__).resolve().parents[1]
 LOCK = json.loads((PROJECT / "config/sources.lock.json").read_text())
@@ -36,18 +39,13 @@ GPT_LINUX_TYPE = "0FC63DAF-8483-477B-8E3F-43138715FD6D"
 # and build inputs must not become part of the installed filesystem.
 DEVICE_ROOT_EXCLUDES = ("proc", "sys", "dev", "run", "cache", "repo", "nura", "project",
                         "device-esp", "device-esp.img", "device-image",
-                        ".uflinux-bootstrap", "etc/apk/cache")
+                        ".uflinux-bootstrap", "etc/apk/cache", "opt/uflinux/grub-2.14",
+                        "opt/uflinux/grub-q6a", "opt/uflinux/memtest86plus")
 DEVICE_ESP = "/device-esp"
 DEVICE_PROJECT_DIRS = ("aports", "profiles", "config", "scripts", "patches")
 PROJECT_DIRS = ("aports", "profiles", "config", "scripts", "tests", "patches", "settings")
-# Mirrors the table in profiles/device-rootfs.sh: systemd-boot ships one bare
-# EFI binary per architecture and the ESP has to carry it under that name.
-EFI_SUFFIX = {"aarch64": "aa64", "x86": "ia32", "x86_64": "x64"}
-# syslinux ships a GPT-aware MBR bootstrap that chainloads ldlinux.sys from the
-# ESP, but it refuses to run unless that partition has the GPT legacy BIOS boot
-# attribute; sfdisk's plain "bootable" keyword only sets the MBR boot indicator.
-SYSLINUX_GPT_MBR = "/usr/share/syslinux/gptmbr.bin"
-GPT_LEGACY_BOOTABLE = "attrs=LegacyBIOSBootable"
+EFI_SUFFIX = {"aarch64": "AA64", "x86_64": "X64"}
+GPT_BIOS_TYPE = "21686148-6449-6E6F-744E-656564454649"
 # A device image is several gigabytes of already-compressed packages, so the
 # highest level would cost hours of CPU for a few percent of size.
 DEVICE_IMAGE_ZSTD_LEVEL = 12
@@ -80,29 +78,27 @@ def device_uuids(seed):
     return {"disk": uuid("disk"), "esp": uuid("esp"), "root": uuid("root"), "serial": serial}
 
 
-def device_partitions(size_mib):
+def device_partitions(size_mib, bios=False):
     """ESP and root partition geometry in 512 byte sectors."""
     total = size_mib * (1024 * 1024 // SECTOR)
     if size_mib * 1024 * 1024 % SECTOR or total < ESP_SECTORS + 4096:
         raise ValueError(f"invalid image size {size_mib} MiB")
-    root_start = ESP_START + ESP_SECTORS
+    bios_start = ESP_START + ESP_SECTORS
+    root_start = bios_start + (2048 if bios else 0)
     return {"esp_start": ESP_START, "esp_size": ESP_SECTORS, "root_start": root_start,
-            "root_size": total - root_start - ESP_START, "total": total}
+            "root_size": total - root_start - ESP_START, "total": total, "bios_start": bios_start}
 
 
-def device_partition_script(layout, uuids, legacy_bootable=False):
-    """sfdisk script for the two-partition GPT layout.
-
-    A BIOS-bootable PC disk needs the legacy BIOS boot attribute on the ESP so
-    that the syslinux GPT MBR will chainload it; the plain "bootable" keyword
-    only writes the protective MBR's boot indicator, which gptmbr.bin ignores.
-    """
-    esp_attrs = f", {GPT_LEGACY_BOOTABLE}" if legacy_bootable else ""
+def device_partition_script(layout, uuids, bios=False):
+    """Serialize the ESP, optional BIOS boot partition, and final root partition."""
+    bios_entry = (f"start={layout['bios_start']}, size=2048, type={GPT_BIOS_TYPE}, name=BIOS\n"
+                  if bios else "")
     return (
         "label: gpt\n"
         f"label-id: {uuids['disk']}\n"
         f"start={layout['esp_start']}, size={layout['esp_size']}, type={GPT_ESP_TYPE}, "
-        f"uuid={uuids['esp']}, name=ESP, bootable{esp_attrs}\n"
+        f"uuid={uuids['esp']}, name=ESP\n"
+        + bios_entry +
         f"start={layout['root_start']}, size={layout['root_size']}, type={GPT_LINUX_TYPE}, "
         f"uuid={uuids['root']}, name=ROOT\n"
     )
@@ -128,6 +124,8 @@ def device_repositories(source, arch):
              f"{alpine['mirror']}/{alpine['branch']}/community"]
     if arch in LOCK["apps"]["arches"]:
         lines.append(LOCK["apps"]["url"])
+    if arch in KERNELS["packages"]:
+        lines.append(kernel_index(source, arch))
     return "\n".join(lines) + "\n"
 
 
@@ -169,7 +167,11 @@ def firmware_packages():
 
 def device_packages(device, arch):
     """Everything the device rootfs needs beyond the live system's package set."""
-    packages = ["uflinux-desktop-meta", "uflinux-device"] + list(device["packages"])
+    target = device["kernel"].format(arch=arch)
+    item = KERNELS["packages"][arch][target]
+    kernel = "linux-uflinux-" + target
+    version = item["name"].removeprefix(kernel + "-").removesuffix(".apk")
+    packages = ["uflinux-desktop-meta", "uflinux-device", f"{kernel}={version}"] + list(device["packages"])
     # The same desktop the live ISO installs, minus the live-only pieces.
     packages += ["musl-locales", "musl-locales-lang", "glib-lang", "gtk4.0-lang",
                  "labwc-lang", "vulkan-loader", "xfsprogs"]
@@ -182,11 +184,6 @@ def device_packages(device, arch):
     # feature), and keeps fsck.f2fs available for diagnosis.
     if device.get("rootfs", "ext4") == "f2fs":
         packages.append("f2fs-tools")
-    # Nura packages are not installed: the profile fetches and unpacks them, so
-    # they stay out of the solver (Nura's postmarketos-mkinitfs conflicts with
-    # Alpine's mkinitfs, which uflinux-initramfs requires). That set includes the
-    # qcs6490 kernel, so the unpacked /lib/modules tree is the only kernel the
-    # device rootfs has and no Alpine kernel package is pulled in for it.
     if arch in ("x86_64", "aarch64") and "efibootmgr" not in packages:
         packages.append("efibootmgr")
     return sorted(set(packages))
@@ -194,19 +191,21 @@ def device_packages(device, arch):
 
 def device_environment(name, device, arch, version, root_partuuid, esp):
     """Contract consumed by profiles/device-rootfs.sh."""
-    env = {"UFLINUX_DEVICE": name, "UFLINUX_ARCH": arch,
+    env = {"UFLINUX_KERNEL_FLAVOR": "uflinux-" + device["kernel"].format(arch=arch),
+           "UFLINUX_DEVICE": name, "UFLINUX_ARCH": arch,
            "UFLINUX_BOOT": device["boot"], "UFLINUX_SERIAL": device["serial"],
            "UFLINUX_INITRAMFS_COMPRESSION": device.get("initramfs_compression", "zstd"),
            "UFLINUX_CMDLINE": device["cmdline"], "UFLINUX_VERSION": version,
            "UFLINUX_ROOTFS": device.get("rootfs", "ext4"),
            "UFLINUX_ROOT_PARTUUID": root_partuuid, "UFLINUX_ESP": esp,
            "UFLINUX_PACKAGES": " ".join(device_packages(device, arch))}
+    if name == "vm" and arch == "aarch64":
+        env.update(UFLINUX_SERIAL="ttyAMA0", UFLINUX_CMDLINE="quiet console=ttyAMA0,115200n8")
     if device["nura"]:
         env["UFLINUX_NURA_PACKAGES"] = " ".join(device["nura_packages"])
         env["UFLINUX_NURA_REPOSITORY"] = device_nura_repository()
-        # The Nura dtbloader EFI driver applies DT fixups that Qualcomm boards
-        # need before the kernel runs, so the ESP carries it as a systemd-boot
-        # driver. The board DTB itself comes from the kernel package.
+        # Keep the optional Nura driver on the ESP for firmware registration.
+        # GRUB loads the board DTB directly from the kernel package.
         env["UFLINUX_DTBLOADER"] = "/usr/share/dtbloader/dtbloader.efi"
     # Firmware a built-in driver needs before the root is mounted has to be
     # named explicitly: mkinitfs collects firmware from the .ko files it copies
@@ -275,12 +274,12 @@ def device_layout(image):
     if table.get("unit") != "sectors" or int(table.get("sectorsize", 0)) != SECTOR:
         raise ValueError(f"{image} is not a {SECTOR}-byte sector disk")
     partitions = table.get("partitions", [])
-    if len(partitions) != 2:
+    if len(partitions) not in {2, 3}:
         raise ValueError(f"{image} must have an ESP and a root partition")
-    esp, root = partitions
+    esp, root = partitions[0], partitions[-1]
     if esp.get("type", "").upper() != GPT_ESP_TYPE or root.get("type", "").upper() != GPT_LINUX_TYPE:
         raise ValueError(f"{image} has the wrong partition types")
-    return {"disk": table.get("id", "").upper(), "esp": esp, "root": root}
+    return {"disk": table.get("id", "").upper(), "esp": esp, "root": root, "bios": partitions[1] if len(partitions) == 3 else None}
 
 
 # Filesystem superblock signatures, as (offset, magic, description) triples
@@ -362,7 +361,7 @@ def device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, epoch,
     volume.unlink()
 
 
-def device_verify_image(image, device, arch, uuids, layout, mbr=None):
+def device_verify_image(image, device, arch, uuids, layout):
     """Check the assembled disk, including the board's initramfs compression."""
     rootfs = device.get("rootfs", "ext4")
     if rootfs not in ROOTFS_SIGNATURES:
@@ -398,33 +397,39 @@ def device_verify_image(image, device, arch, uuids, layout, mbr=None):
     signature, description = signatures[compression]
     if not magic.startswith(signature):
         raise ValueError(f"{image}: the initramfs is not a {description}")
-    # The dict literal form would look up EFI_SUFFIX even for boards that do
-    # not boot through EFI, and riscv64 has no EFI binary name at all.
-    if device["boot"] == "efi":
-        bootloader = "EFI/boot/boot" + EFI_SUFFIX[arch] + ".efi"
+    if device["boot"] in {"efi", "pc"}:
+        bootloader = "boot/grub/grub.cfg"
+        efi = stage / "EFI/BOOT" / ("BOOT" + EFI_SUFFIX[arch] + ".EFI")
+        if not efi.is_file():
+            raise ValueError(f"{image}: missing {efi.name}")
+        with efi.open("rb") as handle:
+            if handle.read(2) != b"MZ":
+                raise ValueError(f"{image}: invalid GRUB EFI executable {efi.name}")
+        if device.get("dtb") and not (stage / "dtbs" / device["dtb"]).is_file():
+            raise ValueError(f"{image}: missing the EFI device tree")
+        if device["boot"] == "pc":
+            bios = actual["bios"]
+            if not bios or bios.get("type", "").upper() != GPT_BIOS_TYPE:
+                raise ValueError(f"{image}: missing GRUB BIOS boot partition")
+            with image.open("rb") as handle:
+                if not any(handle.read(440)):
+                    raise ValueError(f"{image}: missing GRUB MBR code")
+                handle.seek(bios["start"] * SECTOR)
+                if not any(handle.read(4096)):
+                    raise ValueError(f"{image}: missing embedded GRUB core")
     elif device["boot"] == "rpi":
         bootloader = "cmdline.txt"
+        if not (stage / bootloader).is_file():
+            raise ValueError(f"{image}: the ESP has no {bootloader}")
+        for name in ("kernel8.img", "overlays", "bcm2710-rpi-3-b.dtb",
+                     "bcm2711-rpi-4-b.dtb", "bcm2712-rpi-5-b.dtb"):
+            if not (stage / name).exists():
+                raise ValueError(f"{image}: the Raspberry Pi boot partition lacks {name}")
     elif device["boot"] == "extlinux":
         bootloader = "extlinux/extlinux.conf"
-    elif device["boot"] == "pc":
-        # One disk, both firmware classes: syslinux covers BIOS and
-        # systemd-boot covers UEFI, so the ESP has to carry both chains.
-        suffix = EFI_SUFFIX[arch]
-        bootloader = "syslinux.cfg"
-        for name in ("ldlinux.sys", "ldlinux.c32", "EFI/boot/boot" + suffix + ".efi",
-                     "loader/entries/uflinux.conf"):
-            if not (stage / name).is_file():
-                raise ValueError(f"{image}: the ESP has no {name}")
-        # gptmbr.bin refuses a disk whose ESP lacks the legacy BIOS boot
-        # attribute, and the failure is a bare "Boot failed" with no hint.
-        if actual["esp"].get("attrs") != "LegacyBIOSBootable":
-            raise ValueError(f"{image}: the ESP has no legacy BIOS boot attribute")
-        if mbr is None:
-            raise ValueError(f"{image}: no syslinux GPT bootstrap to check")
-        with image.open("rb") as handle:
-            bootstrap = handle.read(440)
-        if bootstrap != mbr.read_bytes():
-            raise ValueError(f"{image}: the MBR is not the syslinux GPT bootstrap")
+        for dtb in (device["dtb"], "ky/x1_orangepi-r2s.dtb"):
+            if not (stage / "dtbs" / dtb).is_file():
+                raise ValueError(f"{image}: missing extlinux device tree {dtb}")
     else:
         raise ValueError(f"{image}: unsupported boot mode {device['boot']}")
     if not (stage / bootloader).is_file():
@@ -1024,6 +1029,10 @@ class Builder:
             mimalloc = "mimalloc-" + LOCK["musl"]["mimalloc_version"]
             archive = git_source_archive(LOCK["sources"]["mimalloc"], mimalloc, self.cache / "downloads")
             shutil.copy2(archive, source / "musl" / (mimalloc + ".tar.gz"))
+            if self.args.arch in {"x86_64", "aarch64"}:
+                archive = download(LOCK["sources"]["glibc-string"], self.cache / "downloads")
+                shutil.copy2(archive, self.root / "var/cache/distfiles" /
+                             f"glibc-string-{LOCK['musl']['glibc_string_version']}.tar.gz")
         if "uflinux" in selected:
             artwork = download(LOCK["sources"]["gnome-backgrounds"], self.cache / "downloads")
             shutil.copy2(artwork, self.root / "var/cache/distfiles/gnome-backgrounds-3.38.0.tar.xz")
@@ -1202,10 +1211,45 @@ class Builder:
                     *[relative + "/" + p.name for p in sorted(repo.glob("*.apk"))])
         self.chroot("abuild-sign", "-t", SIGN_STREAM, relative + "/APKINDEX.tar.gz")
 
+    def build_q6a_grub(self):
+        archive = download(LOCK["sources"]["grub-q6a"], self.cache / "downloads")
+        source = self.root / "opt/uflinux/grub-2.14"
+        if source.exists():
+            remove_tree(source)
+        source.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(archive) as tar:
+            tar.extractall(source.parent, filter="data")
+        self.chroot("apk", "add", "--virtual", ".uflinux-q6a-build", "build-base", "bison", "flex", "python3", "gawk",
+                    "linux-headers", "patch", "gettext-dev", "xz-dev")
+        self.chroot("patch", "--batch", "--fuzz=0", "-p1", "-d", "/opt/uflinux/grub-2.14",
+                    "-i", "/project/patches/grub-q6a-efi-fixup.patch")
+        build = (self.root / "opt/uflinux/grub-q6a")
+        if build.exists():
+            remove_tree(build)
+        build.mkdir()
+        self.chroot("sh", "-ec",
+                    "cd /opt/uflinux/grub-q6a; ../grub-2.14/configure "
+                    "--with-platform=efi --disable-werror --disable-nls "
+                    "--disable-grub-mkfont --disable-efiemu; make -j2")
+        self.chroot("apk", "del", ".uflinux-q6a-build")
+
+    def stage_memtest(self):
+        arch = self.args.arch
+        variant = {"x86_64": "x86_64", "aarch64": "arm64"}.get(arch)
+        if not variant:
+            return
+        archive = download(LOCK["sources"]["memtest86plus"], self.cache / "downloads")
+        with zipfile.ZipFile(archive) as payload:
+            target = self.root / "opt/uflinux/memtest86plus"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload.read("mt86p_900_" + variant))
+
     def image(self):
-        self.tools("xorriso", "mtools", "squashfs-tools", "zstd", "util-linux", "syslinux" if self.args.arch in {"x86", "x86_64"} else "util-linux")
-        if self.args.arch == "ppc64le":
-            self.chroot("apk", "add", "grub", "grub-ieee1275")
+        arch = self.args.arch
+        platforms = {"x86_64": ("grub-bios", "grub-efi"), "ppc64le": ("grub-ieee1275",)}
+        self.tools("xorriso", "mtools", "squashfs-tools", "zstd", "util-linux", "grub",
+                   *platforms.get(arch, ("grub-efi",)))
+        self.stage_memtest()
         for name, digest in LOCK["image"]["patches"].items():
             if hashlib.sha512((PROJECT / "patches" / name).read_bytes()).hexdigest() != digest:
                 raise RuntimeError("Image compression patch differs from the source lock: " + name)
@@ -1278,7 +1322,15 @@ class Builder:
             # ships the same file in the installed system.
             self.put(APPS_TRUSTED_KEY, APPS_BUNDLED_KEY.read_text())
             command += ["--repository", LOCK["apps"]["url"], "--hostkeys"]
-        self.chroot(*command, extra_env={"PATH": "/opt/uflinux/bin:" + self.env["PATH"],
+        arch = self.args.arch
+        if arch in LIVE_TARGET:
+            directory = self.root / "image-kernels" / arch
+            if directory.exists():
+                shutil.rmtree(directory)
+            stage_kernels(self, arch, directory, {LIVE_TARGET[arch]})
+            command += ["--repository", kernel_index("/image-kernels", arch)]
+        self.chroot(*command, extra_env={"UFLINUX_KERNEL_FLAVOR": live_flavor(arch),
+                                         "PATH": "/opt/uflinux/bin:" + self.env["PATH"],
                                          "complevel_zstd": "-" + str(LOCK["image"]["initramfs_level"]),
                                          "features_dir": "/project/aports/uflinux /etc/mkinitfs/features.d"})
         target = self.out / "images" / self.args.arch
@@ -1303,39 +1355,74 @@ class Builder:
             promote_apk(path, self.cache / self.args.arch / "image-apk")
         archive_tree(caches, self.out / "inputs" / self.args.arch / "image-apks.tar.gz", self.epoch)
         self.verify_image_compression()
+        self.verify_iso_grub()
         extracted = self.root / "iso-apks"
         if extracted.exists():
             shutil.rmtree(extracted)
         self.chroot("xorriso", "-osirrox", "on", "-indev", "/image-out/uflinux-" + self.args.version + "-" + self.args.arch + ".iso",
                     "-extract", "/apks/" + self.args.arch, "/iso-apks")
         self.chroot("apk", "verify", *["/iso-apks/" + path.name for path in sorted(extracted.glob("*.apk"))])
+        if arch in LIVE_TARGET:
+            media = self.root / "iso-kernel"
+            if media.exists():
+                shutil.rmtree(media)
+            self.chroot("xorriso", "-osirrox", "on", "-indev",
+                        f"/image-out/uflinux-{self.args.version}-{arch}.iso",
+                        "-extract", f"/apks/kernels/{arch}", "/iso-kernel")
+            expected = KERNELS["packages"][arch][LIVE_TARGET[arch]]["name"]
+            for name in ("Packages.adb", expected):
+                if sha(media / name) != sha(directory / name):
+                    raise RuntimeError(f"The ISO's offline kernel repository differs: {name}")
+            self.chroot("apk", "verify", "/iso-kernel/Packages.adb", "/iso-kernel/" + expected)
         self.verify_musl_media(extracted, repo)
         from sbom import generate
         generate(extracted, self.out / "metadata" / self.args.arch / f"uflinux-{self.args.version}-{self.args.arch}.spdx.json", self.args.version, self.args.arch, self.epoch)
 
+    def verify_iso_grub(self):
+        arch = self.args.arch
+        iso = f"/image-out/uflinux-{self.args.version}-{arch}.iso"
+        destination = self.root / "iso-grub"
+        if destination.exists():
+            remove_tree(destination)
+        self.chroot("xorriso", "-osirrox", "on", "-indev", iso,
+                    "-extract", "/boot/grub", "/iso-grub")
+        self.chroot("grub-script-check", "/iso-grub/grub.cfg")
+        menu = (destination / "grub.cfg").read_text()
+        for mode in ("standard", "debug", "tty"):
+            if f"--id uflinux-{mode} " not in menu:
+                raise RuntimeError(f"{arch}: installer ISO is missing GRUB mode {mode}")
+        if (destination / "themes/uflinux/splash.png").read_bytes() != (
+                PROJECT / "aports/uflinux/splash.png").read_bytes():
+            raise RuntimeError(f"{arch}: GRUB splash differs from the packaged theme")
+        if arch in {"x86_64", "aarch64"} and (destination / "memtest86plus").read_bytes() != (
+                self.root / "opt/uflinux/memtest86plus").read_bytes():
+            raise RuntimeError(f"{arch}: installer ISO has the wrong Memtest86+ payload")
+
     def verify_image_compression(self):
         compression_dir = self.root / "compression-check"
         compression_dir.mkdir(exist_ok=True)
-        for name in ("initramfs-lts", "modloop-lts"):
+        flavor = live_flavor(self.args.arch)
+        initramfs, modloop = f"initramfs-{flavor}", f"modloop-{flavor}"
+        for name in (initramfs, modloop):
             (compression_dir / name).unlink(missing_ok=True)
             self.chroot("xorriso", "-osirrox", "on", "-indev",
                         "/image-out/uflinux-" + self.args.version + "-" + self.args.arch + ".iso",
                         "-extract", "/boot/" + name, "/compression-check/" + name)
-        compression = image_compression(compression_dir / "initramfs-lts", compression_dir / "modloop-lts")
-        listing = self.chroot("unsquashfs", "-ll", "/compression-check/modloop-lts",
+        compression = image_compression(compression_dir / initramfs, compression_dir / modloop)
+        listing = self.chroot("unsquashfs", "-ll", "/compression-check/" + modloop,
                               stdout=subprocess.PIPE, text=True).stdout
         check_modloop_firmware_listing(listing)
         compression["modloop_device_firmware"] = False
-        self.chroot("zstd", "--test", "/compression-check/initramfs-lts")
+        self.chroot("zstd", "--test", "/compression-check/" + initramfs)
         report = self.out / "checks" / self.args.arch / "compression.json"
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps(compression, indent=2) + "\n")
 
-    def device_bootstrap(self, device):
+    def device_bootstrap(self, device, kernel_repo):
         """Prepare an installed rootfs for *device*: repos, keys and /project."""
         arch = self.args.arch
         root = self.root
-        fingerprint = hashlib.sha256(json.dumps([LOCK, DEVICE_LOCK, device],
+        fingerprint = hashlib.sha256(json.dumps([LOCK, DEVICE_LOCK, KERNELS, device],
                                                 sort_keys=True).encode()).hexdigest()
         marker = root / ".uflinux-bootstrap"
         if marker.exists() and marker.read_text() != fingerprint:
@@ -1395,6 +1482,10 @@ class Builder:
         if repo.exists():
             shutil.rmtree(repo)
         shutil.copytree(final, repo)
+        for package in kernel_repo.iterdir():
+            shutil.copy2(package, repo)
+        self.put("etc/apk/keys/" + KERNEL_KEY,
+                 (PROJECT / "aports/uflinux" / KERNEL_KEY).read_text())
         self.put("etc/apk/repositories", device_repositories("/repo", arch))
         for name in DEVICE_PROJECT_DIRS:
             destination = root / "project" / name
@@ -1406,35 +1497,6 @@ class Builder:
         # No other stage refreshes the indexes: apk 3 needs them before the first add.
         self.chroot("apk", "update")
 
-    def device_pc_esp(self, root, staging, layout, uuids):
-        """Build the PC ESP as a standalone FAT image and install syslinux in it.
-
-        syslinux accepts a block device or a regular file but never a directory
-        inside a mounted filesystem, and the build must not need a loop device,
-        so the ESP is assembled in an image of its own and copied into the
-        partition afterwards. The installer runs in the chroot because the
-        syslinux package is built for the target architecture, and it drives
-        mtools through a generated MTOOLSRC, which is why TMPDIR has to be
-        inside the chroot and writable.
-        """
-        image = root.root / "device-esp.img"
-        run(["truncate", "-s", str(layout["esp_size"] * SECTOR), image])
-        run(["mkfs.vfat", "-n", "UFLINUX", "-i", uuids["serial"], "-F", "32",
-             "-S", "512", str(image)])
-        mcopy = ["mcopy", "-s", "-n", "-i", str(image)]
-        mcopy += sorted(str(path) for path in staging.iterdir())
-        run(mcopy + ["::/"], env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
-        # syslinux writes ldlinux.sys and ldlinux.c32 itself and marks both
-        # read-only, hidden and system; device_verify_image checks they landed.
-        # The installer's temp directory has to live inside the chroot, since
-        # that is the only filesystem the installer can see.
-        (root.root / "tmp").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="syslinux-", dir=root.root / "tmp") as tmp:
-            root.chroot("syslinux", "--install", "--offset", "0", "/device-esp.img",
-                        extra_env={"TMPDIR": "/" + Path(tmp).relative_to(root.root).as_posix(),
-                                   "MTOOLS_SKIP_CHECK": "1"})
-        return image
-
     def device_image(self):
         """Assemble one installed GPT disk image for the selected device."""
         name = self.args.device
@@ -1442,19 +1504,25 @@ class Builder:
         arch = self.args.arch
         tools = ["dosfstools", "mtools", "zstd", "util-linux", "e2fsprogs",
                  "f2fs-tools", "xfsprogs"]
-        if device["boot"] == "pc":
-            tools.append("syslinux")
         self.tools(*tools)
         uuids = device_uuids(f"{self.args.version}:{name}:{arch}")
-        layout = device_partitions(device["img_size_mib"])
+        layout = device_partitions(device["img_size_mib"], bios=device["boot"] == "pc")
         args = argparse.Namespace(**vars(self.args))
         args.workdir = str(Path(self.args.workdir).resolve() / "device" / name)
         # The device rootfs pulls kernels and firmware that no other stage uses;
         # keeping them out of the shared cache keeps the ISO inputs unchanged.
         args.cache = str(Path(self.args.cache).resolve() / "device" / name)
         root = Builder(args)
-        root.device_bootstrap(device)
+        self.signing_key(release=self.args.release)
+        kernel_repo = self.root / "device-kernels" / arch
+        if kernel_repo.exists():
+            shutil.rmtree(kernel_repo)
+        stage_kernels(self, arch, kernel_repo, {device["kernel"].format(arch=arch)})
+        root.device_bootstrap(device, kernel_repo)
+        root.stage_memtest()
         with root.mounted():
+            if name == "qcs6490":
+                root.build_q6a_grub()
             root.chroot("mkdir", "-p", DEVICE_ESP)
             root.chroot("sh", "/project/profiles/device-rootfs.sh", extra_env=dict(
                 device_environment(name, device, arch, self.args.version, uuids["root"],
@@ -1475,38 +1543,35 @@ class Builder:
             esp = snapshot / "esp"
             device_snapshot(root.root, staging, rootfs=True)
             device_snapshot(root.root / DEVICE_ESP.lstrip("/"), esp)
-            esp_image = (self.device_pc_esp(root, esp, layout, uuids)
-                         if device["boot"] == "pc" else None)
         disk = snapshot / "disk"
-        disk.parent.mkdir(parents=True, exist_ok=True)
-        disk.unlink(missing_ok=True)
         run(["truncate", "-s", f"{device['img_size_mib']}M", disk])
+        is_pc = device["boot"] == "pc"
         run(["sfdisk", "--quiet", "--force", str(disk)],
-            input=device_partition_script(layout, uuids,
-                                          legacy_bootable=device["boot"] == "pc"),
-            text=True)
-        mbr = None
-        if esp_image is None:
-            # The explicit block count bounds the FAT to its partition; mkfs.vfat
-            # notices the disk is larger and warns, which is what we want here.
-            run(["mkfs.vfat", "-n", "UFLINUX", "-i", uuids["serial"], "-F", "32", "-S", "512",
-                 "--offset", str(layout["esp_start"]), str(disk),
-                 str(layout["esp_size"] // 2)],
-                stderr=subprocess.DEVNULL)
-            mcopy = ["mcopy", "-s", "-n", "-i", f"{disk}@@{layout['esp_start']}s"]
-            mcopy += sorted(str(path) for path in esp.iterdir())
-            run(mcopy + ["::/"], env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
-        else:
-            run(["dd", f"if={esp_image}", f"of={disk}", "bs=1M",
-                 f"seek={layout['esp_start'] * SECTOR // (1024 * 1024)}",
-                 "conv=notrunc", "status=none"])
-            esp_image.unlink()
-            mbr = snapshot / "gptmbr.bin"
-            shutil.copy2(root.root / SYSLINUX_GPT_MBR.lstrip("/"), mbr)
-            # 440 bytes is exactly the bootstrap area, so the protective MBR
-            # partition table and its signature survive untouched.
-            run(["dd", f"if={mbr}", f"of={disk}", "bs=440", "count=1",
-                 "conv=notrunc", "status=none"])
+            input=device_partition_script(layout, uuids, bios=is_pc), text=True)
+        run(["mkfs.vfat", "-n", "UFLINUX", "-i", uuids["serial"], "-F", "32", "-S", "512",
+             "--offset", str(layout["esp_start"]), str(disk), str(layout["esp_size"] // 2)],
+            stderr=subprocess.DEVNULL)
+        mcopy = ["mcopy", "-s", "-n", "-i", f"{disk}@@{layout['esp_start']}s"]
+        mcopy += sorted(str(path) for path in esp.iterdir())
+        run(mcopy + ["::/"], env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
+        if is_pc:
+            modules = root.root / "usr/lib/grub/i386-pc"
+            shutil.copytree(modules, esp / "boot/grub/i386-pc", dirs_exist_ok=True)
+            run(["mcopy", "-s", "-i", f"{disk}@@{layout['esp_start']}s",
+                 esp / "boot/grub/i386-pc", "::/boot/grub/"])
+            early = snapshot / "bios.cfg"
+            fat_id = uuids["serial"][:4] + "-" + uuids["serial"][4:]
+            early.write_text(f"search.fs_uuid {fat_id.upper()} root\n"
+                             'set prefix="($root)/boot/grub"\n')
+            shutil.copy2(modules / "boot.img", snapshot)
+            run(["grub-mkimage", "-d", modules, "-O", "i386-pc", "-p", "/boot/grub",
+                 "-c", early, "-o", snapshot / "core.img", "biosdisk", "part_gpt", "fat", "search_fs_uuid", "normal"])
+            loop = run(["losetup", "--find", "--show", "--partscan", disk],
+                       stdout=subprocess.PIPE, text=True).stdout.strip()
+            try:
+                run(["grub-bios-setup", "--skip-fs-probe", "-d", snapshot, loop])
+            finally:
+                run(["losetup", "--detach", loop])
         rootfs = device.get("rootfs", "ext4")
         if rootfs == "ext4":
             run(["mke2fs", "-q", "-Fn", "-t", "ext4", "-d", staging, "-L", "UFLINUX_ROOT",
@@ -1516,7 +1581,7 @@ class Builder:
         else:
             device_write_rootfs(rootfs, disk, snapshot, staging, layout, uuids, self.epoch,
                                 device.get("f2fs_compress"))
-        report = device_verify_image(disk, device, arch, uuids, layout, mbr=mbr)
+        report = device_verify_image(disk, device, arch, uuids, layout)
         target = self.out / "devices" / arch
         target.mkdir(parents=True, exist_ok=True)
         image = target / device_image_name(self.args.version, name, arch)
@@ -1629,7 +1694,7 @@ class Builder:
             raise RuntimeError("Desktop is not an ELF executable")
         byte_order = "<" if header[5] == 1 else ">"
         elf_type, machine = struct.unpack_from(byte_order + "HH", header, 16)
-        expected = {"x86": 3, "x86_64": 62, "armv7": 40, "aarch64": 183,
+        expected = {"x86_64": 62, "aarch64": 183,
                     "ppc64le": 21, "riscv64": 243}[self.args.arch]
         if machine != expected or elf_type != 3:
             raise RuntimeError("Desktop must be a position-independent executable for the target architecture")

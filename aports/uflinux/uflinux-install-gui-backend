@@ -33,7 +33,7 @@ def discover():
         if device.get('type') == 'disk':
             device['diskseq'] = disk_sequence(device.get('path', ''))
     arch = cli.output('apk', '--print-arch')
-    mode = 'uefi' if Path('/sys/firmware/efi').exists() else ('bios' if arch in ('x86', 'x86_64') else 'native')
+    mode = 'uefi' if Path('/sys/firmware/efi').exists() else ('bios' if arch == 'x86_64' else 'native')
     disks = [{'device': device, 'fingerprint': fingerprint(device)} for device in data['blockdevices'] if safe_disk(device)]
     return {'version': 1, 'arch': arch, 'mode': mode, 'devices': data['blockdevices'], 'disks': disks}
 
@@ -86,10 +86,10 @@ def safe_disk(disk):
 
 
 def storage_plan(arch, mode):
-    if mode == 'uefi' and arch in ('x86', 'x86_64', 'aarch64', 'armv7', 'riscv64'):
+    if mode == 'uefi' and arch in cli.EFI_ARCH:
         return ['size=1G,type=U', 'type=L'], 1, 2
-    if mode == 'bios' and arch in ('x86', 'x86_64'):
-        return ['size=1G,type=L,attrs=LegacyBIOSBootable', 'type=L'], 1, 2
+    if mode == 'bios' and arch == 'x86_64':
+        return ['size=1M,type=' + cli.BIOS_BOOT_GUID, 'size=1G,type=L', 'type=L'], 2, 3
     if mode == 'native' and arch == 'ppc64le':
         return ['size=8M,type=9e1a2d38-c612-4316-aa26-8b49521e5a8b', 'size=1G,type=L', 'type=L'], 2, 3
     raise cli.InstallError('Unsupported architecture or firmware mode')
@@ -143,7 +143,7 @@ def validate_request(request, state):
         return disk, layout, partition_path(disk['path'], boot_number), partition_path(disk['path'], root_number)
     entries = {d.get('path'): d for d in flatten([disk])}
     root, boot = entries.get(storage['root']), entries.get(storage['boot'])
-    boot_type = 'vfat' if state['mode'] == 'uefi' else 'ext4'
+    boot_type = 'vfat' if state['mode'] in {'uefi', 'bios'} else 'ext4'
     if not root or not boot or root is boot or root.get('type') != 'part' or boot.get('type') != 'part' or root.get('fstype') != 'xfs' or boot.get('fstype') != boot_type:
         raise cli.InstallError('Select separate XFS root and compatible boot partitions on the selected disk')
     if root.get('size', 0) < MIN_ROOT:
@@ -218,7 +218,7 @@ def execute(request):
                 cli.efi_partition(boot)
             elif state['mode'] == 'bios':
                 table = json.loads(cli.output('sfdisk', '--json', disk['path']))['partitiontable']
-                cli.bios_mbr_code(table, boot)
+                cli.validate_bios_disk(table)
             elif state['arch'] == 'ppc64le':
                 types = {str(d.get('parttype', '')).lower() for d in flatten([disk])}
                 if not types.intersection({'0x41', '41', '9e1a2d38-c612-4316-aa26-8b49521e5a8b'}):
@@ -232,7 +232,7 @@ def execute(request):
             cli.run('blockdev', '--rereadpt', disk['path'])
             cli.run('udevadm', 'settle')
             cli.run('mkfs.xfs', '-f', root)
-            if state['mode'] == 'uefi':
+            if state['mode'] in {'uefi', 'bios'}:
                 cli.run('mkfs.vfat', '-F', '32', boot)
             else:
                 cli.run('mkfs.ext4', '-F', boot)

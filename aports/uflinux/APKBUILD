@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=24
+pkgrel=26
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -15,14 +15,14 @@ subpackages="uflinux-release:release uflinux-defaults:defaults uflinux-desktop-m
 options="!check"
 makedepends="rsvg-convert python3"
 builddir="$srcdir"
-source="uflinux-image-user uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.svg uflinux-entry.svg uflinux-bullet.svg
+source="uflinux-boot-menu Ubuntu.pf2 theme.txt splash.png NOTICE uflinux-image-user uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.svg uflinux-entry.svg uflinux-bullet.svg
 	uflinux-boot-assets.py uflinux-splash-original.png plymouthd.conf
 	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-initramfs-resize uflinux-plymouth.files uflinux-f2fs-resize.files uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-autostart uflinux-theme-sync uflinux-install uflinux-install-gui-backend
 	uflinux-live.initd uflinux-device.initd uflinux-zram.initd uflinux-zram.confd uflinux.desktop uflinux-logo.svg artwork-NOTICE labwc-rc.xml labwc-menu.xml
 	labwc-autostart labwc-environment mako.conf
 	gtk-settings.ini 90-uflinux.gschema.override 45-uflinux-fonts.conf firefox-defaults.js
 	labwc-portals.conf xdg-desktop-portal-wlr-labwc regreet.toml regreet.css greetd-installed.toml greetd-live.toml greetd.pam
-	connman.conf connman.confd iwd.conf uflinux-network-init uflinux-connman.conf uflinux3.ec384.pub
+	connman.conf connman.confd iwd.conf uflinux-network-init uflinux-connman.conf uflinux3.ec384.pub uflinux-kernel.ec.pem.pub
 	https://download.gnome.org/sources/gnome-backgrounds/3.38/gnome-backgrounds-3.38.0.tar.xz
 	labwc-themes-6a2e3634.tar.gz::https://codeload.github.com/labwc/labwc-themes/tar.gz/6a2e3634eef03e7f124359ad28ed5da2d931f96d"
 
@@ -45,6 +45,9 @@ build() {
 }
 
 package() {
+	install -Dm755 "$srcdir/uflinux-boot-menu" "$pkgdir/usr/libexec/uflinux-boot-menu"
+	install -d "$pkgdir/usr/share/uflinux/grub-theme"
+	install -m644 "$srcdir"/Ubuntu.pf2 "$srcdir"/theme.txt "$srcdir"/splash.png "$srcdir"/NOTICE "$pkgdir/usr/share/uflinux/grub-theme/"
 	install -Dm644 "$srcdir/uflinux-openrc.conf" "$pkgdir/etc/rc.conf.d/uflinux.conf"
 	install -d "$pkgdir/usr/share/plymouth/themes/uflinux"
 	install -m644 "$srcdir/uflinux.plymouth" "$srcdir"/theme/*.png \
@@ -77,18 +80,16 @@ package() {
 		'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' \
 		'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' \
 		> "$pkgdir/usr/share/uflinux/repositories"
-	# The apps repository publishes indexes for these architectures only; an
-	# unreachable repository line makes apk update (and every later apk add)
-	# fail, so x86 and armv7 systems must not list it at all. Its packages are
-	# signed with a separate key that apk resolves by filename, so ship it
-	# under the exact name the signatures reference.
+	# APK resolves the apps repository's signing key by filename.
+	printf '%s\n' 'https://apps-repo.uflinux.org/apk/v3.24/uflinux-apps' \
+		>> "$pkgdir/usr/share/uflinux/repositories"
 	case "$CARCH" in
-		x86_64|aarch64|ppc64le|riscv64)
-			printf '%s\n' 'https://apps-repo.uflinux.org/apk/v3.24/uflinux-apps' \
-				>> "$pkgdir/usr/share/uflinux/repositories"
-			install -Dm644 "$srcdir/uflinux3.ec384.pub" "$pkgdir/etc/apk/keys/uflinux3.ec384.pub"
+		x86_64|aarch64|riscv64)
+			printf '%s\n' "$UFLINUX_REPOSITORY_URL/$CARCH/Packages.adb" >> "$pkgdir/usr/share/uflinux/repositories"
+			install -Dm644 "$srcdir/uflinux-kernel.ec.pem.pub" "$pkgdir/etc/apk/keys/uflinux-kernel.ec.pem.pub"
 			;;
 	esac
+	install -Dm644 "$srcdir/uflinux3.ec384.pub" "$pkgdir/etc/apk/keys/uflinux3.ec384.pub"
 	install -Dm644 "$pkgdir/usr/share/uflinux/os-release" "$pkgdir/etc/os-release"
 	install -Dm755 "$srcdir/uflinux-session" "$pkgdir/usr/bin/uflinux-session"
 	install -Dm755 "$srcdir/uflinux-autostart" "$pkgdir/usr/libexec/uflinux-autostart"
@@ -161,7 +162,10 @@ release() {
 	case "$CARCH" in
 		x86_64|aarch64|ppc64le|riscv64) apps_key="etc/apk/keys/uflinux3.ec384.pub" ;;
 	esac
-	amove etc/os-release usr/share/uflinux/version usr/share/uflinux/os-release usr/share/uflinux/repositories $apps_key
+	case "$CARCH" in
+		x86_64|aarch64|riscv64) kernel_key="etc/apk/keys/uflinux-kernel.ec.pem.pub" ;;
+	esac
+	amove etc/os-release usr/share/uflinux/version usr/share/uflinux/os-release usr/share/uflinux/repositories $apps_key ${kernel_key:-}
 }
 
 defaults() {
@@ -170,7 +174,7 @@ defaults() {
 	depends="adw-gtk3 papirus-icon-theme simp1e-cursors-adw-dark gsettings-desktop-schemas uflinux-initramfs=$pkgver-r$pkgrel"
 	replaces="plymouth greetd greetd-agreety-config connman connman-openrc iwd busybox-openrc"
 	replaces_priority=100
-	amove usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init usr/libexec/uflinux-image-user
+	amove usr/libexec/uflinux-boot-menu usr/share/uflinux/grub-theme usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init usr/libexec/uflinux-image-user
 	# Split functions run in $subpackages order and amove claims whole
 	# directories, so etc/conf.d is named per-file: amoving the directory
 	# here would delete etc/conf.d/uflinux-zram before the later zram()
@@ -206,26 +210,16 @@ desktop() {
 	# the GPU; without one, recording fails with "no video codec available".
 	# The gallium driver covers AMD/Intel-gen11+/Nouveau/VirtIO; the Intel
 	# legacy and media drivers cover the older Intel generations (e.g. HD 4000
-	# in a ThinkPad T430). In Alpine the legacy driver is x86/x86_64-only and
-	# the media driver exists only on x86_64. The driver list is built via a
+	# in a ThinkPad T430). Enable both Intel drivers on x86_64. The list uses a
 	# variable because scripts/check-packages.py scans every literal
 	# depends assignment in this file and demands its contents on every rootfs
 	# architecture.
 	# libva-utils provides vainfo, which lists the codecs a driver supports.
 	case "$CARCH" in
-		x86) vaapi_drivers="libva-intel-driver" ;;
 		x86_64) vaapi_drivers="libva-intel-driver intel-media-driver" ;;
 	esac
 	depends="$depends $vaapi_drivers"
-	# uflinux-files (the file manager) ships only in the apps repository, which
-	# has no indexes for x86 or armv7, so those architectures ship without a
-	# graphical file manager rather than carrying an unsatisfiable dependency.
-	# Like vaapi_drivers above, the name travels in a variable so that
-	# scripts/check-packages.py does not demand it on every architecture.
-	case "$CARCH" in
-		x86_64|aarch64|ppc64le|riscv64) file_manager="uflinux-files uflinux-files-desktop uflinux-files-searchd" ;;
-	esac
-	depends="$depends $file_manager"
+	depends="$depends uflinux-files uflinux-files-desktop uflinux-files-searchd"
 	# Remote Desktop Services (IronRDP). The broker ships disabled, so the image
 	# only carries the binaries until the user enables the service in Settings.
 	# uflinux-rds-vaapi adds the out-of-process ffmpeg H.264 encoder; it is a
@@ -287,6 +281,11 @@ installer() {
 }
 
 sha512sums="
+272a59eacf5a98e2add1bc9022c5f4cecff7393225c4311efd3ec495502e0ea4fe0dc631110c095b0d58ccc8d2e82226ca60f0f0bb0b4a4c08b3f69dba3c61c3  uflinux-boot-menu
+94ab8415bd7806eba5212afa6ca0df9faaa863ff435a0e44ecbae1d6a192ce54e8404b9e7a57a9dc0fcde10c9bfa4d2858d5242cd4da40782f5f18fe20ecfa80  Ubuntu.pf2
+3ce0f7942ed389fa01615fe77177f8649d3c717b45ab65e855953acb7cdcb37c19415d2de6e1e2b1275ae4a2ecf0803490cfca382f63ac78221f36c03b34932c  theme.txt
+b296599b1332ec42ce6b94d2365d60a2b7d0ed34ad5733793e3817fd9cd9fefa1d1f3ef63797452d129aef93454768e7c69412ca8b2b948d96c19101b26be748  splash.png
+cbf3bed939825f60856f568f3b12dcf0329c9fa393df34975d53a946cb9a8f33006afba0c8bfe4502ae18f73b094f16732e0ce365f1c9795e2fee507501b7c80  NOTICE
 51b9323ee7513c1214550c1a1c8c527e1fb7cdca8ab07b18420ddc3434440b7aa366dba39a79f1d2cf26bcbbaf52afb4534514e5ca2979a8f645ca25bfb38ec4  uflinux-image-user
 e609def5a7fde0e7a128b5eb705e0d96cbddf8530614b9663d4f47a7e7b872fa8555170c093e4571d5937b60ddd46b074eaa7e5272fd2447bf0fe3e6151addcb  uflinux-openrc.conf
 10521c4f6117171e6a6ce28419b241cea95237462acc5d89119962a7340862260aecd32a69f3012a235e5f6a85afad5700c0e9771cf3049f28d85be4644c3ea4  uflinux.plymouth
@@ -310,12 +309,12 @@ e7547d393b9489bfaf96ea7f1f580099e8d01487e7a59cc897001032e0f0f424b68d77d21e92ac38
 844131c113ff067ce0ce8be00ea3621a6f04185e5c78b9387dd1f31b7bdaab502442e962cd1b3358118de581461dc0ed21a4c55695f6c31e31dc37692adedf0d  uflinux-compositor
 d031d31793d9945a2afbfb5b7a86be3d3dd13dc7e1a861f16237a7c3cf1a27d77498fc7b65596a0e690b99f26017d5efa454523e61c709a9241a793a600c6248  uflinux-autostart
 0c37806c49629bb84275ed096c735d37d879483bdf4e1320fdc7ab0a0755bf376544c023227ed1d2321997c27a26128139e1865d6caac291aaf09a145a62c367  uflinux-theme-sync
-a84e580210712b6298811251f500600e582eb795fba1ee42b5a542ff9ad72a928cb577aac7b33b26f4aceb50e1c9e6336588498823861a92e1cde45d110681be  uflinux-install
-35c122aeebee0d0b1dc0a8156d63745fce0bf66d293900a7d478e8361fe959d686b012bd7caaa0b8ac22ff254e537f009585c0983f504d9c4ed37ce952e323ca  uflinux-install-gui-backend
+b188fc4b6d55408eee31ab12ca671ca2b6c15a652a83626661e7a52da323b049869ee6e9828dd2c1445cee608e6f70bb12b69220610fdd9deeaaec11362c0345  uflinux-install
+5e4bce32685ed0a704eb413ed7cd57bdeeb963f26e178a5c810c66c14c95809894f8caa747ca0032f7fecff4d000abf95a4ff993704b8aea93b5a1209203e868  uflinux-install-gui-backend
 7153126defd63a0b0a46cd40080194b8435f751413e9ac97eaa9fc66f81b661d7f5f5b6398931fcab52adac8e609f560dcb461700575f0c84a5d85c36f664ef8  uflinux-live.initd
 165b1feddab305879799c0a9409188c353e0a6fc0f984047fe5c6951dec532f073fd561a127313184d356d6a30ea39b4327f9f75ceecf581c7d24eb028e1d574  uflinux-device.initd
-e17f8f9264a7dc1dc59176c1bc12f289e7733dab839c9db47da4e8ea06a90396777d046d48e2287689b2da0b4f2fad658cba18abc48dea48ff2ffc8d0545a310  uflinux-zram.initd
-9651bc6bb8e2b7f231c541600d19c47b164cc1bcea8a50c847f128267b3f44e0a058be02f295a1fd5bcd231bc4f51e1706e81ea0808d119aa0cf5ae7abe2747c  uflinux-zram.confd
+bf7ffe7f57fbc5fd3839541dc371b9158f38c5005e05a11dfe4f4f2014d1ded5906a4f149ce6d73b8da3120a8e995d7d1421795986b0f0a1078e22907ac8f3a2  uflinux-zram.initd
+432ca882956fa54d80ba5486a8daef58017d5aaedb936c78b9451103228f21142373462ec3edf99867fdc65b81b8cc71061c76690d786299aff83ec2ec4e49ec  uflinux-zram.confd
 e6df4f4a610b45f3426de64299f2fcc0e53691cf4f62a571cc9a3a0c168628042f31ea328e202bcec79d0aa62204e370265b38ea131772c8c548a5b1a19a9d11  uflinux.desktop
 2c4bc926abc85b818305af2c8fcba0aff27d8c307d59fea20415c60c0c47874b63efc3cceccc95ba569587d748d607f54b94c768b66b9642f4e8c6089e180d13  uflinux-logo.svg
 4c1d2d896882c99e9c55634c239f9f2d3599eadfca82a50b765a9df7547a278b0100f8ae3ca91278f1167d683075963662d636f5dd733166ccdc7e47e006343f  artwork-NOTICE
@@ -341,6 +340,7 @@ f74547b20fab4d4851c4759e34a27fb24ffb075c7f8d1dd8fbbb646ef02302ce6b98023e7e530ad9
 ac30e59bef50b6d70dfb268299ad4024284bae46c01ec35040014f53612eeb15bf17d4b50f4c497f5861d72d68769caccde407c32be3cd1bfb5d019e6c9556f1  uflinux-network-init
 34effd0b86702a3a63e6747554149c2ce4c265cf85c262627c50a6a6f9daa14794b76d119967f930ea04f445da1e573062f1f11eb2bc401412fcd697328903f3  uflinux-connman.conf
 b9b60fcb6cc9dea3bf6f20addcfa7215e036a4031730b16785d2a30b1dcea2db7605da9ff2e189ec7bae9912457badd788f74522b4ed517f7bf1e1dd49dcb980  uflinux3.ec384.pub
+b9b60fcb6cc9dea3bf6f20addcfa7215e036a4031730b16785d2a30b1dcea2db7605da9ff2e189ec7bae9912457badd788f74522b4ed517f7bf1e1dd49dcb980  uflinux-kernel.ec.pem.pub
 01000409d6d54af81e520b8b292c24bb64e763a493c69cf71cabb9f885c7feee5a1805db40e2d0544834c40b7866f889c106e9816fd8e8b8f5273b0a099f1488  gnome-backgrounds-3.38.0.tar.xz
 ff78da5b5709a69cebbc11586d3a31d65229b6545d8d600c28fc93fc4b08332a8a9d9c21594e3680ee17f03a8e3fe5fc9b2cb8b3223e5d687aa680a2355b9747  labwc-themes-6a2e3634.tar.gz
 "

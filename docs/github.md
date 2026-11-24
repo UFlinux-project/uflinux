@@ -34,7 +34,7 @@
    ```
 
 Pull requests and main pushes build x86_64; manual runs and version tags use all
-six architectures.
+four architectures.
 Device disk images are built for version tags and for manual runs where the
 **Build device images** option is enabled. They are supplementary: an experimental
 board target may fail without failing the release, and the images are uploaded to
@@ -76,6 +76,15 @@ separate services; this is not a cross-service atomic transaction.
 GitHub Releases contains ISOs, compressed device images and their checksums.
 Rebuild inputs remain available as workflow artifacts under the configured retention
 period; package inventories and test records remain in the image and VM artifacts.
+
+The kernel packages come from the [UFlinux kernel releases](https://github.com/UFlinux-project/kernel/releases).
+`config/kernels.lock.json` pins the release tag and asset SHA-256 hashes. For
+publication, the build converts the outer compression to Deflate for Alpine's
+stock apk-tools and preserves the signed package contents. The current kernel
+generation is indexed in `<arch>/Packages.adb` beside the existing distro index.
+New installations configure both indexes and include the kernel public key.
+Existing installations can add the full URL to their architecture's
+`Packages.adb` and import the published `uflinux-kernel.ec.pem.pub` to use it.
 
 The repository keeps the current generation and two previous generations of
 custom APKs. The next publication retrieves its history from the existing Pages repository.

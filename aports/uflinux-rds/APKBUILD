@@ -4,7 +4,7 @@ pkgver=0.1.0
 pkgrel=12
 pkgdesc="UFLinux Remote Desktop Services broker (IronRDP)"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
-arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
+arch="x86_64 aarch64 ppc64le riscv64"
 license="GPL-3.0-only"
 depends="$pkgname-server=$pkgver-r$pkgrel $pkgname-web=$pkgver-r$pkgrel $pkgname-system=$pkgver-r$pkgrel
 	linux-pam openrc"

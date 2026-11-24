@@ -16,9 +16,7 @@ args = parser.parse_args()
 for command in ("python3", "tar", "mount", "umount", "chroot"):
     if not shutil.which(command):
         sys.exit("Missing build tool: " + command)
-native = {"x86_64": {"x86_64", "x86"}, "aarch64": {"aarch64"}}.get(platform.machine(), set())
-# Only an identical host architecture is native, so armv7 still needs binfmt on ARM64.
-if args.arch not in native:
+if args.arch != platform.machine():
     name = "qemu-" + arches[args.arch]["qemu_user"]
     entries = list(Path("/proc/sys/fs/binfmt_misc").glob(name + "*"))
     if not entries or not any("enabled" in entry.read_text() and "F" in entry.read_text().split("flags:")[-1] for entry in entries):

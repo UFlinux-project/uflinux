@@ -2,7 +2,7 @@
   "qcs6490": {
     "label": "Arrow Dragon Q6A and similar QCS6490 boards",
     "arches": ["aarch64"],
-    "kernel": "postmarketos-qcom-sc7280",
+    "kernel": "dragon-q6a",
     "initramfs_compression": "gzip",
     "boot": "efi",
     "rootfs": "f2fs",
@@ -19,8 +19,8 @@
       "lib/firmware/qcom/qcs6490/a660_zap.mbn.zst"
     ],
     "initramfs_modules": ["simple-bridge", "display-connector"],
-    "packages": ["linux-firmware-qcom", "mesa-vulkan-freedreno", "alsa-ucm-conf", "systemd-boot", "efibootmgr"],
-    "nura_packages": ["linux-postmarketos-qcom-sc7280", "dtbloader"]
+    "packages": ["linux-firmware-qcom", "mesa-vulkan-freedreno", "alsa-ucm-conf", "grub-efi", "efibootmgr"],
+    "nura_packages": ["dtbloader"]
   },
   "rpi": {
     "label": "Raspberry Pi 3, 4 and 5",
@@ -34,12 +34,12 @@
     "img_size_mib": 6144,
     "nura": false,
     "nura_packages": [],
-    "packages": ["linux-rpi", "raspberrypi-bootloader", "raspberrypi-bootloader-common", "mesa-vulkan-broadcom", "mesa-vulkan-panfrost", "alsa-ucm-conf"]
+    "packages": ["raspberrypi-bootloader", "raspberrypi-bootloader-common", "mesa-vulkan-broadcom", "mesa-vulkan-panfrost", "alsa-ucm-conf"]
   },
   "spacemit-k1": {
     "label": "SpacemiT K1 boards (Orange Pi RV2, Orange Pi R2S, BananaPi-F3)",
     "arches": ["riscv64"],
-    "kernel": "lts",
+    "kernel": "orangepi-rv2",
     "boot": "extlinux",
     "rootfs": "f2fs",
     "status": "experimental",
@@ -48,13 +48,13 @@
     "img_size_mib": 6144,
     "nura": false,
     "nura_packages": [],
-    "dtb": "spacemit/k1-orangepi-rv2.dtb",
-    "packages": ["linux-lts", "mesa-vulkan-swrast", "xf86-video-fbdev"]
+    "dtb": "ky/x1_orangepi-rv2.dtb",
+    "packages": ["mesa-vulkan-swrast", "xf86-video-fbdev"]
   },
   "pc-xfs": {
     "label": "PCs with hard drives or SSDs (BIOS and UEFI)",
-    "arches": ["x86_64", "x86"],
-    "kernel": "lts",
+    "arches": ["x86_64"],
+    "kernel": "x86_64",
     "boot": "pc",
     "rootfs": "xfs",
     "status": "supported",
@@ -63,12 +63,12 @@
     "img_size_mib": 4096,
     "nura": false,
     "nura_packages": [],
-    "packages": ["linux-lts", "systemd-boot", "syslinux", "amd-ucode", "intel-ucode", "mesa-vulkan-intel", "mesa-vulkan-nouveau", "mesa-vulkan-virtio"]
+    "packages": ["grub-efi", "grub-bios", "amd-ucode", "intel-ucode", "mesa-vulkan-intel", "mesa-vulkan-nouveau", "mesa-vulkan-virtio"]
   },
   "pc-f2fs": {
     "label": "PCs with flash drives or SD cards (BIOS and UEFI)",
     "arches": ["x86_64"],
-    "kernel": "lts",
+    "kernel": "x86_64",
     "boot": "pc",
     "rootfs": "f2fs",
     "f2fs_compress": "lz4",
@@ -78,12 +78,12 @@
     "img_size_mib": 4096,
     "nura": false,
     "nura_packages": [],
-    "packages": ["linux-lts", "systemd-boot", "syslinux", "amd-ucode", "intel-ucode", "mesa-vulkan-intel", "mesa-vulkan-nouveau", "mesa-vulkan-virtio"]
+    "packages": ["grub-efi", "grub-bios", "amd-ucode", "intel-ucode", "mesa-vulkan-intel", "mesa-vulkan-nouveau", "mesa-vulkan-virtio"]
   },
   "vm": {
     "label": "Virtual machines (QEMU, KVM, hypervisors)",
     "arches": ["x86_64", "aarch64"],
-    "kernel": "virt",
+    "kernel": "virt-{arch}",
     "boot": "efi",
     "rootfs": "xfs",
     "status": "supported",
@@ -92,6 +92,6 @@
     "img_size_mib": 5120,
     "nura": false,
     "nura_packages": [],
-    "packages": ["linux-virt", "qemu-guest-agent", "qemu-guest-agent-openrc", "systemd-boot", "efibootmgr", "mesa-vulkan-virtio"]
+    "packages": ["qemu-guest-agent", "qemu-guest-agent-openrc", "grub-efi", "efibootmgr", "mesa-vulkan-virtio"]
   }
 }

@@ -1,0 +1,40 @@
+Link the BellSoft objects into shared and static musl.
+
+--- a/Makefile
++++ b/Makefile
+@@ -172,13 +172,13 @@
+ obj/%.lo: $(srcdir)/%.c $(GENH) $(IMPH)
+ 	$(CC_CMD)
+ 
+-lib/libc.so: $(LOBJS) $(LDSO_OBJS) $(EXTRA_OBJ)
+-	$(CC) $(CFLAGS_ALL) $(LDFLAGS_ALL) -nostdlib -shared \
+-	-Wl,-e,_dlstart -o $@ $(LOBJS) $(LDSO_OBJS) $(LIBCC)
+-
+-lib/libc.a: $(AOBJS) $(EXTRA_OBJ)
++lib/libc.so: $(LOBJS) $(LDSO_OBJS) $(EXTRA_OBJ) $(GLIBC_STRING_OBJS) $(GLIBC_STRING_MAP)
++	$(CC) $(CFLAGS_ALL) $(LDFLAGS_ALL) $(GLIBC_STRING_MAP:%=-Wl,--version-script=%) -nostdlib -shared \
++	-Wl,-e,_dlstart -o $@ $(LOBJS) $(GLIBC_STRING_OBJS) $(LDSO_OBJS) $(LIBCC)
++
++lib/libc.a: $(AOBJS) $(EXTRA_OBJ) $(GLIBC_STRING_OBJS)
+ 	rm -f $@
+-	$(AR) rc $@ $(AOBJS)
++	$(AR) rc $@ $(AOBJS) $(GLIBC_STRING_OBJS)
+ 	$(RANLIB) $@
+ 
+ $(EMPTY_LIBS):
+--- a/src/include/string.h
++++ b/src/include/string.h
+@@ -6,6 +6,12 @@
+ hidden void *__memrchr(const void *, int, size_t);
+ hidden char *__stpcpy(char *, const char *);
+ hidden char *__stpncpy(char *, const char *, size_t);
+-hidden char *__strchrnul(const char *, int);
++/* An IFUNC with a hidden declaration uses the PLT even with -fno-plt.
++ * BOLT 22 cannot rewrite IRELATIVE entries split across RELA tables.
++ * The version script hides the definition while callers use a GOT slot. */
++#ifndef __x86_64__
++hidden
++#endif
++char *__strchrnul(const char *, int);
+ 
+ #endif

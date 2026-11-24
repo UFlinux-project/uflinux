@@ -2,31 +2,28 @@
 
 | Alpine architecture | Package build | Required VM boot tests |
 | --- | --- | --- |
-| x86 | native compatibility mode | none |
 | x86_64 | native (q35 machine) | BIOS and UEFI |
 | aarch64 | native ARM64 runner | none |
-| armv7 | ARM64 runner, qemu-arm | none |
 | ppc64le | qemu-ppc64le | none |
 | riscv64 | qemu-riscv64 | none |
 
 Only the x86_64 ISO is boot-tested, on every commit, pull request, tag and
-full-matrix run. The other five architectures are built and their packages and
-ISOs are published, but no VM is started for them.
+full-matrix run. The other three architectures build and publish their packages and ISOs.
 
 ## Device image targets
 
 | Board id | Package build | Boot firmware | Status |
 | --- | --- | --- | --- |
-| `pc-f2fs` | native x86_64 runner | BIOS `syslinux` and UEFI `systemd-boot` | supported |
-| `pc-xfs` | native x86_64 and x86 runners | BIOS `syslinux` and UEFI `systemd-boot` | supported |
-| `qcs6490` | native ARM64 runner | board UEFI plus `systemd-boot` | experimental |
+| `pc-f2fs` | native x86_64 runner | BIOS and UEFI GRUB | supported |
+| `pc-xfs` | native x86_64 runners | BIOS and UEFI GRUB | supported |
+| `qcs6490` | native ARM64 runner | board UEFI plus GRUB | experimental |
 | `rpi` | native ARM64 runner | VideoCore firmware with `config.txt` | supported |
 | `spacemit-k1` | qemu-riscv64 | U-Boot distro boot with `extlinux` | experimental |
-| `vm` | native x86_64 and ARM64 runners | UEFI with `systemd-boot` | supported |
+| `vm` | native x86_64 and ARM64 runners | UEFI with GRUB | supported |
 
 Device images are supplementary: they are built on tags and attached to the
-release, but they are not part of the publication gate and none of them has a
-configured boot test yet. See [device images](device-images.md).
+release. The x86_64 and aarch64 VM device images each run a UEFI boot check
+before attachment. See [device images](device-images.md).
 
 This table describes the configured ISO build/test matrix, not completed physical
 hardware certification. Publication requires green build reports for all rows and

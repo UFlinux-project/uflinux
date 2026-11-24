@@ -7,7 +7,7 @@ The earlier ISO in `out/` is unchanged; its results are in
 [the original validation record](validation.md). New images, signed APKs,
 inventories, screenshots and reports are written to `out-settings/`.
 
-The six-architecture CI matrix is configured. Only x86_64 has been compiled
+The four-architecture CI matrix is configured. Only x86_64 has been compiled
 and exercised locally. Historical dependency availability checks passed for the then-supported eight
 architectures; this does not establish their boot or graphical hardware support.
 No GitHub Release or public Pages repository has been published from this workspace.
@@ -169,7 +169,7 @@ APK database. The current Papirus/artwork/theme package set uses about 993 MiB i
 the live root. A successful 4 GiB live guest reported a 1.9 GiB tmpfs, 967 MiB
 available and 129,923 used inodes out of 501,739.
 
-Live tests now allocate 4 GiB, with 3 GiB for armv7's QEMU highmem restriction.
+Live tests allocate 4 GiB.
 The installed x86_64 acceptance budget remains 512 MiB, one display and no swap.
 The runner rejects boot-time APK database/kernel memory failures explicitly,
 logs byte/inode capacity, and separates package checks from Ironbar validation.

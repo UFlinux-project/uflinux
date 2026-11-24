@@ -7,7 +7,7 @@ profile_uflinux() {
 	# collection, which pins the Snapdragon-only linux-firmware-qcom.
 	local selected="" package
 	for package in $apks; do
-		case "$package" in chrony|openntpd|dhcpcd|wpa_supplicant|network-extras|tiny-cloud-alpine|linux-firmware|linux-firmware-none) ;; *) selected="$selected $package" ;; esac
+		case "$package" in chrony|openntpd|dhcpcd|wpa_supplicant|network-extras|tiny-cloud-alpine|linux-lts|linux-firmware|linux-firmware-none) ;; *) selected="$selected $package" ;; esac
 	done
 	apks="$selected"
 	title="UFLinux"
@@ -18,6 +18,7 @@ profile_uflinux() {
 	output_filename="uflinux-${RELEASE}-${ARCH}.iso"
 	apkovl="/project/profiles/genapkovl-uflinux.sh"
 	# Keep profile_standard's architecture-specific console and boot configuration.
+	kernel_flavors="${UFLINUX_KERNEL_FLAVOR:?}"
 	kernel_addons=""
 	initfs_features="$initfs_features kms xfs uflinux-plymouth"
 	# Alpine's firmware metapackage pins every vendor, so the list that keeps the
@@ -25,125 +26,64 @@ profile_uflinux() {
 	initfs_cmdline="$initfs_cmdline rootflags=mode=0755,size=75%"
 	# Boot straight past the loader menu with minimal console chatter; warnings
 	# and errors still reach the serial log. Hold a key before the loader
-	# initializes to bring the systemd-boot menu up on demand.
+	# initializes to select another entry in the GRUB menu.
 	kernel_cmdline="$kernel_cmdline quiet"
 	modloop_addons="$modloop_addons uflinux-initramfs"
-	apks="$apks musl musl-utils uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang linux-lts $(grep -v '^#' /project/config/firmware-packages.txt)
-		systemd-boot xfsprogs e2fsprogs dosfstools util-linux vulkan-loader mesa-vulkan-ati"
+	apks="$apks musl musl-utils uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang $(grep -v '^#' /project/config/firmware-packages.txt)
+		grub mkinitfs kmod xfsprogs e2fsprogs dosfstools util-linux vulkan-loader mesa-vulkan-ati"
 	# Alpine builds firefox for every target architecture except riscv64, which
 	# only gets firefox-esr. ublock-origin is a noarch xpi that installs into
 	# /usr/lib/firefox/browser/extensions, so it ships with firefox only.
+	if [ "$kernel_flavors" = lts ]; then apks="$apks linux-lts"; fi
 	case "$ARCH" in
-		x86|x86_64|aarch64|armv7|ppc64le) apks="$apks firefox ublock-origin" ;;
+		x86_64|aarch64|ppc64le) apks="$apks firefox ublock-origin" ;;
 		riscv64) apks="$apks firefox-esr" ;;
 	esac
 	case "$ARCH" in
-		x86|x86_64|aarch64|armv7|riscv64) apks="$apks efibootmgr" ;;
+		x86_64|aarch64|riscv64) apks="$apks efibootmgr" ;;
 	esac
 	case "$ARCH" in
-		x86|x86_64) apks="$apks mesa-vulkan-intel mesa-vulkan-nouveau mesa-vulkan-virtio" ;;
+		x86_64) apks="$apks mesa-vulkan-intel mesa-vulkan-nouveau mesa-vulkan-virtio" ;;
 		aarch64) apks="$apks mesa-vulkan-asahi mesa-vulkan-broadcom mesa-vulkan-freedreno mesa-vulkan-imagination mesa-vulkan-intel mesa-vulkan-nouveau mesa-vulkan-panfrost mesa-vulkan-virtio" ;;
 	esac
 	case "$ARCH" in
-		x86|x86_64)
-			syslinux_serial="0 115200"
-			apks="$apks syslinux amd-ucode intel-ucode"
+		x86_64)
+
+			apks="$apks grub-bios grub-efi amd-ucode intel-ucode"
 			boot_addons="amd-ucode intel-ucode"
 			initrd_ucode="/boot/amd-ucode.img /boot/intel-ucode.img"
 			kernel_cmdline="$kernel_cmdline console=tty0 console=ttyS0,115200"
 			;;
-		ppc64le) apks="$(printf '%s' "$apks" | sed 's/systemd-boot//g') grub-ieee1275" ;;
-		aarch64|armv7) kernel_cmdline="$kernel_cmdline console=tty0 console=ttyAMA0,115200" ;;
-		riscv64) kernel_cmdline="$kernel_cmdline console=tty0 console=ttyS0,115200" ;;
+		ppc64le) apks="$apks grub-ieee1275" ;;
+		aarch64) apks="$apks grub-efi"; kernel_cmdline="$kernel_cmdline console=tty0 console=ttyAMA0,115200" ;;
+		riscv64) apks="$apks grub-efi"; kernel_cmdline="$kernel_cmdline console=tty0 console=ttyS0,115200" ;;
 	esac
 }
 
-# Change menu labels while retaining upstream kernel/initrd/firmware commands.
-build_grub_cfg() {
-	mkdir -p "$DESTDIR/$(dirname "$1")"
-	grub_gen_config | sed 's/menuentry "Linux /menuentry "UFLinux /' > "$DESTDIR/$1"
-}
 
-build_syslinux_cfg() {
-	mkdir -p "$DESTDIR/$(dirname "$1")"
-	syslinux_gen_config | sed 's/MENU LABEL Linux /MENU LABEL UFLinux /' > "$DESTDIR/$1"
-}
-
-# systemd-boot loads its entries and kernel from the same EFI filesystem.
-# The ISO therefore includes a FAT EFI image with its own kernel and initramfs.
-section_grub_efi () {
-	local suffix
-	case "$ARCH" in
-		x86) suffix=ia32 ;;
-		x86_64) suffix=x64 ;;
-		aarch64) suffix=aa64 ;;
-		armv7) suffix=arm ;;
-		riscv64) suffix=riscv64 ;;
-		*) return 0 ;;
-	esac
-	build_section systemd_efi "$suffix" "$(apk fetch --root "$APKROOT" --simulate systemd-boot | checksum)"
-}
-
-build_systemd_efi() {
-	local suffix="$1" binary="usr/lib/systemd/boot/efi/systemd-boot$1.efi"
-	apk fetch --root "$APKROOT" --quiet --stdout systemd-boot | tar -C "$WORKDIR" -zx "$binary" || return 1
-	mkdir -p "$DESTDIR/efi/boot"
-	cp "$WORKDIR/$binary" "$DESTDIR/efi/boot/boot${suffix}.efi"
-}
+section_syslinux() { return 0; }
+section_syslinux_cfg() { return 0; }
+section_grub_efi() { return 0; }
+section_grubieee1275() { return 0; }
 
 create_image_iso() {
-	local ISO="${OUTDIR}/${output_filename}" _isolinux="" _efiboot="" _f _p image sectors size
-	local flavors="${kernel_flavors-}"
-	# Kernel packages ship their symbol map and build config in /boot, so they ride
-	# into both the ISO9660 tree and the EFI image. Nothing on the live system or in
-	# the installed boot partition reads them, and a release ISO is close enough to
-	# GitHub's per-asset limit that several MiB matters.
+	local flavor="$kernel_flavors" kernel="$DESTDIR/boot/vmlinuz-$kernel_flavors"
+	if [ "$flavor" != lts ]; then
+		mkdir -p "$DESTDIR/apks/kernels/$ARCH" || return 1
+		cp /image-kernels/"$ARCH"/* "$DESTDIR/apks/kernels/$ARCH/" || return 1
+	fi
+	if [ "$ARCH" = aarch64 ] && [ "$(head -c 2 "$kernel")" != MZ ]; then
+		gzip -dc "$kernel" > "$kernel.efi" || return 1
+		[ "$(head -c 2 "$kernel.efi")" = MZ ] || return 1
+		mv "$kernel.efi" "$kernel"
+	fi
 	rm -f "$DESTDIR"/boot/System.map-* "$DESTDIR"/boot/config-*
-	if [ -e "$DESTDIR/boot/syslinux/isolinux.bin" ]; then
-		_isolinux="-isohybrid-mbr $DESTDIR/boot/syslinux/isohdpfx.bin -eltorito-boot boot/syslinux/isolinux.bin -eltorito-catalog boot/syslinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table"
-	fi
-	if [ -d "$DESTDIR/efi/boot" ]; then
-		mkdir -p "$WORKDIR/systemd-loader/loader/entries" "$DESTDIR/boot"
-		printf 'default uflinux-%s.conf\ntimeout 0\n' "${flavors%% *}" > "$WORKDIR/systemd-loader/loader/loader.conf"
-		for _f in $flavors; do
-			{
-				printf 'title UFLinux %s\nlinux /boot/vmlinuz-%s\n' "$_f" "$_f"
-				for _p in $initrd_ucode; do printf 'initrd %s\n' "$_p"; done
-				printf 'initrd /boot/initramfs-%s\noptions %s %s\n' "$_f" "${initfs_cmdline-}" "$kernel_cmdline"
-			} > "$WORKDIR/systemd-loader/loader/entries/uflinux-$_f.conf"
-		done
-		# The image holds the kernel, initramfs and microcode a second time, so the
-		# payload is added below and the base only has to cover FAT32 cluster
-		# overhead plus directory entries. Measured with the x86_64 payload, a 16 MiB
-		# base leaves about 15 MiB of the file unused; the old 64 MiB base wasted
-		# 48 MiB of the release ISO on it.
-		size=$((16 * 1024 * 1024))
-		for _f in $flavors; do
-			size=$((size + $(wc -c < "$DESTDIR/boot/vmlinuz-$_f") + $(wc -c < "$DESTDIR/boot/initramfs-$_f")))
-		done
-		for _p in $initrd_ucode; do size=$((size + $(wc -c < "$DESTDIR$_p"))); done
-		sectors=$(((size + 511) / 512))
-		image="$DESTDIR/boot/efi.img"
-		mformat -i "$image" -C -T "$sectors" -F :: || return 1
-		mcopy -i "$image" -s "$DESTDIR/efi" "$WORKDIR/systemd-loader/loader" :: || return 1
-		mmd -i "$image" ::/boot || return 1
-		for _f in $flavors; do
-			mcopy -i "$image" "$DESTDIR/boot/vmlinuz-$_f" "$DESTDIR/boot/initramfs-$_f" ::/boot/ || return 1
-		done
-		for _p in $initrd_ucode; do mcopy -i "$image" "$DESTDIR$_p" ::/boot/ || return 1; done
-		touch -md "@$SOURCE_DATE_EPOCH" "$image"
-		if [ -z "$_isolinux" ]; then
-			_efiboot="-efi-boot-part --efi-boot-image -e boot/efi.img -no-emul-boot"
-		else
-			_efiboot="-eltorito-alt-boot -e boot/efi.img -no-emul-boot -isohybrid-gpt-basdat"
-		fi
-	fi
-	if [ "$ARCH" = ppc64le ]; then
-		apk fetch --root "$APKROOT" --quiet --stdout grub-ieee1275 | tar -C "$WORKDIR" -zx usr/lib/grub
-		grub-mkrescue --output "$ISO" "$DESTDIR" -follow-links --directory="$WORKDIR/usr/lib/grub/powerpc-ieee1275" -sysid LINUX -volid "$(gen_volid)"
-	else
-		# xorriso option variables intentionally expand as multiple arguments.
-		# shellcheck disable=SC2086
-		xorrisofs -quiet -output "$ISO" -full-iso9660-filenames -joliet -rational-rock -sysid LINUX -volid "$(gen_volid)" $_isolinux $_efiboot -follow-links "$DESTDIR"
-	fi
+	mkdir -p "$DESTDIR/boot/grub/themes/uflinux"
+	cp /project/aports/uflinux/Ubuntu.pf2 /project/aports/uflinux/theme.txt /project/aports/uflinux/splash.png "$DESTDIR/boot/grub/themes/uflinux/"
+	[ ! -f /opt/uflinux/memtest86plus ] || cp /opt/uflinux/memtest86plus "$DESTDIR/boot/grub/"
+	if [ "$ARCH" = ppc64le ]; then kernel_cmdline="$kernel_cmdline console=hvc0"; fi
+	sh -c '. /project/aports/uflinux/uflinux-boot-menu; grub_menu "$@"' sh \
+		"/boot/vmlinuz-$flavor" "${initrd_ucode:+$initrd_ucode }/boot/initramfs-$flavor" "" \
+		"$initfs_cmdline $kernel_cmdline" /boot/grub > "$DESTDIR/boot/grub/grub.cfg" || return 1
+	grub-mkrescue --output "${OUTDIR}/${output_filename}" "$DESTDIR" -follow-links -sysid LINUX -volid "$(gen_volid)"
 }

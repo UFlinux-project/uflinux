@@ -12,6 +12,7 @@ import tempfile
 from builder import (ARCHES, Builder, ISO_EXCLUDED_PACKAGES, LOCK, PROJECT, SIGNING_KEY, sha,
                      unsigned_digest, PACKAGE_NAMES)
 from sbom import apk_metadata
+from kernel_packages import KEY, KEY_FILE, KERNELS, stage_kernels
 
 ALLOWED = set().union(*PACKAGE_NAMES.values())
 if not ISO_EXCLUDED_PACKAGES <= ALLOWED:
@@ -27,13 +28,14 @@ def safe_extract(archive, target):
 
 
 def selection(current, history):
-    return [current, *[release for release in history if release["version"] != current["version"]][:2]]
+    retained = [release for release in history if release["version"] != current["version"]][:2]
+    return [current, *(dict(release, packages={arch: release["packages"][arch] for arch in ARCHES})
+                       for release in retained)]
 
 
-# Firmware modes whose installed-system boot record gates publication. Only the
-# x86_64 ISO is started in CI (see the vm matrix in scripts/ci-matrix.py), so the
-# remaining architectures ship built images without boot verification.
-BOOT_MODES = {"x86_64": ("bios", "uefi")}
+# Firmware modes whose boot record gates release publication.
+BOOT_MODES = {"x86_64": ("bios", "uefi"), "aarch64": ("uefi",),
+              "ppc64le": ("native",), "riscv64": ("uefi",)}
 
 
 def boot_modes(arch):
@@ -67,7 +69,7 @@ def main():
     try:
         builder.bootstrap()
         with builder.mounted(), tempfile.TemporaryDirectory(prefix="uflinux-history-") as temporary:
-            builder.tools()
+            builder.tools("zstd")
             public = builder.signing_key(release=True)
             pages = out / "pages"
             if pages.exists():
@@ -111,11 +113,17 @@ def main():
                 for mode in boot_modes(arch):
                     result = json.loads((out / "vm" / arch / mode / "verified.json").read_text())
                     iso = out / "images" / arch / f"uflinux-{args.version}-{arch}.iso"
+                    if arch == "riscv64":
+                        if not result.get("grub_menu") or result.get("iso_sha256") != sha(iso):
+                            raise ValueError("Missing RISC-V GRUB menu verification")
+                        continue
                     if result.get("musl") != LOCK["musl"]["version"] + "-r" + LOCK["musl"]["revision"]:
                         raise ValueError("Missing installed musl verification for " + arch)
                     if not result.get("xfs_install_reboot") or result.get("iso_sha256") != sha(iso):
                         raise ValueError("Missing installed-system boot verification for " + arch)
                     if arch == "x86_64":
+                        if not all(result.get(key) for key in ("grub_usb_tty", "grub_installed_debug", "gui_install_reboot")):
+                            raise ValueError("Missing GRUB boot-mode verification for " + mode)
                         memory = result.get("settings_512m") or {}
                         if memory.get("ram_mib") != 512 or memory.get("swap") is not False or memory.get("oom") is not False:
                             raise ValueError("Missing installed 512 MiB Settings acceptance for " + mode)
@@ -156,7 +164,10 @@ def main():
                         shutil.copy2(source, staging / name)
                         builder.chroot("apk", "verify", f"/repo/{arch}/{name}")
                 builder.index(staging)
+                stage_kernels(builder, arch, staging)
                 shutil.copytree(staging, branch / arch)
+            shutil.copy2(KEY_FILE, branch / KEY)
+            (branch / "kernels.json").write_text(json.dumps(KERNELS, indent=2) + "\n")
             shutil.copy2(public, branch / (SIGNING_KEY + ".pub"))
             (branch / "releases.json").write_text(json.dumps(releases, indent=2) + "\n")
             (pages / ".nojekyll").touch()

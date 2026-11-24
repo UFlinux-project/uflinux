@@ -3,10 +3,8 @@
 Use a disposable Linux VM with Python 3.11+, GNU tar, gzip, coreutils, util-linux,
 network access, root privileges, and at least 10 GiB free storage. More space is
 useful when retaining several builds. QEMU user emulation and binfmt_misc with the
-`F` flag are required for nonnative architectures. x86 uses the x86_64 kernel's
-32-bit compatibility support. aarch64 and armv7 builds use ARM64 GitHub runners.
-armv7 remains emulated there, because AArch32 support is optional in ARM64 kernels
-and the runner map treats only an identical host architecture as native.
+`F` flag are required for nonnative architectures. CI builds x86_64 and aarch64
+on native runners and emulates ppc64le and riscv64.
 
 On the configured Ubuntu runners, install `qemu-user-binfmt binfmt-support` and run:
 
@@ -233,7 +231,7 @@ Settings requires Alpine's GTK4/layer-shell, PulseAudio client, polkit-agent,
 elogind, Vulkan/EGL and GLib development packages listed in its APKBUILD.
 
 The Power panel uses Alpine's TLP 1.10 series, with the three-profile interface
-introduced in 1.9. Power packages are checked for all six architectures. Tests
+introduced in 1.9. Power packages are checked for all four architectures. Tests
 run the actual BusyBox ACPI parser in a private chroot with synthetic input events;
 the installed x86_64 VM verifies real TLP transitions, the desktop's shared power status and
 physical-key Do nothing/Shut down behavior. TLP is never executed on the build
@@ -262,12 +260,17 @@ supplies the unchanged Alpine files from the pinned aports archive. The signed
 repository publishes the package set with a `99.`
 version prefix so APK selects it during normal installs and upgrades. The loader
 reports the original musl version. The shared and static libraries use mimalloc
-3.7.0 with `MI_SECURE=0` on all six targets. The builder fetches the pinned
+3.7.0 with `MI_SECURE=0` on all four targets. The builder fetches the pinned
 mimalloc Git commit in `config/sources.lock.json`, verifies the generated archive's
 checksum, and includes it in the offline rebuild inputs. The shared library also uses BOLT on
 x86_64, aarch64, and riscv64.
 
-On an Ubuntu 26.04 build host, install `bolt-22` and `linux-tools-generic`. The
+The recipe compiles musl with `-O3 -fno-plt` on all four targets. On x86_64 and
+aarch64, BellSoft's glibc-string 2.43.1 supplies CPU-dispatched memory and string
+routines in both libc libraries. The builder verifies the pinned source archive
+and saves it with the package shard's offline build inputs.
+
+On an Ubuntu 26.04 build host, install `bolt-22` and `linux-perf`. The
 RISC-V job additionally needs `qemu-system-riscv`, `opensbi`, and `cpio`. Build
 the shard and collect a new profile with:
 

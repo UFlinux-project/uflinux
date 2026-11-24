@@ -39,7 +39,8 @@ Required layout:
 
 - `/mnt`: a writable, empty XFS filesystem, normally at least 8 GiB for use.
 - UEFI: a FAT32 EFI system partition mounted at `/mnt/boot`; 1 GiB is a practical default.
-- BIOS and PowerPC: a separate ext4 filesystem at `/mnt/boot`; 1 GiB is a practical default.
+- BIOS: FAT32 at `/mnt/boot` and a separate 1 MiB BIOS boot partition on GPT. MBR disks need 1 MiB before the first partition.
+- PowerPC: a separate ext4 filesystem at `/mnt/boot` and a PReP partition.
 - BIOS on GPT: set the `LegacyBIOSBootable` attribute on the `/boot` partition.
 - BIOS on MBR: use a primary partition for `/boot` and set its bootable (active) flag.
   It must be the only partition with that flag.
@@ -61,7 +62,12 @@ After checking the displayed devices, run the corresponding command without
 `--dry-run`. Type the confirmation containing the root filesystem UUID, then
 choose and repeat a password of at least eight characters. Optional flags:
 `--hostname NAME`, and `--boot-mode uefi|bios|native|auto`. Use `bios` for
-x86 legacy BIOS and `native` for PowerPC firmware.
+x86_64 legacy BIOS and `native` for PowerPC firmware.
+
+The live ISO and fresh installation use the matching UFlinux project kernel
+on x86_64 and aarch64. The generic riscv64 and ppc64le ISOs and installers use
+Alpine's `linux-lts`. The SpacemiT K1 device image uses the Orange Pi RV2
+kernel. Each ISO includes its kernel package for offline installations.
 
 While installing from media, the installer temporarily selects its package
 repositories and restores the live repository file on success or failure. The
@@ -75,7 +81,7 @@ registers UFLinux in UEFI firmware as well as installing its fallback boot path.
 
 Alpine's `setup-disk` receives a clean overlay, writes UUID-based mounts and XFS
 initramfs configuration, and installs the appropriate bootloader. UEFI uses
-systemd-boot with its kernel and initramfs directly on the ESP, so package updates
+GRUB with its kernel and initramfs directly on the ESP, so package updates
 update the files that firmware will actually boot. The installed
 system gets a new regular user, password-authenticated `doas`, locked root, and a
 a ReGreet login using the adw-gtk3 dark theme. ReGreet starts the UFLinux desktop directly without a session selector. Live credentials, live autologin, and live-only services are
@@ -122,3 +128,9 @@ To roll back a custom package, inspect the retained versions with `apk policy`,
 then explicitly select the matching older package and dependency versions. For
 larger rollbacks, use the immutable signed repository snapshot from that UFLinux
 release. Installed XFS roots have no automatic filesystem snapshots.
+
+
+The boot menu offers Standard (Plymouth and desktop), Debug (verbose startup
+and desktop), and TTY only (local and serial login). Compatible systems also
+show Memtest86+ 9.00 and supported UEFI systems offer Firmware Settings.
+[Memtest86+ source](https://memtest.org/download/v9.00/mt86plus_9.00.src.zip)

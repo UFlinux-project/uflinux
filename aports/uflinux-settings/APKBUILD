@@ -4,7 +4,7 @@ pkgver=0.1.0
 pkgrel=12
 pkgdesc="UFLinux Settings, quick controls and resident Start menu"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
-arch="x86 x86_64 aarch64 armv7 ppc64le riscv64"
+arch="x86_64 aarch64 ppc64le riscv64"
 license="GPL-3.0-only"
 depends="uflinux-desktop=$pkgver-r$pkgrel $pkgname-daemon=$pkgver-r$pkgrel $pkgname-system=$pkgver-r$pkgrel"
 makedepends="cargo cargo-auditable gtk4.0-dev gtk4-layer-shell-dev pulseaudio-dev polkit-dev
@@ -106,7 +106,7 @@ daemon() {
 	pkgdesc="Headless UFLinux session settings service and command-line controls"
 	depends="dbus elogind mesa-vulkan-ati"
 	case "$CARCH" in
-		x86|x86_64) depends="$depends mesa-vulkan-intel mesa-vulkan-nouveau mesa-vulkan-virtio" ;;
+		x86_64) depends="$depends mesa-vulkan-intel mesa-vulkan-nouveau mesa-vulkan-virtio" ;;
 		aarch64) depends="$depends mesa-vulkan-asahi mesa-vulkan-broadcom mesa-vulkan-freedreno mesa-vulkan-imagination mesa-vulkan-intel mesa-vulkan-nouveau mesa-vulkan-panfrost mesa-vulkan-virtio" ;;
 	esac
 	amove usr/libexec/uflinux-settingsd usr/bin/uflinux-settingsctl usr/share/dbus-1/services/org.uflinux.Settings1.service

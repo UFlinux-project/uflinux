@@ -106,7 +106,7 @@ class ZramPolicyTests(unittest.TestCase):
                     "swapfile": str(root / "swapfile") if (root / "swapfile").exists() else None}
 
     def test_small_board_with_weak_cpu_gets_lz4_zram_only(self):
-        result = self.run_service(memory_kib=3_612_672, processors=4, machine="armv7l")
+        result = self.run_service(memory_kib=3_612_672, processors=4, machine="riscv64")
         self.assertEqual(result["attributes"]["comp_algorithm"], "lz4")
         self.assertEqual(result["attributes"]["disksize"], "1764M")
         self.assertEqual(result["attributes"]["mem_limit"], "882M")

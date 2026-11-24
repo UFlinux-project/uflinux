@@ -14,6 +14,9 @@
 static _Thread_local volatile unsigned thread_storage[16384];
 #define thread_slot thread_storage[16383]
 
+/* Cover symbol relocations for a string routine whose address is stored in data. */
+static void *(*volatile copy_bytes)(void *, const void *, size_t) = memcpy;
+
 static void exercise(void)
 {
     void *slots[256] = {0};
@@ -46,6 +49,8 @@ int main(int argc, char **argv)
     assert(thread_slot == 0);
     thread_slot = 1;
     unsigned loops = argc > 1 ? 100 : 1;
+    char sample[8];
+    assert(copy_bytes(sample, "musl", 5) == sample && !strcmp(sample, "musl"));
     volatile size_t huge = SIZE_MAX;
     errno = 0;
     assert(!calloc(huge, 2) && errno == ENOMEM);
@@ -66,7 +71,9 @@ int main(int argc, char **argv)
     }
 #ifndef STATIC_TEST
     void *self = dlopen(NULL, RTLD_NOW);
-    assert(self && dlsym(self, "malloc") && !dlclose(self));
+    assert(self && dlsym(self, "malloc"));
+    assert(dlsym(self, "memcpy") == (void *)copy_bytes);
+    assert(!dlclose(self));
 #endif
     pid_t child = fork();
     assert(child >= 0);

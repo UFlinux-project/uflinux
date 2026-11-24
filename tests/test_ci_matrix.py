@@ -21,7 +21,8 @@ class MatrixTests(unittest.TestCase):
             self.assertEqual(modes,{'x86_64':{'bios','uefi'}})
     def test_manual_runs_cover_all_architectures_without_release_secrets(self):
         result=ci.configuration('workflow_dispatch','refs/heads/main',full=True)
-        self.assertEqual(len(result['matrix']['include']),6)
+        self.assertEqual({job['arch'] for job in result['matrix']['include']},
+                         {'x86_64', 'aarch64', 'ppc64le', 'riscv64'})
         self.assertEqual(result['release'],'false')
     def test_default_manual_run_smokes_x86_64_only(self):
         result=ci.configuration('workflow_dispatch','refs/heads/main')
@@ -29,7 +30,8 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(result['release'],'false')
     def test_only_valid_pushed_version_tags_enable_release(self):
         result=ci.configuration('push','refs/tags/v0.1.0')
-        self.assertEqual(len(result['matrix']['include']),6)
+        self.assertEqual({job['arch'] for job in result['matrix']['include']},
+                         {'x86_64', 'aarch64', 'ppc64le', 'riscv64'})
         self.assertEqual(result['release'],'true')
         for tag in ('vlatest','v0.1.0;id','v0.1.0\nmalformed'):
             with self.assertRaises(ValueError):ci.configuration('push','refs/tags/'+tag)
@@ -61,13 +63,13 @@ class MatrixTests(unittest.TestCase):
             # ever replay one profile set.
             self.assertFalse([job for job in optimized if job['settings_pgo'] and job['rds_pgo']])
 
-    def test_full_matrix_runs_still_boot_only_the_x86_64_images(self):
-        for full in (False, True):
-            jobs = ci.configuration('workflow_dispatch', 'refs/heads/main', full)['vm']['include']
-            self.assertEqual([(job['arch'], job['mode']) for job in jobs],
-                             [('x86_64', 'bios'), ('x86_64', 'uefi')])
-        release = ci.configuration('push', 'refs/tags/v0.1.0')['vm']['include']
-        self.assertEqual({job['arch'] for job in release}, {'x86_64'})
+    def test_full_matrix_covers_each_boot_platform(self):
+        expected = {("x86_64", "bios"), ("x86_64", "uefi"), ("aarch64", "uefi"),
+                    ("ppc64le", "native"), ("riscv64", "uefi")}
+        for event, ref, full in (("workflow_dispatch", "refs/heads/main", True),
+                                 ("push", "refs/tags/v0.1.0", False)):
+            jobs = ci.configuration(event, ref, full)["vm"]["include"]
+            self.assertEqual({(job["arch"], job["mode"]) for job in jobs}, expected)
 
     def test_device_images_are_supplementary_outside_releases(self):
         for event,ref,full,devices in [('push','refs/heads/main',False,False),
@@ -80,13 +82,13 @@ class MatrixTests(unittest.TestCase):
         result=ci.configuration('workflow_dispatch','refs/heads/main',True,True)
         self.assertEqual(result['release'],'false')
         self.assertEqual(result['devices_enabled'],'true')
-        self.assertEqual(len(result['devices']['include']),8)
+        self.assertEqual(len(result['devices']['include']),7)
     def test_release_tags_build_every_device_and_label_experimental_targets(self):
         result=ci.configuration('push','refs/tags/v0.1.0')
         self.assertEqual(result['devices_enabled'],'true')
         jobs=result['devices']['include']
         self.assertEqual(sorted((job['device'],job['arch']) for job in jobs),
-                         [('pc-f2fs','x86_64'),('pc-xfs','x86'),('pc-xfs','x86_64'),
+                         [('pc-f2fs','x86_64'),('pc-xfs','x86_64'),
                           ('qcs6490','aarch64'),('rpi','aarch64'),('spacemit-k1','riscv64'),
                           ('vm','aarch64'),('vm','x86_64')])
         self.assertEqual({job['device'] for job in jobs if job['experimental']=='true'},
@@ -97,7 +99,7 @@ class MatrixTests(unittest.TestCase):
     def test_native_architectures_compile_with_more_cargo_jobs_than_emulated_ones(self):
         # Native runners have spare cores; the QEMU-emulated ones do not, and an
         # over-subscribed emulator is slower than a serialized build.
-        expected={'x86_64':4,'aarch64':4,'x86':2,'armv7':2,'ppc64le':2,'riscv64':2}
+        expected={'x86_64':4,'aarch64':4,'ppc64le':2,'riscv64':2}
         self.assertEqual({arch:config['jobs'] for arch,config in ci.arches.items()},expected)
         for full,selected in ((False,{'x86_64'}),(True,set(expected))):
             result=ci.configuration('workflow_dispatch','refs/heads/main',full)
@@ -109,7 +111,7 @@ class MatrixTests(unittest.TestCase):
 
     def test_each_architecture_has_nine_independent_jobs(self):
         for event,ref,full,count in [('pull_request','refs/heads/main',False,9),
-                                     ('workflow_dispatch','refs/heads/main',True,54)]:
+                                     ('workflow_dispatch','refs/heads/main',True,36)]:
             result=ci.configuration(event,ref,full)
             jobs=result['packages']['include']
             self.assertEqual(len(jobs),count)

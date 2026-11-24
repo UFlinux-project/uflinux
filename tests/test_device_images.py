@@ -54,12 +54,9 @@ class DeviceLayoutTests(unittest.TestCase):
         self.assertIn("type=" + builder.GPT_LINUX_TYPE, script)
         self.assertIn("uuid=" + uuids["esp"], script)
         self.assertIn("uuid=" + uuids["root"], script)
-        self.assertIn("name=ESP, bootable", script)
-        # The plain keyword only sets the protective MBR's boot indicator, so a
-        # BIOS-bootable PC disk has to ask for the GPT attribute explicitly.
-        self.assertNotIn("LegacyBIOSBootable", script)
-        pc = device_partition_script(device_partitions(6144), uuids, legacy_bootable=True)
-        self.assertIn("name=ESP, bootable, attrs=LegacyBIOSBootable", pc)
+        self.assertIn("name=ESP", script)
+        pc = device_partition_script(device_partitions(6144, bios=True), uuids, bios=True)
+        self.assertIn("type=" + builder.GPT_BIOS_TYPE, pc)
         self.assertIn("name=ROOT", pc)
 
     def test_image_names_match_the_release_assets(self):
@@ -75,23 +72,6 @@ class DeviceLayoutTests(unittest.TestCase):
 
 
 class DeviceRootfsTests(unittest.TestCase):
-    def test_only_pc_images_install_syslinux_in_the_build_root(self):
-        with tempfile.TemporaryDirectory() as workdir:
-            for name, device in DEVICES.items():
-                for arch in device["arches"]:
-                    with self.subTest(device=name, arch=arch):
-                        args = argparse.Namespace(device=name, arch=arch, version="0.1.0",
-                                                  workdir=workdir, cache=workdir, outdir=workdir,
-                                                  repository_url=None)
-                        image = builder.Builder(args)
-                        with patch.object(image, "chroot") as chroot, patch.object(
-                            builder.Builder, "device_bootstrap", side_effect=RuntimeError("stop before bootstrap")
-                        ):
-                            with self.assertRaisesRegex(RuntimeError, "stop before bootstrap"):
-                                image.device_image()
-                        chroot.assert_called_once()
-                        self.assertEqual("syslinux" in chroot.call_args.args, device["boot"] == "pc")
-
     def test_root_snapshot_preserves_mountpoints_without_build_mount_contents(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "source"
@@ -141,15 +121,15 @@ class DeviceRootfsTests(unittest.TestCase):
     def test_build_uses_the_copied_signed_repository(self):
         lines = device_repositories("/repo", "aarch64").split()
         self.assertEqual(lines[0], "/repo")
-        self.assertEqual(len(lines), 4, lines)
-        self.assertTrue(all(line == "/repo" or line.startswith("https://") for line in lines),
+        self.assertEqual(len(lines), 5, lines)
+        self.assertTrue(all(line in ("/repo", "/repo/aarch64/Packages.adb") or line.startswith("https://") for line in lines),
                         lines)
 
     def test_shipped_image_points_at_the_published_repository(self):
         lines = device_repositories("https://example.invalid/uflinux/0.1.0", "aarch64").split()
         self.assertEqual(lines[0], "https://example.invalid/uflinux/0.1.0")
         self.assertTrue(all(line.startswith("https://") for line in lines), lines)
-        self.assertEqual(len(lines), 4, lines)
+        self.assertEqual(len(lines), 5, lines)
 
     def test_nura_suite_stays_out_of_the_repositories_file(self):
         # A visible Nura line makes apk's solver unresolvable for any install
@@ -157,25 +137,21 @@ class DeviceRootfsTests(unittest.TestCase):
         # file only ever lists the UFLinux repo, Alpine and the apps repository.
         # The profile reaches Nura through apk fetch --repository instead.
         lines = device_repositories("/repo", "aarch64").split()
-        self.assertEqual(len(lines), 4, lines)
+        self.assertEqual(len(lines), 5, lines)
         self.assertNotIn("nura", " ".join(lines))
         self.assertEqual(device_nura_repository(),
                          "https://mirror.nura.eco/postmarketos/v26.06")
 
-    def test_apps_repository_is_listed_only_where_it_has_an_index(self):
-        # apk 3 fails the whole transaction on a repository line whose index
-        # 404s, so an architecture the apps repository does not index must not
-        # see the line at all.
-        apps = builder.LOCK["apps"]
-        self.assertIn(apps["url"], device_repositories("/repo", "aarch64").split())
-        lines = device_repositories("/repo", "armv7").split()
-        self.assertEqual(len(lines), 3, lines)
-        self.assertNotIn(apps["url"], lines)
+    def test_apps_repository_is_listed_for_every_supported_architecture(self):
+        for arch in builder.ARCHES:
+            with self.subTest(arch=arch):
+                lines = device_repositories("/repo", arch).split()
+                self.assertIn(builder.LOCK["apps"]["url"], lines)
 
     def test_shared_desktop_and_boot_tools_are_installed(self):
         packages = device_packages(DEVICES["vm"], "x86_64")
         for required in ("uflinux-desktop-meta", "uflinux-device", "alpine-base", "zstd",
-                         "e2fsprogs-extra", "cloud-utils-growpart", "linux-virt",
+                         "e2fsprogs-extra", "cloud-utils-growpart", "linux-uflinux-virt-x86_64=7.3.6-r14",
                          "musl-locales", "labwc-lang", "firefox", "vulkan-loader"):
             self.assertIn(required, packages)
         self.assertNotIn("uflinux-live", packages)
@@ -195,8 +171,7 @@ class DeviceRootfsTests(unittest.TestCase):
         self.assertIn("ublock-origin", qcom_packages)
         self.assertNotIn("dtbloader", qcom_packages)
         self.assertNotIn("linux-postmarketos-qcom-sc7280", qcom_packages)
-        # ... and no Alpine kernel either, so the unpacked Nura modules tree is
-        # the only one the profile's exactly-one-kernel check sees.
+        self.assertIn("linux-uflinux-dragon-q6a=7.0.11-r14", qcom_packages)
         self.assertNotIn("linux-lts", qcom_packages)
         self.assertNotIn("efibootmgr", device_packages(DEVICES["spacemit-k1"], "riscv64"))
 
@@ -206,7 +181,7 @@ class DeviceRootfsTests(unittest.TestCase):
         for name in ("qcs6490", "rpi", "spacemit-k1", "pc-f2fs"):
             arch = DEVICES[name]["arches"][0]
             self.assertIn("f2fs-tools", device_packages(DEVICES[name], arch), name)
-        for name, arch in (("vm", "x86_64"), ("pc-xfs", "x86_64"), ("pc-xfs", "x86")):
+        for name, arch in (("vm", "x86_64"), ("pc-xfs", "x86_64")):
             packages = device_packages(DEVICES[name], arch)
             self.assertNotIn("f2fs-tools", packages, name)
             self.assertIn("xfsprogs", packages, name)
@@ -229,7 +204,7 @@ class DeviceRootfsTests(unittest.TestCase):
         qcom = device_environment("qcs6490", DEVICES["qcs6490"], "aarch64", "0.1.0",
                                   "01234567-89AB-4CDE-8F01-23456789ABCD", "/device-esp")
         self.assertEqual(qcom["UFLINUX_NURA_PACKAGES"],
-                         "linux-postmarketos-qcom-sc7280 dtbloader")
+                         "dtbloader")
         self.assertEqual(qcom["UFLINUX_NURA_REPOSITORY"], device_nura_repository())
         self.assertEqual(qcom["UFLINUX_DTBLOADER"], "/usr/share/dtbloader/dtbloader.efi")
         # The actual Nura 7.0.8 kernel enables RD_GZIP but disables RD_ZSTD.
@@ -269,54 +244,25 @@ class DevicePcBootTests(unittest.TestCase):
     # unmoved MBR is detectable.
     bootstrap = bytes(range(256)) + bytes(184)
 
-    def esp(self, suffix="x64"):
-        return {"boot/vmlinuz": b"kernel",
-                "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
-                "ldlinux.sys": b"LDOS", "ldlinux.c32": b"LDXL",
-                "syslinux.cfg": b"DEFAULT uflinux\n",
-                "EFI/boot/boot" + suffix + ".efi": b"MZ",
-                "loader/entries/uflinux.conf": b"title\tUFLinux\n"}
+    def esp(self):
+        return {"boot/vmlinuz": b"MZkern", "boot/initramfs": b"\x28\xb5\x2f\xfd",
+                "boot/grub/grub.cfg": b"set default=0", "EFI/BOOT/BOOTX64.EFI": b"MZ"}
 
-    def check(self, esp=None, rootfs="xfs", arch="x86_64", device=None, attrs="LegacyBIOSBootable",
-              mbr=bootstrap, **kwargs):
+    def check(self, esp=None, rootfs="xfs", arch="x86_64", device=None, **kwargs):
         return DeviceImageCheckTests.report(
-            self, "pc", esp if esp is not None else self.esp(), rootfs=rootfs, arch=arch,
-            device=device or DEVICES["pc-xfs"], attrs=attrs, mbr=mbr, disk_mbr=mbr, **kwargs)
+            self, "pc", self.esp() if esp is None else esp, rootfs=rootfs, arch=arch,
+            device=device or DEVICES["pc-xfs"], **kwargs)
 
-    def test_a_pc_disk_needs_both_bootloaders_and_the_mbr_bootstrap(self):
-        report = self.check()
-        self.assertEqual(report["boot"], "pc")
-        self.assertEqual(report["device_image_format"], "gpt-xfs")
-
-    def test_the_i386_esp_carries_the_ia32_systemd_boot(self):
-        report = self.check(esp=self.esp("ia32"), arch="x86")
-        self.assertEqual(report["arch"], "x86")
-
-    def test_a_pc_disk_without_the_syslinux_mbr_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "no syslinux GPT bootstrap"):
-            self.check(mbr=None)
-
-    def test_a_pc_disk_whose_mbr_was_not_replaced_is_rejected(self):
-        # The bootstrap file is present but was never written onto the disk.
-        with self.assertRaisesRegex(ValueError, "not the syslinux GPT bootstrap"):
-            DeviceImageCheckTests.report(self, "pc", self.esp(), rootfs="xfs", arch="x86_64",
-                                         device=DEVICES["pc-xfs"], attrs="LegacyBIOSBootable",
-                                         mbr=self.bootstrap, disk_mbr=bytes(440))
-
-    def test_a_pc_disk_without_the_legacy_boot_attribute_is_rejected(self):
-        # gptmbr.bin answers with a bare "Boot failed", so the checker has to
-        # catch a missing attribute rather than let the image ship.
-        with self.assertRaisesRegex(ValueError, "legacy BIOS boot attribute"):
-            self.check(attrs=None)
-
-    def test_a_pc_disk_without_the_syslinux_files_is_rejected(self):
-        for name in ("ldlinux.sys", "ldlinux.c32", "syslinux.cfg", "EFI/boot/bootx64.efi",
-                     "loader/entries/uflinux.conf"):
-            with self.subTest(name=name):
-                esp = self.esp()
-                del esp[name]
-                with self.assertRaisesRegex(ValueError, name.replace(".", r"\.")):
-                    self.check(esp=esp)
+    def test_pc_disk_needs_grub_core_and_menu(self):
+        self.assertEqual(self.check()["boot"], "pc")
+        with self.assertRaisesRegex(ValueError, "GRUB MBR"):
+            self.check(disk_mbr=bytes(440))
+        with self.assertRaisesRegex(ValueError, "GRUB BIOS boot partition"):
+            self.check(bios=False)
+        esp = self.esp()
+        del esp["boot/grub/grub.cfg"]
+        with self.assertRaisesRegex(ValueError, "grub.cfg"):
+            self.check(esp=esp)
 
     def test_f2fs_compression_needs_the_on_disk_features(self):
         # mkfs.f2fs only accepts -O compression together with extra_attr, and
@@ -331,67 +277,18 @@ class DevicePcBootTests(unittest.TestCase):
 
     def test_an_uncompressed_f2fs_device_is_not_checked_for_the_features(self):
         report = DeviceImageCheckTests.report(
-            self, "efi", {"boot/vmlinuz": b"kernel",
+            self, "efi", {"boot/vmlinuz": b"MZkern",
                           "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
-                          "EFI/boot/bootaa64.efi": b"MZ"}, rootfs="f2fs")
+                          "EFI/BOOT/BOOTAA64.EFI": b"MZ", "boot/grub/grub.cfg": b"config"}, rootfs="f2fs")
         self.assertEqual(report["device_image_format"], "gpt-f2fs")
-
-    def test_syslinux_is_installed_into_the_esp_image_from_inside_the_chroot(self):
-        # The installer is a target binary, so it runs in the chroot, and it
-        # builds an MTOOLSRC under TMPDIR, so that directory has to exist in the
-        # chroot too. A bind mount would need a loop device, so the image file
-        # itself is what syslinux is pointed at.
-        calls = []
-
-        class FakeRoot:
-            def __init__(self, root):
-                self.root = root
-
-            def chroot(self, *command, **kwargs):
-                env = kwargs.get("extra_env", {})
-                # The installer can only use a temp directory that exists at the
-                # time it runs, so check it here rather than after the fact.
-                temp = env.get("TMPDIR", "").lstrip("/")
-                exists = bool(temp) and (self.root / temp).is_dir()
-                calls.append((list(command), env, exists))
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "root"
-            root.mkdir()
-            staging = Path(temporary) / "esp"
-            staging.mkdir()
-            (staging / "syslinux.cfg").write_bytes(b"DEFAULT uflinux\n")
-            fake = FakeRoot(root)
-            with patch.object(builder, "run",
-                              lambda *a, **k: calls.append(("run", a))):
-                image = builder.Builder.device_pc_esp(
-                    None, fake, staging, device_partitions(1024), device_uuids("pc"))
-            self.assertEqual(image, root / "device-esp.img")
-            formatted = [list(call[1][0]) for call in calls if call[0] == "run"]
-            self.assertEqual(formatted[0][:3],
-                             ["truncate", "-s", str(builder.ESP_SECTORS * builder.SECTOR)])
-            self.assertEqual(formatted[1][:2], ["mkfs.vfat", "-n"])
-            self.assertIn("-F", formatted[1])
-            self.assertIn("32", formatted[1])
-            self.assertEqual(formatted[-1][:2], ["mcopy", "-s"])
-            chroot = [call for call in calls if call[0] and call[0][0] == "syslinux"]
-            self.assertEqual(len(chroot), 1)
-            command, env, temp_exists = chroot[0]
-            self.assertEqual(command, ["syslinux", "--install", "--offset", "0",
-                                       "/device-esp.img"])
-            tmpdir = env["TMPDIR"]
-            self.assertTrue(tmpdir.startswith("/tmp/syslinux-"), tmpdir)
-            self.assertTrue(temp_exists)
-            self.assertEqual(env["MTOOLS_SKIP_CHECK"], "1")
-
 
 class DeviceImageCheckTests(unittest.TestCase):
     def report(self, boot, esp_files, initramfs=b"\x28\xb5\x2f\xfd" + b"initramfs",
-               rootfs="f2fs", arch="aarch64", device=None, attrs=None, mbr=None,
-               disk_mbr=None, f2fs_features=None):
+               rootfs="f2fs", arch="aarch64", device=None, bios=True,
+               disk_mbr=b"bootstrap", f2fs_features=None):
         """Run the checker against a synthetic disk whose ESP is faked."""
         uuids = device_uuids("0.1.0:check:" + boot)
-        layout = device_partitions(1024)
+        layout = device_partitions(1024, bios=boot == "pc")
         with tempfile.TemporaryDirectory() as temporary:
             image = Path(temporary) / "disk"
             offset, magic, _ = builder.ROOTFS_SIGNATURES[rootfs]
@@ -404,10 +301,10 @@ class DeviceImageCheckTests(unittest.TestCase):
             if disk_mbr is not None:
                 with image.open("r+b") as handle:
                     handle.write(disk_mbr)
-            bootstrap = None
-            if mbr is not None:
-                bootstrap = image.parent / "gptmbr.bin"
-                bootstrap.write_bytes(mbr)
+            if boot == "pc":
+                with image.open("r+b") as handle:
+                    handle.seek(layout["bios_start"] * builder.SECTOR)
+                    handle.write(b"core")
             stage = image.parent / (image.name + "-esp")
 
             def extract(source, destination, esp_start=builder.ESP_START):
@@ -420,9 +317,8 @@ class DeviceImageCheckTests(unittest.TestCase):
             def geometry(source):
                 esp = {"start": layout["esp_start"], "size": layout["esp_size"],
                        "uuid": uuids["esp"]}
-                if attrs is not None:
-                    esp["attrs"] = attrs
                 return {"disk": uuids["disk"], "esp": esp,
+                        "bios": {"start": layout["bios_start"], "type": builder.GPT_BIOS_TYPE} if bios else None,
                         "root": {"start": layout["root_start"], "size": layout["root_size"],
                                  "uuid": uuids["root"]}}
 
@@ -430,15 +326,15 @@ class DeviceImageCheckTests(unittest.TestCase):
             builder.device_layout, builder.device_extract = geometry, extract
             try:
                 report = device_verify_image(image, device or {"boot": boot, "rootfs": rootfs},
-                                             arch, uuids, layout, mbr=bootstrap)
+                                             arch, uuids, layout)
             finally:
                 builder.device_layout, builder.device_extract = saved_layout, saved_extract
             self.assertFalse(stage.exists(), "the ESP extraction must be cleaned up")
             return report
 
     def test_report_records_geometry_and_boot_payload(self):
-        report = self.report("efi", {"boot/vmlinuz": b"kernel", "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
-                                     "EFI/boot/bootaa64.efi": b"MZ"})
+        report = self.report("efi", {"boot/vmlinuz": b"MZkern", "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
+                                     "EFI/BOOT/BOOTAA64.EFI": b"MZ", "boot/grub/grub.cfg": b"config"})
         self.assertEqual(report["device_image_format"], "gpt-f2fs")
         self.assertEqual(report["initramfs_compression"], "zstd")
         self.assertEqual(report["boot"], "efi")
@@ -449,30 +345,33 @@ class DeviceImageCheckTests(unittest.TestCase):
     def test_extlinux_riscv64_verifies_without_an_efi_binary(self):
         # riscv64 has no entry in EFI_SUFFIX; the extlinux boot path must not
         # look it up (the spacemit-k1 job crashed on exactly that).
-        report = self.report("extlinux", {"boot/vmlinuz": b"kernel",
+        report = self.report("extlinux", {"boot/vmlinuz": b"MZkern",
                                           "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
-                                          "extlinux/extlinux.conf": b"LABEL linux\n"},
-                             arch="riscv64")
+                                          "extlinux/extlinux.conf": b"LABEL linux\n",
+                                          "dtbs/ky/x1_orangepi-rv2.dtb": b"dtb",
+                                          "dtbs/ky/x1_orangepi-r2s.dtb": b"dtb"},
+                             arch="riscv64", device=DEVICES["spacemit-k1"])
         self.assertEqual(report["boot"], "extlinux")
         self.assertEqual(report["arch"], "riscv64")
 
     def test_a_gzip_initramfs_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Zstandard"):
-            self.report("efi", {"boot/vmlinuz": b"kernel",
+            self.report("efi", {"boot/vmlinuz": b"MZkern",
                                 "boot/initramfs": b"\x1f\x8b\x08\x00gzip"})
 
     def test_qcs6490_accepts_gzip_and_reports_its_actual_compression(self):
-        report = self.report("efi", {"boot/vmlinuz": b"kernel",
+        report = self.report("efi", {"boot/vmlinuz": b"MZkern",
                                      "boot/initramfs": gzip.compress(b"070701"),
-                                     "EFI/boot/bootaa64.efi": b"MZ"},
+                                     "EFI/BOOT/BOOTAA64.EFI": b"MZ", "boot/grub/grub.cfg": b"config",
+                                     "dtbs/qcom/qcs6490-radxa-dragon-q6a.dtb": b"dtb"},
                              device=DEVICES["qcs6490"])
         self.assertEqual(report["initramfs_compression"], "gzip")
 
-    def test_qcs6490_rejects_the_zstd_initramfs_its_kernel_cannot_unpack(self):
+    def test_qcs6490_reports_an_initramfs_compression_mismatch(self):
         with self.assertRaisesRegex(ValueError, "gzip stream"):
-            self.report("efi", {"boot/vmlinuz": b"kernel",
+            self.report("efi", {"boot/vmlinuz": b"MZkern",
                                 "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
-                                "EFI/boot/bootaa64.efi": b"MZ"},
+                                "EFI/BOOT/BOOTAA64.EFI": b"MZ", "boot/grub/grub.cfg": b"config"},
                         device=DEVICES["qcs6490"])
 
     def test_unknown_initramfs_compression_is_rejected(self):
@@ -480,8 +379,8 @@ class DeviceImageCheckTests(unittest.TestCase):
             self.report("efi", {}, device={"boot": "efi", "initramfs_compression": "xz"})
 
     def test_report_accepts_the_root_filesystem_of_the_device(self):
-        esp = {"boot/vmlinuz": b"kernel", "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
-               "EFI/boot/bootaa64.efi": b"MZ"}
+        esp = {"boot/vmlinuz": b"MZkern", "boot/initramfs": b"\x28\xb5\x2f\xfd" + b"x",
+               "EFI/BOOT/BOOTAA64.EFI": b"MZ", "boot/grub/grub.cfg": b"config"}
         for rootfs in ("ext4", "f2fs", "xfs"):
             with self.subTest(rootfs=rootfs):
                 report = self.report("efi", esp, rootfs=rootfs)
@@ -502,12 +401,12 @@ class DeviceImageCheckTests(unittest.TestCase):
 
     def test_missing_boot_files_are_reported(self):
         with self.assertRaisesRegex(ValueError, "initramfs"):
-            self.report("efi", {"boot/vmlinuz": b"kernel"})
-        with self.assertRaisesRegex(ValueError, "bootaa64.efi"):
-            self.report("efi", {"boot/vmlinuz": b"kernel",
+            self.report("efi", {"boot/vmlinuz": b"MZkern"})
+        with self.assertRaisesRegex(ValueError, "BOOTAA64.EFI"):
+            self.report("efi", {"boot/vmlinuz": b"MZkern",
                                 "boot/initramfs": b"\x28\xb5\x2f\xfd"})
         with self.assertRaisesRegex(ValueError, "cmdline.txt"):
-            self.report("rpi", {"boot/vmlinuz": b"kernel",
+            self.report("rpi", {"boot/vmlinuz": b"MZkern",
                                 "boot/initramfs": b"\x28\xb5\x2f\xfd"})
 
     def test_geometry_drift_is_rejected(self):

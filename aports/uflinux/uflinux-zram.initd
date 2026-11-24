@@ -80,12 +80,12 @@ fs_type_of() {
 
 # lz4 is the right trade-off on the low-end boards: it costs a fraction of the
 # cycles zstd wants, and those machines never reach the ratio that would make
-# zstd worth it. A 64-bit board with several cores has the cycles to spare and
+# zstd worth it. A faster board with several cores has the cycles to spare and
 # gains from the better ratio, which matters most on the small slow storage of
 # a device.
 pick_compressor() {
 	case "$machine" in
-	armv7* | armv6* | armv8l | riscv32 | riscv64 | mips*)
+	riscv64)
 		printf 'lz4\n'
 		return
 	;;

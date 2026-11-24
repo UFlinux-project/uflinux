@@ -15,12 +15,12 @@ of the ISOs and the signed APK repository.
 
 | Id | Boards | Alpine arch | Kernel | Boot | Root fs | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| `pc-f2fs` | PCs booted from a flash drive or SD card | x86_64 | `linux-lts` | BIOS `syslinux` + UEFI `systemd-boot` | f2fs (lz4) | supported |
-| `pc-xfs` | PCs with a hard drive or SSD | x86_64, x86 | `linux-lts` | BIOS `syslinux` + UEFI `systemd-boot` | XFS | supported |
-| `qcs6490` | Arrow Dragon Q6A and similar QCS6490 boards | aarch64 | Nura `linux-postmarketos-qcom-sc7280` | board UEFI + `systemd-boot` | f2fs | experimental |
-| `rpi` | Raspberry Pi 3, 4 and 5 | aarch64 | `linux-rpi` | VideoCore firmware | f2fs | supported |
-| `spacemit-k1` | SpacemiT K1 boards (Orange Pi RV2, Orange Pi R2S, BananaPi-F3) | riscv64 | `linux-lts` | U-Boot distro boot (`extlinux`) | f2fs | experimental |
-| `vm` | QEMU, KVM and other hypervisors | x86_64, aarch64 | `linux-virt` | UEFI + `systemd-boot` | XFS | supported |
+| `pc-f2fs` | PCs booted from a flash drive or SD card | x86_64 | `linux-uflinux-x86_64` | BIOS and UEFI GRUB | f2fs (lz4) | supported |
+| `pc-xfs` | PCs with a hard drive or SSD | x86_64 | `linux-uflinux-x86_64` | BIOS and UEFI GRUB | XFS | supported |
+| `qcs6490` | Arrow Dragon Q6A and similar QCS6490 boards | aarch64 | `linux-uflinux-dragon-q6a` | board UEFI + GRUB | f2fs | experimental |
+| `rpi` | Raspberry Pi 3, 4 and 5 | aarch64 | `linux-uflinux-rpi` | VideoCore firmware | f2fs | supported |
+| `spacemit-k1` | SpacemiT K1 boards (Orange Pi RV2, Orange Pi R2S, BananaPi-F3) | riscv64 | `linux-uflinux-orangepi-rv2` | U-Boot distro boot (`extlinux`) | f2fs | experimental |
+| `vm` | QEMU, KVM and other hypervisors | x86_64, aarch64 | `linux-uflinux-virt-<arch>` | UEFI + GRUB | XFS | supported |
 
 The table, the per-board package list, the root filesystem, the serial console and
 the kernel command line come from `config/devices.json`; the optional Nura
@@ -29,52 +29,31 @@ repository is pinned in `config/devices.lock.json`. Both files are validated by
 Alpine index by `python3 scripts/check-packages.py`.
 
 The two `pc-*` targets are not boards but machines: they write to an internal
-disk or to a USB stick and boot on any x86 firmware, so they are the only images
+disk or to a USB stick and boot via BIOS or x86_64 UEFI, so they are the only images
 that carry a BIOS and a UEFI boot chain on the same disk. `pc-xfs` is meant for
 a hard drive or SSD and uses XFS; `pc-f2fs` is meant for the flash drive or SD
 card that has to survive thousands of small writes, and asks the kernel for
-F2FS's lz4 cluster compression. `pc-f2fs` is built for x86_64 only: i386 PCs are
-rare enough that one 32-bit image (`pc-xfs`) covers the architecture, and every
-extra image costs a whole job in the release matrix.
+F2FS's lz4 cluster compression. Both images target x86_64.
 Both ship `amd-ucode` and `intel-ucode` and pass both microcode images to both
 bootloaders, so the CPU microcode is loaded before the kernel starts on either
 firmware.
 
-`spacemit-k1` is the Orange Pi RV2: its SpacemiT Ky X1 is a RISC-V SoC of the K1
-family, so the image is riscv64 and uses Alpine's generic `linux-lts`, which is
-built with `CONFIG_ARCH_SPACEMIT=y` and ships `spacemit/k1-orangepi-rv2.dtb`. The
-mainline K1 device tree has no display or GPU node, so the desktop starts but the
-board is expected to be driven over the serial console (`ttyS0`) or headless. The
-image reuses the board's own U-Boot through `extlinux/extlinux.conf` on the ESP.
+The SpacemiT K1 image uses the Orange Pi RV2 kernel. Its extlinux menu defaults
+to the RV2 device tree and includes a separate Orange Pi R2S entry. The Banana
+Pi F3 entry relies on a firmware-provided device tree. Boot on the F3 is
+unverified and the kernel APK does not include an F3 device tree.
 
-`qcs6490` is experimental for a different reason: some QCS6490 boards have no
-firmware-provided device tree, and Alpine's `linux-lts` is not configured or
-patched for the platform's display, so HDMI stays black. The image therefore
-runs the mainline kernel from Nura (postmarketOS),
-`linux-postmarketos-qcom-sc7280`, which ships the Qualcomm drivers built in, the
-board device trees under `/boot/dtbs`, and a `linux.efi` zboot image that
-`systemd-boot` loads directly. This kernel requires a **gzip initramfs**:
-the inspected `7.0.8-r0` package enables `CONFIG_RD_GZIP` but disables
-`CONFIG_RD_ZSTD`. Using the ISO's Zstandard setting prevents the kernel from
-unpacking the early userspace, including the firmware and display modules.
-`qcs6490` therefore sets `initramfs_compression: gzip`; other boards default to
-Zstandard. The package evidence and the fetch-and-unpack diagnostics are in
-"Package sources" below. The Nura `dtbloader` EFI driver is carried in
-`EFI/systemd/drivers` as well: it installs a board device tree before
-`systemd-boot` runs, which covers boards whose firmware provides none. Nura is
-used **only** as an extra aarch64 package source pinned to a specific branch (the
-index itself is not pinned: postmarketOS rebuilds a release branch's index
-regularly), and only for that kernel and driver. Both are *fetched and unpacked*
-rather than installed: Nura ships its own `mkinitfs` replacement which conflicts
-with the Alpine one the image needs, so apk must never solve across both
-repositories at once (see "Package sources"). Because the kernel is unpacked, no
-`update-kernel` hook runs, so the profile assembles the boot files itself and
-generates the initramfs with Alpine's `mkinitfs` against the unpacked
-`/lib/modules` tree — postmarketOS is a merged-usr distro and unpacks its modules
-under `/usr/lib/modules`, so the profile links `/lib/modules` there, since
-`mkinitfs`, `depmod` and `modprobe` all look under `/lib`. Bootloaders and drivers
-other than `dtbloader` always come from Alpine, and no Nura `device-*` package is
-ever installed.
+Dragon Q6A boots the EFI stub and Q6A device tree from its kernel APK.
+The image carries Nura's `dtbloader` EFI driver at `EFI/uflinux/dtbloader.efi`
+and starts it from GRUB before loading the board DTB. GRUB applies any advertised
+EFI DT fixups. This GRUB path still needs physical board validation.
+Raspberry Pi firmware loads the packaged `kernel8.img`, Broadcom device trees,
+and overlays from the boot partition.
+
+Device images pin the kernel version in APK world. Updating a prebuilt image
+in place requires updating the kernel, its matching initramfs, and any device
+trees together on the separate boot partition before rebooting. New images
+already contain the corresponding boot files.
 
 ## Building one locally
 
@@ -140,41 +119,22 @@ still exits 0, because `f2fs-tools` is not linked against liblz4. The ESP carrie
 the kernel as `boot/vmlinuz` and the initramfs as `boot/initramfs`, plus whatever
 the boot scheme needs:
 
-- `efi` — `EFI/boot/bootaa64.efi` or `EFI/boot/bootx64.efi` (systemd-boot, copied
-  from the package because installing it needs firmware variables),
-  `loader/entries/uflinux.conf`, and the board device tree under `dtbs/` when the
-  board declares one.
-- `rpi` — `config.txt`, `cmdline.txt`, `usercfg.txt`, the VideoCore firmware and
-  the device-tree overlays, all unpacked from the bootloader APKs.
-- `extlinux` — `extlinux/extlinux.conf` plus the board device tree under `dtbs/`.
-- `pc` — both chains on one ESP. UEFI uses the same removable-media layout as
-  `efi` (`EFI/boot/bootx64.efi` or `bootia32.efi`, `loader/loader.conf`,
-  `loader/entries/uflinux.conf`), so no NVRAM entry has to exist and the same
-  disk boots in any machine. BIOS uses `syslinux`: `gptmbr.bin` occupies the
-  first 440 bytes of the disk and chainloads `ldlinux.sys` in the ESP, which
-  reads `syslinux.cfg`. Three things are needed for that to work and the build
-  verifies all of them: the ESP partition carries the GPT `LegacyBIOSBootable`
-  attribute (`sfdisk`'s plain `bootable` keyword only sets the MBR boot
-  indicator, and `gptmbr.bin` then prints a bare `Boot failed`), `ldlinux.sys`
-  and `ldlinux.c32` are present, and `libcom32.c32` and `libutil.c32` are copied
-  next to them. Because `syslinux` only accepts a block device or a regular
-  file, the PC ESP is assembled as a standalone FAT image, installed with
-  `syslinux --install --offset 0`, and copied into the partition with one `dd`;
-  every other target formats its ESP inside the disk with `mkfs.vfat --offset`.
-  The installer runs in the chroot, since the package is built for the target
-  architecture and drives mtools itself, so no host package is needed for it.
-  Installing the package would otherwise leave a `/boot` trigger behind that
-  rewrites `/extlinux.conf` on every kernel upgrade, so the profile sets
-  `disable_trigger=1` in `/etc/update-extlinux.conf` and owns `syslinux.cfg`.
+- `efi` — a GRUB fallback EFI executable, `boot/grub/grub.cfg`, and any
+  board device tree under `dtbs/`.
+- `rpi` — native VideoCore firmware, `config.txt`, and the Standard profile in
+  `cmdline.txt`. To change modes, copy `cmdline-debug.txt` or `cmdline-tty.txt`
+  into place on the boot partition. Back up the Standard file first.
+- `extlinux` — U-Boot loads `extlinux/extlinux.conf` and the selected board tree.
+- `pc` — BIOS GRUB embeds its core in a dedicated GPT BIOS boot partition.
+  UEFI uses the removable-media fallback executable. Both use the same
+  GRUB menu, kernel, microcode, and initramfs on the FAT boot partition.
 
 The initramfs is generated by `profiles/device-rootfs.sh` with an explicit feature
 set (`base <rootfs> phy mmc usb scsi nvme ata virtio kms`, where `<rootfs>` is
 `f2fs` or `xfs`) and an explicit kernel version, rather than through
 `update-kernel`, because that helper always passes `--media` and would build the
-live ISO's squashfs modloop. Passing the version is also what lets the Alpine
-`mkinitfs` build an initramfs for the unpacked Nura kernel: it only reads
-`/lib/modules/<version>` and its `modules.dep`, which for that kernel is the
-symlink to the merged-usr `/usr/lib/modules` created in the profile. It is
+live ISO's squashfs modloop. The image builder uses the installed kernel's
+`/lib/modules/<version>` tree to generate the initramfs. Its compression is
 verified against the board's `initramfs_compression` setting (gzip for
 `qcs6490`, Zstandard by default). This is independent of the `.img.zst`
 compression used to distribute the complete disk image.
@@ -273,19 +233,10 @@ resolves by filename, so the device stage downloads the published
 exact name in `/etc/apk/keys`; `uflinux-release` ships the same file in the
 installed system.
 
-The pinned Nura suite is never listed in `/etc/apk/repositories`, not even while
-building. apk solves against every repository in that file, and Nura's
-`postmarketos-mkinitfs` and Alpine's `mkinitfs` are mutually conflicting providers
-of `cmd:mkinitfs` — with both visible, apk refuses to select any package set that
-pulls in a kernel. So Nura packages (the mainline kernel and `dtbloader` for
-`qcs6490`) are fetched with `apk fetch --stdout --repository <nura>` — the URL
-arrives as `UFLINUX_NURA_REPOSITORY` and apk resolves the file from the branch's
-current index without a solver run — and unpacked with `tar` at their package
-paths. The
-unpacked files are ordinary rootfs content, so they land in the image without a
-Nura entry in the installed database. The trade-off is that unpacked packages get
-no triggers: the profile copies the kernel, device trees and modules into the boot
-partition by hand, and nothing in the image can `apk upgrade` them.
+The Q6A image fetches and unpacks `dtbloader` from the pinned Nura suite.
+Keeping Nura outside the configured repositories avoids its conflicting
+`postmarketos-mkinitfs` provider. The kernel itself is installed from the signed
+UFlinux kernel index and is recorded in the APK database.
 
 ## First boot
 

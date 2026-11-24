@@ -26,25 +26,21 @@ class DevicesConfigTests(unittest.TestCase):
             if device["boot"] == "extlinux":
                 self.assertEqual(device["arches"], ["riscv64"], device_id)
             if device["boot"] == "pc":
-                # syslinux and systemd-boot are only built for the PC firmware
+                # The dual-firmware image targets PC hardware
                 # classes, and gptmbr.bin needs a kernel the loader can chainload
                 # from the ESP, so the PC targets stay on the generic flavour.
-                self.assertEqual(device["kernel"], "lts", device_id)
-                self.assertTrue(set(device["arches"]) <= {"x86", "x86_64"}, device_id)
+                self.assertEqual(device["kernel"], "x86_64", device_id)
+                self.assertTrue(set(device["arches"]) == {"x86_64"}, device_id)
 
-    def test_a_nura_kernel_is_fetched_rather_than_installed(self):
-        # A postmarketos-* flavour is not in any Alpine repository, so its
-        # package has to be part of the set the profile fetches and unpacks.
-        # Flavours are named after the linux-* package, as elsewhere.
-        for device_id, device in devices.items():
-            if device["kernel"].startswith("postmarketos-"):
-                self.assertIn("linux-" + device["kernel"], device["nura_packages"], device_id)
-                self.assertTrue(device["nura"], device_id)
-                self.assertNotIn("linux-" + device["kernel"], device["packages"], device_id)
+    def test_device_kernel_is_published_for_every_architecture(self):
+        kernels = json.loads((root / "config/kernels.lock.json").read_text())
+        for device in devices.values():
+            for arch in device["arches"]:
+                self.assertIn(device["kernel"].format(arch=arch), kernels["packages"][arch])
 
     def test_boards_needing_a_device_tree_declare_one(self):
         # extlinux loads the tree by path from extlinux.conf, and the qcs6490
-        # entry names it for systemd-boot, so both need the path in the config.
+        # GRUB entry names it explicitly, so both need the path in the config.
         # The Raspberry Pi firmware picks its own tree, so it needs none.
         for device_id, device in devices.items():
             if device["boot"] == "extlinux":
@@ -83,13 +79,12 @@ class DevicesConfigTests(unittest.TestCase):
             if device["boot"] == "rpi":
                 self.assertIn("raspberrypi-bootloader", device["packages"], device_id)
             elif device["boot"] == "efi":
-                self.assertIn("systemd-boot", device["packages"], device_id)
+                self.assertIn("grub-efi", device["packages"], device_id)
             elif device["boot"] == "pc":
                 # One disk boots from either firmware, so both loaders have to
-                # be installed: syslinux supplies gptmbr.bin and ldlinux.sys for
-                # BIOS, systemd-boot the EFI binary for UEFI.
-                self.assertIn("syslinux", device["packages"], device_id)
-                self.assertIn("systemd-boot", device["packages"], device_id)
+                # be installed for a dual-firmware GRUB image.
+                self.assertIn("grub-bios", device["packages"], device_id)
+                self.assertIn("grub-efi", device["packages"], device_id)
 
     def test_images_leave_room_for_the_root_filesystem(self):
         for device_id, device in devices.items():

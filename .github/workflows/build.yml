@@ -82,7 +82,7 @@ jobs:
       - name: Install musl profiling tools
         if: matrix.package == 'musl' && (matrix.arch == 'x86_64' || matrix.arch == 'aarch64' || matrix.arch == 'riscv64')
         run: |
-          sudo apt-get install --no-install-recommends -y bolt-22 linux-tools-generic
+          sudo apt-get install --no-install-recommends -y bolt-22 linux-perf
           if [ '${{ matrix.arch }}' = riscv64 ]; then
             sudo apt-get install --no-install-recommends -y qemu-system-riscv opensbi cpio
             qemu-system-riscv64 --version
@@ -211,12 +211,26 @@ jobs:
       - name: Install emulators and firmware
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y python3-pexpect qemu-system-x86 ovmf
-      - name: Boot ISO, install XFS and reboot installed system
+          packages=()
+          case '${{ matrix.arch }}' in
+            x86_64) packages=(qemu-system-x86 ovmf) ;;
+            aarch64) packages=(qemu-system-arm qemu-efi-aarch64) ;;
+            ppc64le) packages=(qemu-system-ppc) ;;
+            riscv64) packages=(qemu-system-riscv opensbi qemu-efi-riscv64) ;;
+          esac
+          sudo apt-get install --no-install-recommends -y python3-pexpect "${packages[@]}"
+      - name: Verify boot through GRUB
         run: |
-          network=()
-          if [ '${{ matrix.mode }}' = bios ]; then network+=(--network-tests); fi
-          python3 scripts/vm-test.py --arch '${{ matrix.arch }}' --mode '${{ matrix.mode }}' --iso 'out/images/${{ matrix.arch }}/uflinux-${{ needs.checks.outputs.version }}-${{ matrix.arch }}.iso' "${network[@]}"
+          arch='${{ matrix.arch }}'
+          mode='${{ matrix.mode }}'
+          iso="out/images/$arch/uflinux-${{ needs.checks.outputs.version }}-$arch.iso"
+          if [ "$arch" = x86_64 ]; then
+            network=()
+            if [ "$mode" = bios ]; then network+=(--network-tests); fi
+            python3 scripts/vm-test.py --arch "$arch" --mode "$mode" --iso "$iso" "${network[@]}"
+          else
+            python3 scripts/arch-boot-smoke.py --arch "$arch" --iso "$iso"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -258,6 +272,9 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y qemu-user-binfmt binfmt-support dosfstools mtools e2fsprogs f2fs-tools xfsprogs zstd
+          if [ "${{ matrix.arch }}" = x86_64 ]; then
+            sudo apt-get install --no-install-recommends -y grub-pc-bin
+          fi
           python3 scripts/preflight.py --arch '${{ matrix.arch }}'
       - name: Sign packages and assemble the device disk image
         env:
@@ -269,6 +286,23 @@ jobs:
           build_args=(--arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}')
           sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY bash scripts/build.sh "${build_args[@]}" --stage sign "${release_args[@]}"
           sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY bash scripts/build.sh "${build_args[@]}" --device '${{ matrix.device }}' --stage device "${release_args[@]}"
+      - name: Boot and verify GRUB device images
+        if: matrix.device == 'vm' || startsWith(matrix.device, 'pc-')
+        run: |
+          arch='${{ matrix.arch }}'
+          if [ "$arch" = aarch64 ]; then
+            sudo apt-get install --no-install-recommends -y qemu-system-arm qemu-efi-aarch64 python3-pexpect
+          else
+            sudo apt-get install --no-install-recommends -y qemu-system-x86 ovmf python3-pexpect
+          fi
+          device='${{ matrix.device }}'
+          modes=(uefi)
+          if [[ "$device" == pc-* ]]; then modes+=(bios); fi
+          for mode in "${modes[@]}"; do
+            python3 scripts/device-vm-test.py --arch "$arch" --device "$device" --mode "$mode" \
+              --image "out/devices/$arch/uflinux-${{ needs.checks.outputs.version }}-$device-$arch.img.zst" \
+              --log "out/checks/$arch/device-$device-$mode-boot.log"
+          done
       - name: Upload build diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

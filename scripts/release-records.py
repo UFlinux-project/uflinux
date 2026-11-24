@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import os
 
-from builder import LOCK, check_asset_size, sha
+from builder import ARCHES, LOCK, check_asset_size, sha
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--version", required=True)
@@ -20,7 +20,7 @@ with archive.open("wb") as stream:
 tar.stdout.close()
 if tar.wait():
     raise RuntimeError("Failed to create build record archive")
-assets = sorted(out.glob("images/*/*.iso"))
+assets = sorted(path for path in out.glob("images/*/*.iso") if path.parent.name in ARCHES)
 if not assets:
     raise ValueError("No release ISOs found")
 if len({p.name for p in assets}) != len(assets):

@@ -1,0 +1,124 @@
+--- a/grub-core/loader/efi/chainloader.c
++++ b/grub-core/loader/efi/chainloader.c
+@@ -208,7 +208,7 @@
+ }
+ 
+ static grub_err_t
+-grub_cmd_chainloader (grub_command_t cmd __attribute__ ((unused)),
++grub_cmd_chainloader (grub_command_t cmd,
+ 		      int argc, char *argv[])
+ {
+   grub_file_t file = 0;
+@@ -402,6 +402,25 @@
+   b->free_pages (address, pages);
+   grub_free (file_path);
+ 
++  if (grub_strcmp (cmd->name, "uflinux_efi_driver") == 0)
++    {
++      grub_efi_uintn_t exit_data_size = 0;
++      grub_efi_char16_t *exit_data = NULL;
++
++      status = grub_efi_start_image (image_handle, &exit_data_size, &exit_data);
++      if (exit_data)
++        b->free_pool (exit_data);
++      grub_dl_unref (my_mod);
++      if (status != GRUB_EFI_SUCCESS)
++        {
++          grub_efi_unload_image (image_handle);
++          return grub_error (GRUB_ERR_BAD_OS, "cannot start EFI driver: %lx",
++                             (unsigned long) status);
++        }
++      /* Keep the driver resident so its protocol remains available. */
++      return GRUB_ERR_NONE;
++    }
++
+   grub_loader_set_ex (grub_chainloader_boot, grub_chainloader_unload, image_handle, 0);
+   return 0;
+ 
+@@ -427,16 +446,19 @@
+   return grub_errno;
+ }
+ 
+-static grub_command_t cmd;
++static grub_command_t cmd, driver_cmd;
+ 
+ GRUB_MOD_INIT(chainloader)
+ {
+   cmd = grub_register_command ("chainloader", grub_cmd_chainloader,
+ 			       0, N_("Load another boot loader."));
++  driver_cmd = grub_register_command ("uflinux_efi_driver", grub_cmd_chainloader,
++                                      0, N_("Start an EFI driver."));
+   my_mod = mod;
+ }
+ 
+ GRUB_MOD_FINI(chainloader)
+ {
++  grub_unregister_command (driver_cmd);
+   grub_unregister_command (cmd);
+ }
+--- a/grub-core/loader/efi/fdt.c
++++ b/grub-core/loader/efi/fdt.c
+@@ -92,6 +92,53 @@
+   return fdt;
+ }
+ 
++/* The Nura driver implements the original EFI DT Fixup ABI. */
++struct uflinux_dt_fixup
++{
++  grub_efi_uint64_t revision;
++  grub_efi_status_t (__grub_efi_api *fixup) (struct uflinux_dt_fixup *, void *,
++                                            grub_efi_uintn_t *, grub_efi_uint32_t);
++};
++
++static grub_err_t
++uflinux_fixup_fdt (void)
++{
++  static grub_guid_t guid = { 0xe617d64c, 0xfe08, 0x46da,
++    { 0xf4, 0xdc, 0xbb, 0xd5, 0x87, 0x0c, 0x73, 0x00 } };
++  struct uflinux_dt_fixup *protocol;
++  grub_efi_uintn_t size, old_pages, pages;
++  grub_efi_status_t status;
++
++  if (!fdt || !loaded_fdt || !grub_env_get ("uflinux_dt_fixup"))
++    return GRUB_ERR_NONE;
++  protocol = grub_efi_locate_protocol (&guid, NULL);
++  if (!protocol)
++    return GRUB_ERR_NONE;
++
++  old_pages = GRUB_EFI_BYTES_TO_PAGES (grub_fdt_get_totalsize (fdt));
++  size = old_pages * 4096;
++  status = protocol->fixup (protocol, fdt, &size, 3);
++  if (status == GRUB_EFI_BUFFER_TOO_SMALL)
++    {
++      void *larger;
++      pages = GRUB_EFI_BYTES_TO_PAGES (size);
++      larger = grub_efi_allocate_pages_real (GRUB_EFI_MAX_USABLE_ADDRESS, pages,
++                                             GRUB_EFI_ALLOCATE_MAX_ADDRESS,
++                                             GRUB_EFI_ACPI_RECLAIM_MEMORY);
++      if (!larger)
++        return grub_error (GRUB_ERR_OUT_OF_MEMORY, "cannot expand device tree");
++      grub_memcpy (larger, fdt, grub_fdt_get_totalsize (fdt));
++      grub_efi_free_pages ((grub_addr_t) fdt, old_pages);
++      fdt = larger;
++      size = pages * 4096;
++      status = protocol->fixup (protocol, fdt, &size, 3);
++    }
++  if (status != GRUB_EFI_SUCCESS)
++    return grub_error (GRUB_ERR_BAD_OS, "EFI device tree fixup failed: %lx",
++                       (unsigned long) status);
++  return GRUB_ERR_NONE;
++}
++
+ grub_err_t
+ grub_fdt_install (void)
+ {
+@@ -101,6 +148,9 @@
+ 
+   if (fdt == NULL && loaded_fdt == NULL)
+     return GRUB_ERR_NONE;
++
++  if (uflinux_fixup_fdt () != GRUB_ERR_NONE)
++    return grub_errno;
+ 
+   b = grub_efi_system_table->boot_services;
+   status = b->install_configuration_table (&fdt_guid, fdt ? fdt : loaded_fdt);
