@@ -36,3 +36,14 @@
  
  if [ -n "$MODLOOPSIGN" ]; then
  	sign_modloop "$STAGING/$MODIMG"
+@@ -374,7 +380,9 @@
+ $MOCK mkinitfs $MKINITFS_ARGS -q -b $ROOTFS -F "$features base squashfs" \
+ 	-o "$STAGING/initramfs-$FLAVOR" "$KVER"
+ 
+-for file in System.map config vmlinuz; do
++# The ISO only ships the bootable kernel. Its config was checked above,
++# and project kernel APKs need not include a System.map.
++for file in vmlinuz; do
+ 	cp "$BOOT/$file-$KVER" "$STAGING" 2>/dev/null \
+ 		|| cp "$BOOT/$file-$FLAVOR" "$STAGING" 2>/dev/null \
+ 		|| cp "$BOOT/$file" "$STAGING" 2>/dev/null \

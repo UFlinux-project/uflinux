@@ -137,7 +137,7 @@
     "modloop_level": 19,
     "modloop_block_bytes": 131072,
     "patches": {
-      "update-kernel-zstd.patch": "6308a4b5b29fb25e75dffb5399bb521f63ecf33d27e8ee80a91ce83de70c0c7b6f844ec0d88bade46a35f3f85b75c8cbae61a26ffef35fb2c871904f9e9845a3"
+      "update-kernel-zstd.patch": "c549cc146586f152d4931eb19db1305d1319c9fa0c40a697ae57ae4e412af0f68e844a4696d6922401e1f2a241870f5b6a5bb73ec69377ceebef5e6328020932"
     },
     "bootsplash": {
       "implementation": "plymouth",
