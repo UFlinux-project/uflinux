@@ -25,9 +25,13 @@ EOF
 	printf '%s\n' alpine-base musl musl-utils uflinux uflinux-live uflinux-installer uflinux-installer-ui musl-locales musl-locales-lang glib-lang gtk4.0-lang labwc-lang
 	grep -v '^#' /project/config/firmware-packages.txt
 } > "$tmp/etc/apk/world"
+# mkimage puts these packages on the ISO. The boot overlay's world also
+# needs them so the live installer can run GRUB against the mounted target.
 case "$ARCH" in
-	x86_64|aarch64|riscv64) printf '%s\n' efibootmgr >> "$tmp/etc/apk/world" ;;
-esac
+	x86_64) printf '%s\n' grub-bios grub-efi efibootmgr ;;
+	aarch64|riscv64) printf '%s\n' grub-efi efibootmgr ;;
+	ppc64le) printf '%s\n' grub-ieee1275 ;;
+esac >> "$tmp/etc/apk/world"
 printf '%s\n' "${UFLINUX_REPOSITORY_URL:?}" \
 	'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' \
 	'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' \
