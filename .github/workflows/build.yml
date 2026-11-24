@@ -50,7 +50,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y shellcheck
-          shellcheck -S warning scripts/*.sh profiles/*.sh tests/*.sh rds/scripts/*.sh settings/scripts/*.sh aports/uflinux/uflinux-session aports/uflinux/uflinux-autostart aports/uflinux/uflinux-compositor aports/uflinux/uflinux-network-init aports/connman/connman-vpn.initd settings/data/uflinux-acpid.initd settings/data/uflinux-power-button
+          # -x makes shellcheck honour the `shellcheck source=` directives that
+          # point at files installed under /usr, so variables and functions the
+          # sourced libraries define (boot_modes, grub_menu, ...) are known.
+          shellcheck -x -S warning scripts/*.sh profiles/*.sh tests/*.sh rds/scripts/*.sh settings/scripts/*.sh aports/uflinux/uflinux-session aports/uflinux/uflinux-autostart aports/uflinux/uflinux-compositor aports/uflinux/uflinux-network-init aports/connman/connman-vpn.initd settings/data/uflinux-acpid.initd settings/data/uflinux-power-button
           go install github.com/rhysd/actionlint/cmd/actionlint@914e7df21a07ef503a81201c76d2b11c789d3fca
           "$(go env GOPATH)/bin/actionlint" -config-file .github/actionlint.yaml .github/workflows/build.yml
       - id: matrix
