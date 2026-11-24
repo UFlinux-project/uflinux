@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """Check declared desktop/installer dependencies against every target repository."""
 import concurrent.futures
+import importlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shlex
 import sys
 import tarfile
+import time
 import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from builder import browser_packages, device_packages, firmware_packages
+
+# ci-matrix owns the single definition of what counts as a release.
+ci_matrix = importlib.import_module("ci-matrix")
 
 root = Path(__file__).resolve().parents[1]
 lock = json.loads((root / "config/sources.lock.json").read_text())
@@ -56,9 +62,26 @@ for recipe in (root / "aports").glob("*/APKBUILD"):
 required -= local
 
 
+# Every index below is a live URL, so a mirror briefly returning 503 has to be
+# retried rather than fail the whole gate. A 404 is a real problem and is
+# reported immediately.
+RETRIES = 3
+RETRY_DELAY = 10
+
+
 def index_entries(url):
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data = response.read()
+    for attempt in range(RETRIES):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                data = response.read()
+            break
+        except urllib.error.HTTPError as error:
+            if error.code < 500 or attempt + 1 == RETRIES:
+                raise
+        except urllib.error.URLError:
+            if attempt + 1 == RETRIES:
+                raise
+        time.sleep(RETRY_DELAY * (attempt + 1))
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         return archive.extractfile("APKINDEX").read().decode()
 
@@ -121,7 +144,14 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
 # is deliberately not pinned by hash: the repository is republished whenever its
 # packages are rebuilt, so the URL itself is the stable input and the packages
 # are checked against the live index (same policy as the Nura suite).
+#
+# Only a release tag is gated on the result. The apps repository is published
+# independently of this one, so an ordinary check build must not fail because it
+# is briefly unavailable or mid-republish; there the outcome is a warning. The
+# image stage still needs the packages, so a release candidate cannot ship an
+# image that could not resolve them.
 apps = lock["apps"]
+APPS_REQUIRED = ci_matrix.is_release(os.environ.get("EVENT", ""), os.environ.get("REF", ""))
 
 
 def check_apps(arch):
@@ -143,8 +173,14 @@ def check_apps(arch):
 
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-    for result in pool.map(check_apps, apps["arches"]):
-        print(result)
+    futures = {arch: pool.submit(check_apps, arch) for arch in apps["arches"]}
+    for arch, future in futures.items():
+        try:
+            print(future.result())
+        except Exception as error:
+            if APPS_REQUIRED:
+                raise
+            print(f"warning: {error} (the apps repository is only required for releases)")
 
 
 devices = json.loads((root / "config/devices.json").read_text())

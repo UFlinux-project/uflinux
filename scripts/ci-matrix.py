@@ -12,8 +12,15 @@ root = Path(__file__).resolve().parents[1]
 arches = json.loads((root / "config/architectures.json").read_text())
 devices = json.loads((root / "config/devices.json").read_text())
 lock = json.loads((root / "config/sources.lock.json").read_text())
+
+
+def is_release(event, ref):
+    """Only a pushed version tag produces a release; everything else is a check build."""
+    return event == "push" and ref.startswith("refs/tags/v")
+
+
 def configuration(event, ref, full=False, device_builds=False):
-    release = event == "push" and ref.startswith("refs/tags/v")
+    release = is_release(event, ref)
     version = ref.removeprefix("refs/tags/v") if release else lock["distribution"]["version"]
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:_(?:alpha|beta|rc)[0-9]+)?", version):
         raise ValueError("Tag must be v followed by an Alpine-compatible version")

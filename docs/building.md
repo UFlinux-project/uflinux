@@ -28,7 +28,12 @@ packages are rebuilt, so the URL is the pin (the same policy as the Nura suite).
 `aports/uflinux/uflinux3.ec384.pub` matches the published key, and
 `scripts/check-packages.py` re-checks the live indexes. Architectures the apps
 repository does not index never list it, because apk fails on an unreachable
-repository line.
+repository line. The apps index is only a hard gate on a release tag: the
+repository is published independently of this one, so an ordinary PR, main or
+manual build reports an unreachable or incomplete apps index as a warning
+instead of failing. A release still fails, because its images cannot resolve
+`uflinux-files` without it. `check-packages.py` reads `EVENT` and `REF` to make
+that decision, and retries a transient 5xx from any index before reporting it.
 
 ```sh
 export APK_REPOSITORY_URL=https://repo.uflinux.org/apk/v3.24/uflinux

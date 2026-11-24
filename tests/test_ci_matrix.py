@@ -8,6 +8,20 @@ sys.path.insert(0, str(path.parent))
 spec=importlib.util.spec_from_file_location('ci_matrix',path)
 ci=importlib.util.module_from_spec(spec);spec.loader.exec_module(ci)
 class MatrixTests(unittest.TestCase):
+    def test_release_predicate_matches_only_pushed_version_tags(self):
+        # check-packages.py reuses this predicate to decide whether the apps
+        # repository is a hard gate, so it must agree with the matrix.
+        for event, ref, expected in (
+            ('push', 'refs/tags/v0.1.0', True),
+            ('push', 'refs/tags/v0.2.0_alpha1', True),
+            ('push', 'refs/heads/main', False),
+            ('pull_request', 'refs/tags/v0.1.0', False),
+            ('workflow_dispatch', 'refs/tags/v0.1.0', False),
+        ):
+            self.assertEqual(ci.is_release(event, ref), expected)
+            self.assertEqual(ci.configuration(event, ref)['release'],
+                             'true' if expected else 'false')
+
     def test_main_and_prs_smoke_without_release_secrets(self):
         for event,ref in [('push','refs/heads/main'),('pull_request','refs/tags/v0.1.0')]:
             result=ci.configuration(event,ref)

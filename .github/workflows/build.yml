@@ -42,6 +42,9 @@ jobs:
           persist-credentials: false
       - run: python3 scripts/check.py
       - name: Check Alpine package availability across all targets
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
         run: python3 scripts/check-packages.py
       - name: Validate shell and Actions workflows
         run: |
