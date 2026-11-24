@@ -744,7 +744,11 @@ def gzip_file_members(path):
 
 
 def promote_apk(path, cache):
-    """apk v2 cache names use the first eight hex digits of the control SHA-1."""
+    """Recover APKv2 cache names from the first eight hex digits of the control SHA-1."""
+    with path.open("rb") as stream:
+        if stream.read(4) in (b"ADB.", b"ADBd", b"ADBc"):
+            # APKv3 packages use their own index and remain in the image input archive.
+            return
     for compressed, raw in gzip_file_members(path):
         with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
             if ".PKGINFO" not in archive.getnames():

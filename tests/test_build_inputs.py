@@ -71,6 +71,19 @@ class ApkTests(unittest.TestCase):
             builder.promote_apk(path, cache)
             self.assertEqual(len(list(cache.glob("demo-1.*.apk"))), 1)
 
+    def test_kernel_apkv3_is_not_promoted_with_an_apkv2_cache_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "linux-uflinux-x86_64-7.3.6-r14.apk"
+            cache = Path(tmp) / "cache"
+            cache.mkdir()
+            for header in (b"ADB.", b"ADBd", b"ADBc"):
+                with self.subTest(header=header):
+                    contents = header + b"payload"
+                    path.write_bytes(contents)
+                    builder.promote_apk(path, cache)
+                    self.assertEqual(list(cache.iterdir()), [])
+                    self.assertEqual(path.read_bytes(), contents)
+
     def test_missing_data_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "test.apk"
