@@ -202,7 +202,7 @@ desktop() {
 		transmission-gtk celluloid gnome-disk-utility file-roller
 		eudev eudev-openrc elogind elogind-openrc dbus dbus-openrc dbus-x11 util-linux-login
 		greetd greetd-openrc uflinux-regreet=0.2.0-r1 cage polkit-elogind
-		connman=2.0-r4 connman-openrc=2.0-r4 connman-vpn=2.0-r4 connman-vpn-openrc=2.0-r4
+		connman=2.0-r5 connman-openrc=2.0-r5 connman-vpn=2.0-r5 connman-vpn-openrc=2.0-r5
 		bluez bluez-openrc iwd iwd-openrc busybox-openrc tzdata wireguard-tools
 		pipewire pipewire-pulse wireplumber wireplumber-logind upower font-ubuntu-nerd font-ubuntu-mono-nerd font-noto font-noto-cjk papirus-icon-theme adwaita-icon-theme simp1e-cursors-adw-dark
 		mesa-dri-gallium mesa-va-gallium libva-utils doas sudo"

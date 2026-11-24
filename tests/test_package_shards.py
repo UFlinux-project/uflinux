@@ -47,6 +47,8 @@ class ShardTests(unittest.TestCase):
             archives = ['build-apks.tar.gz', 'sources.tar.gz', 'cargo-sources.tar.gz']
             if origin == 'musl':
                 archives.append('musl-bolt-profiles.tar.gz')
+            if origin in builder.CLANG_APORTS:
+                archives.append(builder.CLANG_APORT_PROFILES)
             for name in archives:
                 (inputs / name).write_bytes(b'fixture retained archive')
 
@@ -116,14 +118,16 @@ class InputArchiveTests(unittest.TestCase):
                     (target/name).write_bytes(b'input')
                 if origin == 'musl':
                     (target/'musl-bolt-profiles.tar.gz').write_bytes(b'profile')
+                if origin in builder.CLANG_APORTS:
+                    (target/builder.CLANG_APORT_PROFILES).write_bytes(b'profile')
                 if origin in builder.CARGO_ORIGINS:
                     (target/'cargo-sources.tar.gz').write_bytes(b'cargo')
             (directory/'image-apks.tar.gz').write_bytes(b'image')
             command=[sys.executable,str(builder.PROJECT/'scripts/release-inputs.py'),'--arch','x86_64','--version','0.1.0']
             subprocess.run(command,cwd=root,check=True,capture_output=True)
             entries=(root/'out/SHA256SUMS-x86_64-inputs').read_text().splitlines()
-            self.assertEqual(len(entries),24)
-            self.assertEqual(len(list((root/'out').glob('uflinux-*.tar.gz'))),24)
+            self.assertEqual(len(entries),26)
+            self.assertEqual(len(list((root/'out').glob('uflinux-*.tar.gz'))),26)
             (directory/'uflinux-settings/cargo-sources.tar.gz').unlink()
             rejected=subprocess.run(command,cwd=root,capture_output=True)
             self.assertNotEqual(rejected.returncode,0)

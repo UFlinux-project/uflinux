@@ -270,9 +270,9 @@ class DesktopDependencyTests(unittest.TestCase):
             self.assertIn(package, self.depends, f"desktop depends is missing {package}")
 
     def test_desktop_pins_connman_with_vpnd(self):
-        # connman-vpn only exists in the r4 rebuild that enables --enable-wireguard.
-        self.assertIn("connman=2.0-r4", self.pinned)
-        self.assertIn("connman-vpn=2.0-r4", self.pinned)
+        # The VPN subpackage needs the UFLinux WireGuard-enabled recipe.
+        self.assertIn("connman=2.0-r5", self.pinned)
+        self.assertIn("connman-vpn=2.0-r5", self.pinned)
 
     def test_live_iso_profile_keeps_the_release_asset_within_its_limit(self):
         profile = (Path(builder.PROJECT) / "profiles/mkimg.uflinux.sh").read_text()

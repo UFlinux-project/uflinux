@@ -204,8 +204,9 @@ for origin in ("uflinux-regreet",):
     assert "export CARGO_PROFILE_RELEASE_OPT_LEVEL=s" in (ROOT / "aports" / origin / "APKBUILD").read_text(), \
         f"{origin} must build with -Os"
 for origin in ("connman", "gpu-screen-recorder"):
-    assert re.search(r'^\texport (C|CXX)FLAGS="\$(C|CXX)FLAGS .*-Os', (ROOT / "aports" / origin / "APKBUILD").read_text(), re.M), \
-        f"{origin} must append -Os to abuild's flags"
+    recipe = (ROOT / "aports" / origin / "APKBUILD").read_text()
+    for flag in ("clang-22", "-O3", "-flto=full", "-fprofile-generate", "-fprofile-use=", "llvm-bolt"):
+        assert flag in recipe, f"{origin} recipe is missing {flag}"
 assert "debug" not in profile, "Settings release profile must use Cargo's default debug level"
 for origin in ("uflinux-settings",):
     recipe = (ROOT / "aports" / origin / "APKBUILD").read_text()

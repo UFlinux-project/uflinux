@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 
-from builder import ARCHES, PROJECT, unsigned_digest, remove_tree, PACKAGE_NAMES, package_output
+from builder import ARCHES, CLANG_APORT_PROFILES, CLANG_APORTS, PROJECT, unsigned_digest, remove_tree, PACKAGE_NAMES, package_output
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--arch", choices=ARCHES, required=True)
@@ -37,6 +37,11 @@ if compile_record.get("rds_pgo"):
 musl_training = out / "inputs" / args.arch / "musl-bolt-profiles.tar.gz"
 if musl_training.is_file():
     optimization_args += ["--musl-bolt-profiles", str(musl_training)]
+if args.package is None or args.package in CLANG_APORTS:
+    clang_training = out / "inputs" / args.arch / CLANG_APORT_PROFILES
+    if not clang_training.is_file():
+        raise RuntimeError("Clang aport optimization profiles are missing")
+    optimization_args += ["--clang-aport-profiles", str(clang_training)]
 suffix = args.package or "all"
 cache = PROJECT / ".cache/reproducibility" / suffix
 if cache.exists():

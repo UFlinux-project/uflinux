@@ -2,35 +2,108 @@
 # Based on Alpine's pinned ConnMan 2.0 recipe; retain its musl and D-Bus fixes.
 pkgname=connman
 pkgver=2.0
-pkgrel=4
+pkgrel=5
 pkgdesc="ConnMan with iwd enterprise credentials for UFLinux"
 url="https://git.kernel.org/pub/scm/network/connman/connman.git"
 arch="x86_64 aarch64 ppc64le riscv64"
 license="GPL-2.0-only"
 depends="dbus"
-makedepends="autoconf automake dbus-dev glib-dev libmnl-dev libnftnl-dev libtool readline-dev linux-headers"
+makedepends="clang22 lld22 llvm22 compiler-rt autoconf automake dbus-dev glib-dev libmnl-dev libnftnl-dev libtool readline-dev linux-headers"
 subpackages="$pkgname-dbg $pkgname-doc $pkgname-dev $pkgname-vpn $pkgname-vpn-openrc:vpn_openrc $pkgname-openrc"
 source="https://www.kernel.org/pub/linux/network/connman/connman-$pkgver.tar.xz
 	libresolv.patch dbus-rules.patch implicit.patch fix-implicit-basename.patch
-	iwd-external-credentials.patch connman.initd connman.confd connman-vpn.initd connman-vpn.confd"
+	iwd-external-credentials.patch connman.initd connman.confd connman-vpn.initd connman-vpn.confd
+	pgo-train.sh"
 prepare() {
 	default_prepare
 	autoreconf -vif
 }
+_bolt_optimize() (
+	local bins=$1 work=$2 profiles=$3 name binary
+	export PATH="${UFLINUX_APORT_BOLT_DIR:+$UFLINUX_APORT_BOLT_DIR:}$PATH"
+	shift 3
+	if [ "${UFLINUX_APORT_PROFILE_REPLAY:-0}" != 1 ]; then
+		mkdir -p "$work/bolt"
+		for name; do
+			rm -f "$work/bolt/$name".fdata.*
+			llvm-bolt "$bins/$name" --instrument --no-huge-pages -o "$work/bolt/$name" \
+				--instrumentation-file="$work/bolt/$name.fdata" --instrumentation-file-append-pid \
+				--instrumentation-binpath="$work/bolt/$name"
+		done
+		_train "$work/bolt" "$work"
+		for name; do
+			merge-fdata "$work/bolt/$name".fdata.* > "$profiles/$name.fdata"
+		done
+	fi
+	for name; do
+		test -s "$profiles/$name.fdata"
+		binary=$(realpath "$bins/$name")
+		llvm-bolt "$binary" --data="$profiles/$name.fdata" -o "$binary.optimized" \
+			--no-huge-pages --reorder-blocks=ext-tsp --reorder-functions=cdsort \
+			--update-debug-sections --dyno-stats
+		mv "$binary.optimized" "$binary"
+	done
+)
+
+_train() {
+	timeout -k 5 45 dbus-run-session -- sh "$srcdir/pgo-train.sh" "$@"
+}
+
+_train_binaries() {
+	local bins=$1 path
+	mkdir -p "$bins"
+	for path in src/connmand src/connmand-wait-online vpn/connman-vpnd client/connmanctl; do
+		ln -sf "$builddir/$path" "$bins/${path##*/}"
+	done
+}
+
 build() {
-	# Size-optimized release build. The flags are appended so that abuild's
-	# hardening defaults stay in place; the trailing -Os replaces the default
-	# -O2 and -fstack-clash-protection is restated explicitly.
-	export CFLAGS="$CFLAGS -Os -fstack-clash-protection"
+	local work="$srcdir/optimization" profiles
+	profiles=${UFLINUX_APORT_PROFILES:-"$work/profiles"}
+	export CC=clang-22
+	export AR=/usr/lib/llvm22/bin/llvm-ar RANLIB=/usr/lib/llvm22/bin/llvm-ranlib NM=/usr/lib/llvm22/bin/llvm-nm
+	export CFLAGS="$CFLAGS -O3 -flto=full"
+	export LDFLAGS="$LDFLAGS -O3 -fuse-ld=lld -flto=full -Wl,-z,nostart-stop-gc"
+	case "$CARCH" in
+		x86_64|aarch64) LDFLAGS="$LDFLAGS -Wl,--emit-relocs,-z,nopack-relative-relocs" ;;
+	esac
+	# AArch64 musl runs the fini array. Omit DT_FINI so BOLT hooks that array.
+	if [ "$CARCH" = aarch64 ]; then
+		LDFLAGS="$LDFLAGS -Wl,-fini,0"
+	fi
+
+	mkdir -p "$work/raw" "$profiles"
 	./configure --build="$CBUILD" --host="$CHOST" --prefix=/usr --sysconfdir=/etc \
 		--mandir=/usr/share/man --infodir=/usr/share/info --localstatedir=/var \
 		--enable-pie --enable-iwd --disable-wifi --disable-bluetooth --disable-ofono \
 		--disable-dundee --disable-neard --disable-nmcompat --disable-wispr \
 		--disable-openvpn --disable-vpnc --enable-wireguard --disable-l2tp \
 		--with-firewall=nftables --with-systemdunitdir=
-	make
+	_train_binaries "$work/bin"
+	if [ "${UFLINUX_APORT_PROFILE_REPLAY:-0}" != 1 ]; then
+		rm -f "$work/raw/"*.profraw
+		make CFLAGS="$CFLAGS -fprofile-generate" LDFLAGS="$LDFLAGS -fprofile-generate"
+		LLVM_PROFILE_FILE="$work/raw/%m-%p.profraw" _train "$work/bin" "$work"
+		/usr/lib/llvm22/bin/llvm-profdata merge -o "$profiles/pgo.profdata" "$work/raw/"*.profraw
+	fi
+
+	test -s "$profiles/pgo.profdata"
+	# Upstream clean rules remove the generated headers and their directory.
+	make -j1 clean
+	make CFLAGS="$CFLAGS -fprofile-use=$profiles/pgo.profdata" \
+		LDFLAGS="$LDFLAGS -fprofile-use=$profiles/pgo.profdata"
+
+	case "$CARCH" in
+		x86_64|aarch64)
+			_bolt_optimize "$work/bin" "$work" "$profiles" connmand connmand-wait-online connman-vpnd connmanctl
+			;;
+	esac
 }
-check() { make check; }
+check() {
+	make check
+	_train "$srcdir/optimization/bin" "$srcdir/optimization"
+}
+
 package() {
 	make DESTDIR="$pkgdir" install
 	install -Dm644 src/main.conf "$pkgdir/etc/connman/main.conf"
@@ -67,4 +140,5 @@ f5cdeba7ebdbe52424ebe74088d57ff57d45dcdbfa6f17cfe7bfa59308c8188174e0f44a86ffaea8
 73f505a777df04039ca51bc3959aa89969a0bbc21ea971fb98e04e9b5851553de35955453ed859f5a6273724bbcce38f13012950c6cb4e0a2bc80bc531ccff1e  connman.confd
 e287dc4b4bc0eeb8a5baaeedad480ce15a658fc24d91ce89bc3a95686e349c94a80970c8d3d23ee86ed4888458659dd2c2bbb1f557c31e791984100952ecc17e  connman-vpn.initd
 079ead76719a1070474bab58b4aa75013cbc2f6d8224f5b656c60bc6ee685dd4f83871de52afff7597e3f11fd575d4e12c996359cc3fccc9f76632727191c3db  connman-vpn.confd
+8a863670c8b7881c0307bea4cb5bcad004e1a354aefb39e297deb192d748965202ff97732768576e9e6cb3bd9d852ff8b81fb39a61f1e159ea578e2a827620cd  pgo-train.sh
 "

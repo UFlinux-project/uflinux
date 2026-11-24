@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from builder import ARCHES, BUILD_KEY, CARGO_ORIGINS, LOCK, MUSL_BOLT_ARCHES, PACKAGE_NAMES, link_or_copy, package_revision, package_version, sha, unsigned_digest
+from builder import ARCHES, BUILD_KEY, CARGO_ORIGINS, CLANG_APORT_PROFILES, CLANG_APORTS, LOCK, MUSL_BOLT_ARCHES, PACKAGE_NAMES, link_or_copy, package_revision, package_version, sha, unsigned_digest
 from sbom import apk_metadata
 
 
@@ -52,6 +52,8 @@ def collect(out, arch, version):
             required.add('musl-bolt-profiles.tar.gz')
         if origin in CARGO_ORIGINS:
             required.add('cargo-sources.tar.gz')
+        if origin in CLANG_APORTS:
+            required.add(CLANG_APORT_PROFILES)
         if record.get('settings_pgo'):
             if origin != 'uflinux-settings' or arch not in {'x86_64', 'aarch64'}:
                 raise ValueError('Unexpected Settings optimization shard')

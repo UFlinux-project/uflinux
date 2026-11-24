@@ -19,6 +19,10 @@
     "source_date_epoch": 1792597816
   },
   "sources": {
+    "llvm-bolt": {
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.3/llvm-project-22.1.3.src.tar.xz",
+      "sha512": "3557a955d55471671ae2f7b9c809affd59a29a6fb1e70a2a5d040dc1c6376246deb0635be8ca36cae09112981760e9afb128c822e5554bd722589fb8dee3f0df"
+    },
     "grub-q6a": {
       "url": "https://ftp.gnu.org/gnu/grub/grub-2.14.tar.xz",
       "sha512": "5008e3b70072798d2b34301219fe174cc6bcfead40a9ab25fe32f30c62a392ffb7bf2eb629d481f4a6c19c2925324af3f08d7043e62623e746be2d8b3cbd1182"
@@ -120,7 +124,7 @@
   },
   "connman": {
     "version": "2.0",
-    "pkgrel": 3,
+    "pkgrel": 5,
     "wifi_backend": "iwd",
     "patches": {
       "dbus-rules.patch": "ca9c19e029636c09955ce558c784586527870fd85bf0fac298eda18cf2be93a457bd10ff29c24d4610afc9e361fa795902504612653d9c397bb0af84771c88c4",

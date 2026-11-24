@@ -2,7 +2,7 @@
 # Upstream 6.1.7 plus the UFLinux patch series (V4L2 mem2mem encoder, WebP screenshots).
 pkgname=gpu-screen-recorder
 pkgver=6.1.7
-pkgrel=3
+pkgrel=4
 pkgdesc="GPU screen capture backend for uflinux-screencapture"
 url="https://git.dec05eba.com/gpu-screen-recorder/about/"
 arch="x86_64 aarch64 ppc64le riscv64"
@@ -10,10 +10,10 @@ license="GPL-3.0-only"
 depends="dbus-libs ffmpeg-libs libcap2 libcap-setcap libdrm libpulse libturbojpeg libwebp
 	libx11 libxcomposite libxdamage libxfixes libxrandr mesa-egl mesa-gbm mesa-gl
 	pipewire-libs wayland-libs-client wayland-libs-egl vulkan-loader"
-makedepends="build-base meson abuild-meson ninja pkgconfig linux-headers vulkan-headers
+makedepends="clang22 lld22 llvm22 compiler-rt build-base meson abuild-meson ninja pkgconfig linux-headers vulkan-headers
 	ffmpeg-dev libx11-dev libxcomposite-dev libxrandr-dev libxfixes-dev libxdamage-dev
 	wayland-dev libdrm-dev dbus-dev pulseaudio-dev libva-dev libcap-dev mesa-dev
-	pipewire-dev"
+	pipewire-dev libjpeg-turbo-dev libwebp-dev"
 subpackages="$pkgname-dbg $pkgname-doc $pkgname-dev"
 # The KMS capture server needs CAP_SYS_ADMIN; ship the file capability so that
 # direct monitor capture works for a normal user without a setuid root helper.
@@ -30,7 +30,8 @@ source="$pkgname-$pkgver.tar.gz::https://dec05eba.com/snapshot/gpu-screen-record
 	0009-Docs-document-v4l2-encoder-and-webp-screenshots.patch
 	0010-Encoder-align-v4l2-m2m-capture-for-Qualcomm-venus.patch
 	0011-Check-recording-video-output.patch
-	gsr-kms-capability.initd"
+	gsr-kms-capability.initd
+	pgo-train.sh pgo-flush.c"
 # The upstream snapshot has no leading directory component.
 builddir="$srcdir"
 
@@ -38,26 +39,85 @@ prepare() {
 	default_prepare
 }
 
+_bolt_optimize() (
+	local bins=$1 work=$2 profiles=$3 name binary
+	export PATH="${UFLINUX_APORT_BOLT_DIR:+$UFLINUX_APORT_BOLT_DIR:}$PATH"
+	shift 3
+	if [ "${UFLINUX_APORT_PROFILE_REPLAY:-0}" != 1 ]; then
+		mkdir -p "$work/bolt"
+		for name; do
+			rm -f "$work/bolt/$name".fdata.*
+			llvm-bolt "$bins/$name" --instrument --no-huge-pages -o "$work/bolt/$name" \
+				--instrumentation-file="$work/bolt/$name.fdata" --instrumentation-file-append-pid \
+				--instrumentation-binpath="$work/bolt/$name"
+		done
+		GSR_PROFILE_PRELOAD="$work/pgo-flush.so" _train "$work/bolt" "$work"
+		for name; do
+			merge-fdata "$work/bolt/$name".fdata.* > "$profiles/$name.fdata"
+		done
+	fi
+	for name; do
+		test -s "$profiles/$name.fdata"
+		binary=$(realpath "$bins/$name")
+		llvm-bolt "$binary" --data="$profiles/$name.fdata" -o "$binary.optimized" \
+			--no-huge-pages --reorder-blocks=ext-tsp --reorder-functions=cdsort \
+			--update-debug-sections --dyno-stats
+		mv "$binary.optimized" "$binary"
+	done
+)
+
+_train() {
+	timeout -k 5 45 sh "$srcdir/pgo-train.sh" "$@"
+}
+
 build() {
-	# -Db_lto=true matches the patched repo's Alpine CI build (LTO verified on
-	# x86_64 and aarch64 there). abuild-meson uses --buildtype=plain, so the
-	# optimization level comes from abuild's CFLAGS; the trailing -Os replaces
-	# the default -O2.
-	export CFLAGS="$CFLAGS -Os"
-	export CXXFLAGS="$CXXFLAGS -Os"
+	local work="$srcdir/optimization" profiles flags
+	profiles=${UFLINUX_APORT_PROFILES:-"$work/profiles"}
+	export CC=clang-22 CC_LD=lld
+	export CFLAGS="$CFLAGS -O3 -flto=full"
+	export LDFLAGS="$LDFLAGS -O3 -flto=full"
+	case "$CARCH" in
+		x86_64|aarch64) LDFLAGS="$LDFLAGS -Wl,--emit-relocs,-z,nopack-relative-relocs" ;;
+	esac
+	# AArch64 musl runs the fini array. Omit DT_FINI so BOLT hooks that array.
+	if [ "$CARCH" = aarch64 ]; then
+		LDFLAGS="$LDFLAGS -Wl,-fini,0"
+	fi
+
+	mkdir -p "$work/raw" "$profiles"
+	flags="-fprofile-use=$profiles/pgo.profdata"
+	if [ "${UFLINUX_APORT_PROFILE_REPLAY:-0}" != 1 ]; then
+		flags=-fprofile-generate
+		"$CC" -shared -fPIC -o "$work/pgo-flush.so" "$srcdir/pgo-flush.c"
+	fi
 	abuild-meson build \
-		-Db_lto=true \
+		-Dc_args="$CFLAGS $flags" -Dc_link_args="$LDFLAGS $flags" \
 		-Dsystemd=false -Dcapabilities=false -Dnvidia_suspend_fix=false \
 		-Dapp_audio=false -Dportal=true -Dplugin_examples=false \
 		-Dffmpeg_static=false -Dv4l2_encoder=true -Dwebp_screenshots=true
+
+	if [ "${UFLINUX_APORT_PROFILE_REPLAY:-0}" != 1 ]; then
+		rm -f "$work/raw/"*.profraw
+		meson compile -C build
+		GSR_PROFILE_PRELOAD="$work/pgo-flush.so" LLVM_PROFILE_FILE="$work/raw/%m-%p.profraw" \
+			_train "$builddir/build" "$work"
+		/usr/lib/llvm22/bin/llvm-profdata merge -o "$profiles/pgo.profdata" "$work/raw/"*.profraw
+		flags="-fprofile-use=$profiles/pgo.profdata"
+		meson configure build -Dc_args="$CFLAGS $flags" -Dc_link_args="$LDFLAGS $flags"
+	fi
+
+	test -s "$profiles/pgo.profdata"
 	meson compile -C build
+
+	case "$CARCH" in
+		x86_64|aarch64)
+			_bolt_optimize "$builddir/build" "$work" "$profiles" gpu-screen-recorder gsr-cli gsr-kms-server
+			;;
+	esac
 }
 
 check() {
-	# The recorder refuses to run as root, and abuild runs check() unprivileged.
-	# --info needs a display and a GPU, so only exercise the root-free paths.
-	./build/gpu-screen-recorder --version
-	./build/gsr-cli --help
+	_train "$builddir/build" "$srcdir/optimization"
 }
 
 package() {
@@ -80,4 +140,6 @@ bce60884c450802c1e34cc740342fc156090068c6afb59991da1164733a862377ae6b5085c5f45c3
 f54cbce46a8eab9396c4aed2f9ab7af6a8247ebf31ecf0b7f10b980fb74681e2f28a7abc0f977b397a08a6518990f83c953400d990dec65e8ccea90cebbe3060  0010-Encoder-align-v4l2-m2m-capture-for-Qualcomm-venus.patch
 54bb1c3610b9418ca8413ea18830f201684732f99c33f55f29fd0c23d90b0c400e08f7af7b1e2fd8dda6c0ab6ace653e1fde06c64cd7b115d03d104461b1bb06  0011-Check-recording-video-output.patch
 28c1aeb36adcf1ea408f0273f1143bcd18bedc39f63ddc86c86305f39752beed27f426b76ee9d8033b204e9d39a63880ee7142ebe9c668bb049db5d5d3310cc3  gsr-kms-capability.initd
+c7a5c77abc17a3722b9086dd0a31bc20b572c34aa75639ffe3124ac067a0cc10c4091695b9cba6163edbc19c2c9c258255771c9be4e047b15da2d39fd4e50696  pgo-train.sh
+2f6f3c8d035df073596647c87ff5ed85e92864382b9efa763ac2b28eebd999b0a4786133d850e5988bf7c4a70b3ea17e8b18e151d050d2d3c2cfd44d1ad66c7a  pgo-flush.c
 "

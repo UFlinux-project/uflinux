@@ -78,6 +78,17 @@ remain distinct for concurrent builds. Shards support only `packages`/`bootstrap
 and never receive release keys. The ordinary `--stage all` command retains its
 existing sequential local-build behavior.
 
+The ConnMan and GPU Screen Recorder aports use Clang 22 with `-O3`, full LTO,
+and instrumentation PGO on every package architecture. On x86_64 and aarch64,
+the builder also compiles the pinned LLVM BOLT tool and uses it to profile and
+rewrite the installed executables before packaging. The aports run the
+workloads again against the finished binaries. ConnMan's workload uses a private
+D-Bus session for manager, VPN, and client operations. GPU Screen Recorder's
+headless workload covers startup, argument parsing, and the CLI and KMS
+helpers. GPU capture and encoding require a separate hardware workload.
+The package stage archives the profiles in `clang-aport-profiles.tar.gz`.
+Clean rebuilds replay them with `--clang-aport-profiles`.
+
 After every origin succeeds, collect their outputs before running `sign`, `image`
 and `verify` as usual:
 

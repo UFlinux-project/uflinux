@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from builder import ARCHES, CARGO_ORIGINS, MUSL_BOLT_ARCHES, PACKAGE_NAMES, check_asset_size, link_or_copy, sha
+from builder import ARCHES, CARGO_ORIGINS, CLANG_APORT_PROFILES, CLANG_APORTS, MUSL_BOLT_ARCHES, PACKAGE_NAMES, check_asset_size, link_or_copy, sha
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--arch", choices=ARCHES, required=True)
@@ -14,13 +14,15 @@ out = Path("out")
 directory = out / "inputs" / args.arch
 inputs = sorted(directory.rglob("*.tar.gz"))
 if (directory / "build-apks.tar.gz").exists():
-    expected = {"build-apks.tar.gz", "image-apks.tar.gz", "cargo-sources.tar.gz", "sources.tar.gz"}
+    expected = {"build-apks.tar.gz", "image-apks.tar.gz", "cargo-sources.tar.gz", "sources.tar.gz", CLANG_APORT_PROFILES}
 else:
     expected = {"image-apks.tar.gz"}
     for origin in PACKAGE_NAMES:
         expected.update({origin + "/build-apks.tar.gz", origin + "/sources.tar.gz"})
         if origin in CARGO_ORIGINS:
             expected.add(origin + "/cargo-sources.tar.gz")
+        if origin in CLANG_APORTS:
+            expected.add(origin + "/" + CLANG_APORT_PROFILES)
     # Non-Rust jobs may retain an existing Cargo cache during local builds.
     expected.update(str(p.relative_to(directory)) for p in inputs
                     if p.name == "cargo-sources.tar.gz" and p.parent.name in PACKAGE_NAMES)

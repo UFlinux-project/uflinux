@@ -460,6 +460,9 @@ APPS_KEY = "uflinux3.ec384.pub"
 APPS_TRUSTED_KEY = "etc/apk/keys/" + APPS_KEY
 APPS_BUNDLED_KEY = PROJECT / ("aports/uflinux/" + APPS_KEY)
 MUSL_BOLT_ARCHES = {"x86_64", "aarch64", "riscv64"}
+CLANG_APORT_BOLT_ARCHES = {"x86_64", "aarch64"}
+CLANG_APORTS = {"connman", "gpu-screen-recorder"}
+CLANG_APORT_PROFILES = "clang-aport-profiles.tar.gz"
 PACKAGE_NAMES = {
     "musl": {"musl", "musl-dev", "musl-dbg", "musl-utils", "musl-libintl"},
     "connman": {"connman", "connman-dbg", "connman-dev", "connman-doc", "connman-openrc",
@@ -963,6 +966,8 @@ class Builder:
         directory = f"cd /project/aports/{origin} && "
         if origin == "musl":
             env = dict(env, SOURCE_DATE_EPOCH=str(LOCK["musl"]["source_date_epoch"]))
+        if origin in CLANG_APORTS:
+            env = dict(env, UFLINUX_APORT_PROFILES=f"/home/builder/aport-profiles/{origin}")
         dependency_env = dict(env, SUDO_APK="apk", REPODEST="/home/builder/packages")
         self.chroot("sh", "-ec", directory + "abuild -F deps", extra_env=dependency_env)
         try:
@@ -1001,6 +1006,19 @@ class Builder:
             # abuild writes the shared caches as uid 1000 with mode 640, so the host
             # runner cannot read them back when Actions saves or copies the cache.
             self.chroot("sh", "-ec", "chmod -R a+rX /cache/cargo /cache/target")
+
+    def build_clang_aport_bolt(self):
+        spec = LOCK["sources"]["llvm-bolt"]
+        archive = download(spec, self.cache / "downloads")
+        staged = "/var/cache/distfiles/" + Path(spec["url"]).name
+        shutil.copyfile(archive, self.root / staged.lstrip("/"))
+        work = "/home/builder/aport-bolt"
+        self.chroot("install", "-d", "-o", "builder", "-g", "builder", work)
+        self.chroot("su", "-s", "/bin/sh", "builder", "-c",
+                    f"tar -xf {staged} -C {work} && "
+                    f"sh /project/settings/scripts/build-bolt.sh {work}",
+                    extra_env={"JOBS": str(ARCHES[self.args.arch]["jobs"])})
+        return work + "/pgo-tools/bin"
 
     def package(self):
         self.tools("git", "shadow", "sudo", "alpine-sdk")
@@ -1130,7 +1148,30 @@ class Builder:
                     archive.extractall(rds_profile_dir, filter="data")
                 self.chroot("chown", "-R", "builder:builder", rds_profiles)
                 env["UFLINUX_RDS_PGO_REPLAY"] = "1"
-        self.build_origins(selected, env)
+        clang_origins = CLANG_APORTS.intersection(selected)
+        if clang_origins:
+            clang_profile_dir = self.root / "home/builder/aport-profiles"
+            remove_tree(clang_profile_dir)
+            clang_profile_dir.mkdir()
+            replay = getattr(self.args, "clang_aport_profiles", None)
+            if replay:
+                with tarfile.open(replay, "r:gz") as archive:
+                    archive.extractall(clang_profile_dir, filter="data")
+                if {path.name for path in clang_profile_dir.iterdir()} != clang_origins:
+                    raise ValueError("Clang profiles do not match the selected aports")
+                env["UFLINUX_APORT_PROFILE_REPLAY"] = "1"
+            self.chroot("chown", "-R", "builder:builder", "/home/builder/aport-profiles")
+        if self.args.arch in CLANG_APORT_BOLT_ARCHES and clang_origins:
+            self.chroot("apk", "add", "--no-progress", "--virtual", ".uflinux-aport-bolt",
+                        "clang22", "cmake", "samurai", "llvm22-dev", "llvm22-static",
+                        "llvm22-gtest", "zlib-dev", "zstd-dev", "libxml2-dev")
+            try:
+                env["UFLINUX_APORT_BOLT_DIR"] = self.build_clang_aport_bolt()
+                self.build_origins(selected, env)
+            finally:
+                self.chroot("apk", "del", "--no-progress", ".uflinux-aport-bolt")
+        else:
+            self.build_origins(selected, env)
         from sbom import apk_metadata
         versions = {}
         for origin in selected:
@@ -1165,6 +1206,8 @@ class Builder:
             archive_tree(rds_profile_dir, rds_training_archive, self.epoch)
         if "musl" in selected and self.args.arch in MUSL_BOLT_ARCHES:
             archive_tree(self.root / "tmp/musl-bolt-profile", inputs / "musl-bolt-profiles.tar.gz", self.epoch)
+        if clang_origins:
+            archive_tree(clang_profile_dir, inputs / CLANG_APORT_PROFILES, self.epoch)
         cargo = self.cache / self.args.arch / "cargo"
         names = [str(p.relative_to(cargo)) for p in (cargo / "registry/cache", cargo / "registry/index", cargo / "git/db") if p.exists()]
         if names:
@@ -1811,10 +1854,14 @@ def main(argv=None):
     parser.add_argument("--settings-pgo-profiles", type=Path, help="Replay archived Settings training profiles")
     parser.add_argument("--rds-pgo", action="store_true", help="Build the native Remote Desktop shard with PGO and BOLT")
     parser.add_argument("--rds-pgo-profiles", type=Path, help="Replay archived Remote Desktop training profiles")
+    parser.add_argument("--clang-aport-profiles", type=Path, help="Replay archived ConnMan and GPU Screen Recorder profiles")
     musl_profiles = parser.add_mutually_exclusive_group()
     musl_profiles.add_argument("--musl-bolt-profiles", type=Path, help="Replay an archived musl BOLT profile")
     musl_profiles.add_argument("--refresh-musl-bolt-profile", action="store_true", help="Record a fresh musl BOLT profile")
     args = parser.parse_args(argv)
+    if args.clang_aport_profiles and (
+            args.stage not in {"packages", "all"} or args.package not in CLANG_APORTS | {None}):
+        parser.error("--clang-aport-profiles requires a ConnMan or GPU Screen Recorder package build")
     if (args.musl_bolt_profiles or args.refresh_musl_bolt_profile) and (
             args.stage not in {"packages", "all"} or args.package not in {None, "musl"}
             or args.arch not in MUSL_BOLT_ARCHES):
