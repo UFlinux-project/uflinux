@@ -69,7 +69,10 @@ Beside the Start button, application buttons come from the pinned favourites in
 click opens a menu listing the group's windows with a close button each, and,
 for applications, entries to launch another window, pin or unpin the button and
 close all windows. Resting the pointer on a running app opens thumbnail cards
-with activation and close controls. Settings → Appearance → Window previews
+with activation and close controls. The card is built and captured offscreen
+during the hover dwell and is only mapped once its first visible thumbnail is
+painted, so it never pops in with an icon that is later replaced by an image;
+after a short timeout it reveals with the icon fallback instead. Settings → Appearance → Window previews
 controls both these images and labwc's native Alt+Tab thumbnail grid; it defaults
 to enabled. With previews disabled, hover cards retain window titles and Alt+Tab
 uses the classic list. Pinned buttons can be rearranged by dragging one onto another; the
@@ -80,8 +83,9 @@ the popover is open and dismisses notifications individually or together. Mako
 itself is styled as dark rounded cards grouped by summary, anchored bottom-right
 above the panel.
 
-Taskbar capture runs only while cards are visible, at up to two frames per second
-per window and four frames per second in total. Images are at most 320 × 180;
+Taskbar capture runs while a card is prepared or visible, at up to two frames per second
+per window and four frames per second in total; leaving the icon cancels it at once, and
+only the tiles visible without scrolling are captured up front. Images are at most 320 × 180;
 the cache holds at most 64 images (under 16 MiB), expiring after 30 seconds.
 One source buffer at a time is limited to 16 megapixels / 64 MiB. Images stay in
 memory. Unsupported capture, oversized sources, and ambiguous app-ID/title pairs

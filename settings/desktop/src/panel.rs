@@ -22,7 +22,10 @@ struct TaskbarConfig {
 impl Default for TaskbarConfig {
     fn default() -> Self {
         Self {
-            pinned: vec!["org.gnome.Ptyxis.desktop".into(), "org.uflinux.Files.desktop".into()],
+            pinned: vec![
+                "org.gnome.Ptyxis.desktop".into(),
+                "org.uflinux.Files.desktop".into(),
+            ],
         }
     }
 }
@@ -60,11 +63,168 @@ const TRAY_MAX_COLUMNS: i32 = 8;
 /// Beyond this many icons deep the flyout scrolls rather than growing upwards
 /// past the panel and off the screen.
 const TRAY_FLYOUT_MAX_HEIGHT: i32 = 240;
-/// How long the pointer rests on a task before its window list previews itself.
-const TASK_PREVIEW_DELAY_MS: u64 = 350;
+/// How long the pointer has to rest on a task before its preview starts
+/// preparing: the card is built offscreen and capture begins. Nothing at all
+/// happens before this, so sweeping the pointer across the taskbar is free.
+const TASK_PREVIEW_INTENT_DELAY_MS: u64 = 120;
+/// How long the pointer rests on a task before its finished window list
+/// previews itself. Capture runs during this window, so a card that can show a
+/// thumbnail appears with one already in it rather than swapping an icon for an
+/// image on screen.
+const TASK_PREVIEW_DELAY_MS: u64 = 450;
+/// Longest a preview waits for a first frame. A compositor that cannot capture,
+/// or a window it cannot identify, still gets a card with its app icons.
+const TASK_PREVIEW_REVEAL_TIMEOUT_MS: u64 = 900;
 /// How long the preview stays up after the pointer leaves the task, so the
 /// pointer can travel from the button into the card and close a window there.
 const TASK_PREVIEW_GRACE_MS: u64 = 250;
+
+/// Layout cell one preview tile occupies, including the gap that separates it
+/// from its neighbour. The card estimates how many thumbnails a hover has to be
+/// able to show before it has an allocation of its own from these.
+const PREVIEW_TILE_WIDTH: i32 = 260;
+const PREVIEW_TILE_SPACING: i32 = 8;
+/// How often a card that is still being prepared looks for a finished
+/// thumbnail. Halved once the card is on screen, where a repaint is a refresh
+/// rather than the difference between a finished card and an empty one.
+const TASK_PREVIEW_TICK_MS: u64 = 50;
+
+/// One tile of a preview card: the window it shows, the `Picture` its thumbnail
+/// is painted into, and the button whose label tracks the window title.
+struct PreviewTile {
+    window: uflinux_desktop::taskbar::Window,
+    picture: glib::WeakRef<gtk::Picture>,
+    title: glib::WeakRef<gtk::Button>,
+}
+
+/// A preview card built for a hovered task and kept offscreen until it is worth
+/// showing. `prefetch` is how many tiles the viewport can hold, estimated from
+/// the card width because the card has no allocation yet; that is the set
+/// capture is allowed to start from.
+struct PreviewCard {
+    content: gtk::Box,
+    scroll: gtk::ScrolledWindow,
+    tiles: Vec<PreviewTile>,
+    prefetch: usize,
+}
+
+/// Everything that deciding to show a prepared card needs, cheap enough to hand
+/// to the loop that may be the one to do it.
+#[derive(Clone)]
+struct PreviewReveal {
+    card: gtk::Popover,
+    content: gtk::Box,
+    /// Set once the card is on screen; from then on its own unmap owns the
+    /// capture worker and a preview handle is inert.
+    shown: Rc<std::cell::Cell<bool>>,
+    output: String,
+}
+impl PreviewReveal {
+    /// Puts a finished card on screen. Cheap to call repeatedly: the first
+    /// caller wins and every later call is a no-op.
+    fn reveal(&self, app: Option<&App>) {
+        if self.shown.get() {
+            return;
+        }
+        // The task may have ended while the card was being prepared, which
+        // unparents the popover; popping up an orphaned popover is a fatal GTK
+        // critical.
+        if self.card.parent().is_none() {
+            return;
+        }
+        self.shown.set(true);
+        if let Some(app) = app {
+            app.hide_except_task(&self.card);
+            app.task_opened(&self.output);
+        }
+        self.card.set_child(Some(&self.content));
+        self.card.popup();
+    }
+}
+
+/// A preview card that is being prepared, or is already shown, for one task
+/// button. Giving up on the handle is the only teardown path for a card that
+/// never appeared, so a hover that ends early cannot leave a capture worker or
+/// a Wayland connection behind.
+#[derive(Clone)]
+struct Preview {
+    reveal: PreviewReveal,
+    /// Shared with the paint loop, which stops as soon as it sees this set.
+    cancelled: Rc<std::cell::Cell<bool>>,
+    request: Rc<std::cell::RefCell<Option<crate::thumbnails::Request>>>,
+}
+impl Preview {
+    /// True while the card is still offscreen and can be thrown away.
+    fn prepared(&self) -> bool {
+        !self.reveal.shown.get()
+    }
+    /// Gives up on a card that never appeared. Its capture worker goes
+    /// immediately; the paint loop notices the next time it wakes.
+    fn abandon(&self) {
+        self.cancelled.set(true);
+        self.request.borrow_mut().take();
+    }
+}
+impl Drop for Preview {
+    fn drop(&mut self) {
+        // A task button can be dropped while its card is still being prepared,
+        // which must not leave the capture worker running for a card nobody
+        // will ever see.
+        if self.prepared() {
+            self.abandon();
+        }
+    }
+}
+
+/// State of the loop that paints one preview card, from the moment the card is
+/// built offscreen until it leaves the screen.
+struct PreviewLoop {
+    reveal: PreviewReveal,
+    cancelled: Rc<std::cell::Cell<bool>>,
+    request: Rc<std::cell::RefCell<Option<crate::thumbnails::Request>>>,
+    receiver: RefCell<Option<async_channel::Receiver<crate::thumbnails::Image>>>,
+    scroll: glib::WeakRef<gtk::ScrolledWindow>,
+    tiles: RefCell<Vec<PreviewTile>>,
+    /// How many tiles the card can show without scrolling. A thumbnail in one
+    /// of these is what a card waits for before it appears; the rest stream in
+    /// once it is up.
+    prefetch: usize,
+    /// Shortest a card is held back after being built, so a preview only ever
+    /// appears under a pointer that has actually rested on the task.
+    reveal_after: std::time::Duration,
+    /// Longest a card waits for a first frame. Past this it appears with the
+    /// app icons it already has.
+    deadline: std::time::Instant,
+    started: std::time::Instant,
+    /// What the capture worker is currently asked to produce.
+    active: RefCell<Vec<(WindowId, String, String)>>,
+    /// Ticks a shown card has spent off screen in a row.
+    hidden: std::cell::Cell<u8>,
+    /// The countdown to the next tick, re-armed by every tick because a card
+    /// that is being prepared looks for a finished thumbnail far more often
+    /// than one already on screen looks for a refresh.
+    source: std::cell::Cell<Option<glib::SourceId>>,
+}
+impl PreviewLoop {
+    /// Gives up on a card that never appeared, from inside the loop itself.
+    fn stop(&self) {
+        self.cancelled.set(true);
+        self.request.borrow_mut().take();
+    }
+}
+
+/// Turns a captured frame into something a `Picture` can show.
+fn paint_thumbnail(picture: &gtk::Picture, image: &crate::thumbnails::Image) {
+    let bytes = glib::Bytes::from_owned(image.pixels.clone());
+    let texture = gtk::gdk::MemoryTexture::new(
+        image.width,
+        image.height,
+        gtk::gdk::MemoryFormat::R8g8b8a8Premultiplied,
+        &bytes,
+        image.width as usize * 4,
+    );
+    picture.set_paintable(Some(&texture));
+}
 
 struct TaskButton {
     button: gtk::Button,
@@ -72,9 +232,15 @@ struct TaskButton {
     icon: String,
     menu: gtk::Popover,
     preview: gtk::Popover,
+    /// The card being prepared for the current hover, once the pointer has
+    /// lingered long enough to be worth building one.
+    preview_state: Rc<std::cell::RefCell<Option<Preview>>>,
 }
 impl Drop for TaskButton {
     fn drop(&mut self) {
+        // A card that had not appeared yet is abandoned here, which releases
+        // its capture worker before the widgets it paints into go away.
+        self.preview_state.borrow_mut().take();
         // GTK aborts when a visible popover is destroyed, and a task button is
         // dropped as soon as its app stops advertising a window.
         self.menu.popdown();
@@ -317,22 +483,34 @@ impl Panel {
         }
     }
     pub fn hide_task_menus(&self, except: Option<&gtk::Popover>) {
-        let menus: Vec<_> = self
+        let buttons: Vec<_> = self
             .surfaces
             .borrow()
             .iter()
             .flat_map(|surface| {
-                surface
-                    .buttons
-                    .values()
-                    .flat_map(|item| [item.menu.clone(), item.preview.clone()])
+                surface.buttons.values().map(|item| {
+                    (
+                        item.menu.clone(),
+                        item.preview.clone(),
+                        item.preview_state.clone(),
+                    )
+                })
             })
             .collect();
-        for menu in menus {
+        for (menu, card, state) in &buttons {
+            // Any card that is not the one being kept open is finished with:
+            // one that had not appeared yet is thrown away, and one that was
+            // shown releases the capture worker it was keeping alive. A card
+            // that never appeared is invisible, so the loop below cannot see it.
+            if except != Some(card) {
+                state.borrow_mut().take();
+            }
             // Only a shown popover has a hide handler to run, so skipping the
             // rest keeps a close from reporting a status change that never was.
-            if except != Some(&menu) && menu.is_visible() {
-                menu.popdown();
+            for popover in [menu, card] {
+                if except != Some(popover) && popover.is_visible() {
+                    popover.popdown();
+                }
             }
         }
     }
@@ -555,9 +733,12 @@ impl Panel {
                     true
                 } else {
                     // Take a menu or preview down before the button that owns
-                    // it disappears; GTK aborts on a visible popover.
+                    // it disappears; GTK aborts on a visible popover. A card
+                    // that had not appeared yet is abandoned by the same take
+                    // that releases its handle.
                     item.menu.popdown();
                     item.preview.popdown();
+                    item.preview_state.borrow_mut().take();
                     surface.tasks.remove(&item.button);
                     false
                 }
@@ -599,17 +780,24 @@ impl Panel {
                             }
                         }
                     });
+                    let preview_state = Rc::new(std::cell::RefCell::new(None::<Preview>));
                     let click = gtk::GestureClick::new();
                     click.set_button(3);
                     let context_id = group.id.clone();
                     let context_menu = menu.clone();
                     let context_preview = preview.clone();
                     let context_output = output.clone();
+                    let context_state = preview_state.clone();
                     let weak = Rc::downgrade(self);
                     click.connect_pressed(move |_, _, _, _| {
                         let Some(panel) = weak.upgrade() else { return };
                         context_menu.popdown();
                         context_preview.popdown();
+                        // A card that was still being prepared would otherwise
+                        // keep capturing for a hover the menu just replaced.
+                        if let Some(preview) = context_state.borrow_mut().take() {
+                            preview.abandon();
+                        }
                         let Some(group) = panel
                             .taskbar
                             .borrow()
@@ -630,8 +818,9 @@ impl Panel {
                         context_menu.popup();
                     });
                     button.add_controller(click);
-                    // Resting the pointer on a running app previews its windows
-                    // in a card of its own, with capture limited to its lifetime.
+                    // Resting the pointer on a task first builds its preview
+                    // card offscreen and starts capturing; the card only shows
+                    // once it is finished, so nothing pops in under the pointer.
                     let hover = gtk::EventControllerMotion::new();
                     let pending = Rc::new(std::cell::Cell::new(None::<glib::SourceId>));
                     let grace = Rc::new(std::cell::Cell::new(None::<glib::SourceId>));
@@ -641,8 +830,9 @@ impl Panel {
                         let menu = menu.clone();
                         let card = preview.clone();
                         let preview_id = group.id.clone();
-                        let weak = Rc::downgrade(self);
                         let preview_output = output.clone();
+                        let state = preview_state.clone();
+                        let weak = Rc::downgrade(self);
                         move |_, _, _| {
                             if let Some(id) = pending.take() {
                                 id.remove();
@@ -650,24 +840,40 @@ impl Panel {
                             if let Some(id) = grace.take() {
                                 id.remove();
                             }
-                            // Re-entering the anchor keeps an existing card up.
+                            // Re-entering the anchor keeps an existing card up,
+                            // and a card already being prepared finishes on its
+                            // own schedule rather than being built twice.
                             if menu.is_visible() || card.is_visible() || weak.upgrade().is_none() {
                                 return;
                             }
+                            let prepared = state
+                                .borrow()
+                                .as_ref()
+                                .is_some_and(|preview| preview.prepared());
+                            if prepared {
+                                return;
+                            }
+                            // A card that was shown and has since closed left a
+                            // spent handle behind; dropping it here makes room
+                            // for the next one.
+                            state.borrow_mut().take();
                             let weak = weak.clone();
                             let card = card.clone();
                             let grace = grace.clone();
                             let id = preview_id.clone();
                             let output = preview_output.clone();
                             let elapsed = pending.clone();
+                            let state = state.clone();
+                            let hovered_at = std::time::Instant::now();
                             let source = glib::timeout_add_local_once(
-                                std::time::Duration::from_millis(TASK_PREVIEW_DELAY_MS),
+                                std::time::Duration::from_millis(TASK_PREVIEW_INTENT_DELAY_MS),
                                 move || {
                                     elapsed.take();
                                     let Some(panel) = weak.upgrade() else { return };
-                                    // The task may have ended while the timer ran,
-                                    // which unparents the popover; popping up an
-                                    // orphaned popover is a fatal GTK critical.
+                                    // The task may have ended while the timer
+                                    // ran, which unparents the popover; popping
+                                    // up an orphaned popover is a fatal GTK
+                                    // critical.
                                     if card.parent().is_none() {
                                         return;
                                     }
@@ -683,16 +889,13 @@ impl Panel {
                                     if group.windows.is_empty() {
                                         return;
                                     }
-                                    let Some(column) = panel.task_preview(&card, &group, &grace)
-                                    else {
-                                        return;
-                                    };
-                                    if let Some(app) = panel.app.upgrade() {
-                                        app.hide_except_task(&card);
-                                        app.task_opened(&output);
-                                    }
-                                    card.set_child(Some(&column));
-                                    card.popup();
+                                    // The handle keeps the card and its capture
+                                    // worker alive; the paint loop decides when
+                                    // the finished card is good enough to show.
+                                    let preview = panel.prefetch_preview(
+                                        &card, &group, &grace, &output, hovered_at,
+                                    );
+                                    *state.borrow_mut() = preview;
                                 },
                             );
                             pending.set(Some(source));
@@ -702,12 +905,17 @@ impl Panel {
                         let pending = pending;
                         let grace = grace.clone();
                         let card = preview.clone();
+                        let state = preview_state.clone();
                         move |_| {
                             if let Some(id) = pending.take() {
                                 id.remove();
                             }
                             if card.is_visible() {
                                 arm_preview_grace(&grace, &card);
+                            } else if let Some(preview) = state.borrow_mut().take() {
+                                // A pointer that moved on before the card was
+                                // finished must not leave a capture running.
+                                preview.abandon();
                             }
                         }
                     });
@@ -812,6 +1020,7 @@ impl Panel {
                         icon: String::new(),
                         menu,
                         preview,
+                        preview_state,
                     }
                 });
                 if item.icon != group.icon {
@@ -978,21 +1187,21 @@ impl Panel {
 
     /// Contents for the hover preview: one tile per window, with its icon,
     /// title and close button above the thumbnail. Deliberately not the right-click menu, so resting the
-    /// pointer on a task never looks like a context menu appeared. Like the
-    /// menu, the card is rebuilt on demand and thrown away when it closes.
+    /// pointer on a task never looks like a context menu appeared. The card is
+    /// built offscreen and thrown away when it closes.
     fn task_preview(
         self: &Rc<Self>,
         card: &gtk::Popover,
         group: &Group,
         grace: &Rc<std::cell::Cell<Option<glib::SourceId>>>,
-    ) -> Option<gtk::Box> {
+    ) -> Option<PreviewCard> {
         if group.windows.is_empty() {
             return None;
         }
         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
         column.add_css_class("uflinux-popup-card");
         column.add_css_class("uflinux-task-preview");
-        let cards = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let cards = gtk::Box::new(gtk::Orientation::Horizontal, PREVIEW_TILE_SPACING);
         let available_width = self
             .surfaces
             .borrow()
@@ -1005,12 +1214,19 @@ impl Panel {
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Never)
             .propagate_natural_height(true)
-            .min_content_width(available_width.min(260))
+            .min_content_width(available_width.min(PREVIEW_TILE_WIDTH))
             .max_content_width(available_width)
             .propagate_natural_width(true)
             .build();
         column.append(&scroll);
-        let mut pictures = Vec::new();
+        // Only the tiles the card can show without scrolling are captured up
+        // front; asking for more would spend Wayland round trips on thumbnails
+        // nobody has scrolled to yet. The card has no allocation while it is
+        // offscreen, so the count comes from the width it was built for.
+        let prefetch = (available_width / (PREVIEW_TILE_WIDTH + PREVIEW_TILE_SPACING))
+            .clamp(1, group.windows.len() as i32) as usize;
+        let mut tiles = Vec::with_capacity(group.windows.len());
+        let previews_enabled = self.previews_enabled.get();
         for window in &group.windows {
             let window_id = window.id;
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
@@ -1048,17 +1264,22 @@ impl Panel {
                 }
             });
             let tile = gtk::Box::new(gtk::Orientation::Vertical, 4);
-            tile.set_width_request(260);
+            tile.set_width_request(PREVIEW_TILE_WIDTH);
             tile.append(&row);
-            if self.previews_enabled.get() {
-                let picture = gtk::Picture::new();
-                picture.set_size_request(256, 144);
-                picture.set_content_fit(gtk::ContentFit::Contain);
-                picture.set_can_shrink(true);
-                picture.update_property(&[gtk::accessible::Property::Label(&format!(
-                    "Preview of {}",
-                    window.title
-                ))]);
+            let picture = gtk::Picture::new();
+            picture.set_size_request(256, 144);
+            picture.set_content_fit(gtk::ContentFit::Contain);
+            picture.set_can_shrink(true);
+            // Hidden until a thumbnail has actually been painted into it. A
+            // tile that cannot show an image shows the app icon instead, and
+            // the state of this node is also how a test can tell that a card
+            // appeared with its picture already in it.
+            picture.set_visible(false);
+            picture.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Preview of {}",
+                window.title
+            ))]);
+            if previews_enabled {
                 let fallback = gtk::Image::new();
                 fallback.set_pixel_size(48);
                 if let Ok(icon) = gio::Icon::for_string(&group.icon) {
@@ -1073,18 +1294,15 @@ impl Panel {
                 let weak_stack = stack.downgrade();
                 picture.connect_paintable_notify(move |picture| {
                     if let Some(stack) = weak_stack.upgrade() {
-                        stack.set_visible_child_name(if picture.paintable().is_some() {
-                            "image"
-                        } else {
-                            "fallback"
-                        });
+                        let has_image = picture.paintable().is_some();
+                        picture.set_visible(has_image);
+                        stack.set_visible_child_name(if has_image { "image" } else { "fallback" });
                     }
                 });
                 let image_button = gtk::Button::builder().child(&stack).build();
                 let target = activate.clone();
                 image_button.connect_clicked(move |_| target.emit_clicked());
                 tile.append(&image_button);
-                pictures.push((window.clone(), picture.downgrade(), activate.downgrade()));
             }
             row.append(&activate);
             let close = gtk::Button::from_icon_name("window-close-symbolic");
@@ -1102,183 +1320,24 @@ impl Panel {
             });
             row.append(&close);
             cards.append(&tile);
-        }
-        if !pictures.is_empty() {
-            let weak = Rc::downgrade(self);
-            let content = column.downgrade();
-            let scroll = scroll.downgrade();
-            let popup = card.downgrade();
-            // Each popup owns its worker; unmapping cancels it independently of
-            // another popup opening during deferred teardown.
-            let request = Rc::new(RefCell::new(None::<crate::thumbnails::Request>));
-            let cancel = request.clone();
-            let cache_owner = Rc::downgrade(self);
-            column.connect_unmap(move |_| {
-                cancel.borrow_mut().take();
-                let owner = cache_owner.clone();
-                glib::timeout_add_local_once(std::time::Duration::from_secs(30), move || {
-                    if let Some(panel) = owner.upgrade() {
-                        panel
-                            .thumbnail_cache
-                            .borrow_mut()
-                            .retain(|_, (at, _)| at.elapsed().as_secs() < 30);
-                    }
-                });
+            tiles.push(PreviewTile {
+                window: window.clone(),
+                picture: picture.downgrade(),
+                title: activate.downgrade(),
             });
-            glib::spawn_future_local(async move {
-                let mut receiver = None::<async_channel::Receiver<crate::thumbnails::Image>>;
-                let mut active = Vec::new();
-                let paint = |picture: &gtk::Picture, image: &crate::thumbnails::Image| {
-                    let bytes = glib::Bytes::from_owned(image.pixels.clone());
-                    let texture = gtk::gdk::MemoryTexture::new(
-                        image.width,
-                        image.height,
-                        gtk::gdk::MemoryFormat::R8g8b8a8Premultiplied,
-                        &bytes,
-                        image.width as usize * 4,
-                    );
-                    picture.set_paintable(Some(&texture));
-                };
-                loop {
-                    glib::timeout_future(std::time::Duration::from_millis(100)).await;
-                    let (Some(panel), Some(content), Some(scroll)) =
-                        (weak.upgrade(), content.upgrade(), scroll.upgrade())
-                    else {
-                        break;
-                    };
-                    if !content.is_mapped() || !panel.previews_enabled.get() {
-                        break;
-                    }
-                    let all = panel
-                        .taskbar
-                        .borrow()
-                        .groups()
-                        .into_iter()
-                        .flat_map(|g| g.windows)
-                        .collect::<Vec<_>>();
-                    if pictures.iter().any(|(window, _, _)| {
-                        !all.iter()
-                            .any(|w| w.id == window.id && w.app_id == window.app_id)
-                    }) {
-                        if let Some(popup) = popup.upgrade() {
-                            popup.popdown();
-                        }
-                        break;
-                    }
-                    // Titles change during ordinary browsing and terminal
-                    // activity. Update the existing card and replace capture
-                    // requests, without unmapping the popup under the pointer.
-                    for (window, picture, activate) in &mut pictures {
-                        if let Some(current) = all.iter().find(|w| w.id == window.id) {
-                            if current.title != window.title {
-                                *window = current.clone();
-                                if let Some(picture) = picture.upgrade() {
-                                    // The stable window ID is unchanged. Keep
-                                    // its last image until the new capture is
-                                    // ready rather than flashing the fallback.
-                                    picture.update_property(&[gtk::accessible::Property::Label(
-                                        &format!("Preview of {}", window.title),
-                                    )]);
-                                }
-                                if let Some(activate) = activate.upgrade() {
-                                    activate.set_label(&window.title);
-                                    activate.set_tooltip_text(Some(&window.title));
-                                }
-                            }
-                        }
-                    }
-                    let valid = |window: &uflinux_desktop::taskbar::Window| {
-                        all.iter().any(|w| {
-                            w.id == window.id
-                                && w.app_id == window.app_id
-                                && w.title == window.title
-                        }) && all
-                            .iter()
-                            .filter(|w| w.app_id == window.app_id && w.title == window.title)
-                            .count()
-                            == 1
-                    };
-                    let mut visible = Vec::new();
-                    for (window, picture, _) in &pictures {
-                        let Some(picture) = picture.upgrade() else {
-                            continue;
-                        };
-                        if !valid(window) {
-                            picture.set_paintable(None::<&gtk::gdk::Texture>);
-                            continue;
-                        }
-                        if picture
-                            .parent()
-                            .and_then(|stack| stack.compute_bounds(&scroll))
-                            .is_some_and(|r| {
-                                r.x() < scroll.width() as f32 && r.x() + r.width() > 0.0
-                            })
-                        {
-                            visible.push(window.clone());
-                            if let Some((at, image)) = panel
-                                .thumbnail_cache
-                                .borrow_mut()
-                                .get_mut(&window.id)
-                                .filter(|(at, image)| {
-                                    at.elapsed().as_secs() < 30
-                                        && image.app_id == window.app_id
-                                        && image.title == window.title
-                                })
-                            {
-                                *at = std::time::Instant::now();
-                                if picture.paintable().is_none() {
-                                    paint(&picture, image);
-                                }
-                            }
-                        } else {
-                            picture.set_paintable(None::<&gtk::gdk::Texture>);
-                        }
-                    }
-                    let ids = visible
-                        .iter()
-                        .map(|w| (w.id, w.app_id.clone(), w.title.clone()))
-                        .collect::<Vec<_>>();
-                    if ids != active {
-                        request.borrow_mut().take();
-                        receiver = None;
-                        if !visible.is_empty() {
-                            let (worker, rx) = crate::thumbnails::start(visible);
-                            request.replace(Some(worker));
-                            receiver = Some(rx);
-                        }
-                        active = ids;
-                    }
-                    if let Some(rx) = &receiver {
-                        while let Ok(image) = rx.try_recv() {
-                            if let Some((window, picture, _)) = pictures.iter().find(|(w, _, _)| {
-                                w.id == image.id
-                                    && w.app_id == image.app_id
-                                    && w.title == image.title
-                            }) {
-                                if valid(window) {
-                                    if let Some(picture) = picture.upgrade() {
-                                        paint(&picture, &image);
-                                    }
-                                    let mut cache = panel.thumbnail_cache.borrow_mut();
-                                    cache.retain(|_, (at, _)| at.elapsed().as_secs() < 30);
-                                    while cache.len() >= 64 {
-                                        if let Some(id) = cache
-                                            .iter()
-                                            .min_by_key(|(_, (at, _))| *at)
-                                            .map(|(id, _)| *id)
-                                        {
-                                            cache.remove(&id);
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                    cache.insert(image.id, (std::time::Instant::now(), image));
-                                }
-                            }
-                        }
-                    }
+        }
+        if previews_enabled {
+            // A card that was shown trims what it left behind in the cache. A
+            // card that was abandoned never mapped at all and is torn down by
+            // the handle that owns it.
+            let weak = Rc::downgrade(self);
+            column.connect_unmap(move |_| {
+                if let Some(panel) = weak.upgrade() {
+                    panel
+                        .thumbnail_cache
+                        .borrow_mut()
+                        .retain(|_, (at, _)| at.elapsed().as_secs() < 30);
                 }
-                request.borrow_mut().take();
             });
         }
         // The pointer has to be able to cross from the task button into the
@@ -1294,7 +1353,12 @@ impl Panel {
         let grace_leave = grace.clone();
         motion.connect_leave(move |_| arm_preview_grace(&grace_leave, &card_leave));
         column.add_controller(motion);
-        Some(column)
+        Some(PreviewCard {
+            content: column,
+            scroll,
+            tiles,
+            prefetch,
+        })
     }
 
     fn sync(self: &Rc<Self>, monitors: &gio::ListModel) {
@@ -1783,4 +1847,308 @@ impl Panel {
             clock_time,
         })
     }
+
+    /// Builds a preview card offscreen and starts capturing the thumbnails it
+    /// can show without scrolling, so that revealing it later hands over a
+    /// finished card instead of assembling one under the pointer. The returned
+    /// handle owns the card until it is shown or given up on.
+    fn prefetch_preview(
+        self: &Rc<Self>,
+        card: &gtk::Popover,
+        group: &Group,
+        grace: &Rc<std::cell::Cell<Option<glib::SourceId>>>,
+        output: &str,
+        hovered_at: std::time::Instant,
+    ) -> Option<Preview> {
+        let built = self.task_preview(card, group, grace)?;
+        let reveal = PreviewReveal {
+            card: card.clone(),
+            content: built.content.clone(),
+            shown: Rc::new(std::cell::Cell::new(false)),
+            output: output.to_owned(),
+        };
+        let cancelled = Rc::new(std::cell::Cell::new(false));
+        let request = Rc::new(std::cell::RefCell::new(None));
+        if !self.previews_enabled.get() {
+            // Without thumbnails there is nothing to wait for, so the card of
+            // app icons appears straight away and no loop is started for it.
+            reveal.reveal(self.app.upgrade().as_deref());
+            return Some(Preview {
+                reveal,
+                cancelled,
+                request,
+            });
+        }
+        // A frame captured for this window moments ago is already a finished
+        // tile, so re-hovering an app reveals as soon as the dwell is up.
+        {
+            let cache = self.thumbnail_cache.borrow();
+            for tile in built.tiles.iter().take(built.prefetch) {
+                let Some(picture) = tile.picture.upgrade() else {
+                    continue;
+                };
+                if let Some((_, image)) = cache.get(&tile.window.id)
+                    && image.app_id == tile.window.app_id
+                    && image.title == tile.window.title
+                {
+                    paint_thumbnail(&picture, image);
+                }
+            }
+        }
+        // Thumbnails of the windows that fit next to each other are what a user
+        // sees first; the rest stream in after the card is up and scrolled to.
+        let mut targets: Vec<uflinux_desktop::taskbar::Window> = built
+            .tiles
+            .iter()
+            .take(built.prefetch)
+            .map(|tile| tile.window.clone())
+            .collect();
+        targets.sort_by_key(|window| window.id);
+        targets.dedup();
+        let (worker, receiver) = crate::thumbnails::start(targets.clone());
+        request.replace(Some(worker));
+        let receiver = Some(receiver);
+        let scroll: glib::WeakRef<gtk::ScrolledWindow> = glib::WeakRef::new();
+        scroll.set(Some(&built.scroll));
+        // Both countdowns are measured from the hover, not from the moment the
+        // card was built, so the dwell a card waits for is the dwell the user
+        // actually gave the task.
+        let state = Rc::new(PreviewLoop {
+            reveal: reveal.clone(),
+            cancelled: cancelled.clone(),
+            request: request.clone(),
+            receiver: RefCell::new(receiver),
+            scroll,
+            tiles: RefCell::new(built.tiles),
+            prefetch: built.prefetch,
+            reveal_after: std::time::Duration::from_millis(TASK_PREVIEW_DELAY_MS),
+            deadline: hovered_at + std::time::Duration::from_millis(TASK_PREVIEW_REVEAL_TIMEOUT_MS),
+            started: hovered_at,
+            active: RefCell::new(
+                targets
+                    .iter()
+                    .map(|window| (window.id, window.app_id.clone(), window.title.clone()))
+                    .collect(),
+            ),
+            hidden: std::cell::Cell::new(0),
+            source: std::cell::Cell::new(None),
+        });
+        let weak = Rc::downgrade(self);
+        let source = {
+            let state = state.clone();
+            glib::timeout_add_local(
+                std::time::Duration::from_millis(TASK_PREVIEW_TICK_MS),
+                move || preview_tick(weak.clone(), state.clone()),
+            )
+        };
+        state.source.set(Some(source));
+        Some(Preview {
+            reveal,
+            cancelled,
+            request,
+        })
+    }
+}
+
+/// Repaints one preview card and decides whether it is finished enough to
+/// appear. The returned delay is when to look again; `None` ends the card.
+fn preview_tick(panel: Weak<Panel>, state: Rc<PreviewLoop>) -> glib::ControlFlow {
+    let Some(next) = preview_paint(&panel, &state) else {
+        state.source.take();
+        return glib::ControlFlow::Break;
+    };
+    // Re-armed every tick because a card that is still being prepared looks for
+    // a finished thumbnail far more often than one already on screen looks for
+    // a refresh, and a timer cannot change its own interval.
+    let id = {
+        let next_state = state.clone();
+        glib::timeout_add_local(next, move || {
+            preview_tick(panel.clone(), next_state.clone())
+        })
+    };
+    state.source.set(Some(id));
+    glib::ControlFlow::Break
+}
+
+/// True when the tile a picture belongs to is inside the card's viewport, so
+/// that a card with six windows only captures the two the user can see.
+fn tile_in_viewport(state: &PreviewLoop, picture: &gtk::Picture) -> bool {
+    let Some(scroll) = state.scroll.upgrade() else {
+        return false;
+    };
+    let Some(stack) = picture.parent().and_downcast::<gtk::Stack>() else {
+        return false;
+    };
+    if !stack.is_ancestor(&scroll) {
+        return false;
+    }
+    let Some(bounds) = stack.compute_bounds(&scroll) else {
+        return false;
+    };
+    bounds.x() < scroll.width() as f32 && bounds.x() + bounds.width() > 0.0
+}
+
+fn preview_paint(panel: &Weak<Panel>, state: &Rc<PreviewLoop>) -> Option<std::time::Duration> {
+    if state.cancelled.get() {
+        return None;
+    }
+    let panel = panel.upgrade()?;
+    let shown = state.reveal.shown.get();
+    if shown && !state.reveal.content.is_mapped() {
+        // The card was closed, or the panel it belongs to is hidden, so there
+        // is nothing left to paint into. A tick or two of grace covers a card
+        // that is briefly unmapped while another popup takes over.
+        state.hidden.set(state.hidden.get() + 1);
+        if state.hidden.get() >= 4 {
+            return None;
+        }
+    } else {
+        state.hidden.set(0);
+    }
+    if !panel.previews_enabled.get() {
+        return None;
+    }
+    let groups = panel.taskbar.borrow().groups();
+    let live: Vec<&uflinux_desktop::taskbar::Window> = groups
+        .iter()
+        .flat_map(|group| group.windows.iter())
+        .collect();
+    // Frames the worker finished since the last look go straight into the cache,
+    // which is what keeps a re-hover, a scroll and a second tile in the card
+    // from asking the compositor for the same picture twice.
+    let mut incoming = Vec::new();
+    if let Some(receiver) = state.receiver.borrow().as_ref() {
+        while let Ok(image) = receiver.try_recv() {
+            incoming.push(image);
+        }
+    }
+    if !incoming.is_empty() {
+        let mut cache = panel.thumbnail_cache.borrow_mut();
+        for image in incoming {
+            cache.insert(image.id, (std::time::Instant::now(), image));
+        }
+        while cache.len() > 64 {
+            let oldest = cache
+                .iter()
+                .min_by_key(|(_, (at, _))| *at)
+                .map(|(id, _)| *id);
+            let Some(id) = oldest else {
+                break;
+            };
+            cache.remove(&id);
+        }
+    }
+    let mut wanted = Vec::new();
+    {
+        let mut tiles = state.tiles.borrow_mut();
+        for (index, tile) in tiles.iter_mut().enumerate() {
+            let Some(window) = live.iter().find(|item| item.id == tile.window.id) else {
+                // The window ended. A card already on screen closes; one still
+                // being prepared is simply thrown away.
+                state.reveal.card.popdown();
+                state.stop();
+                return None;
+            };
+            if window.title != tile.window.title || window.app_id != tile.window.app_id {
+                let name = groups
+                    .iter()
+                    .find(|group| group.windows.iter().any(|item| item.id == window.id))
+                    .map(|group| group.name.as_str())
+                    .unwrap_or_default();
+                tile.window = (*window).clone();
+                let title = if window.title.is_empty() {
+                    name
+                } else {
+                    &window.title
+                };
+                if let Some(button) = tile.title.upgrade() {
+                    if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+                        label.set_label(title);
+                    }
+                    button.set_tooltip_text(Some(&window.title));
+                }
+                if let Some(picture) = tile.picture.upgrade() {
+                    picture.update_property(&[gtk::accessible::Property::Label(&format!(
+                        "Preview of {}",
+                        window.title
+                    ))]);
+                }
+            }
+            let Some(picture) = tile.picture.upgrade() else {
+                // Previews are switched off, so the tile has no picture and a
+                // card made of icons has nothing to wait for.
+                continue;
+            };
+            if shown && !tile_in_viewport(state, &picture) {
+                if picture.paintable().is_some() {
+                    // Scrolled out of sight: hand the frame back.
+                    picture.set_paintable(None::<&gtk::gdk::Texture>);
+                }
+                continue;
+            }
+            if !shown && index >= state.prefetch {
+                continue;
+            }
+            wanted.push((*window).clone());
+            if picture.paintable().is_some() {
+                // A frame the user can look at is worth keeping past a trim.
+                if let Some(entry) = panel.thumbnail_cache.borrow_mut().get_mut(&window.id) {
+                    entry.0 = std::time::Instant::now();
+                }
+                continue;
+            }
+            let cache = panel.thumbnail_cache.borrow();
+            if let Some((at, image)) = cache.get(&window.id)
+                && at.elapsed() < std::time::Duration::from_secs(30)
+                && image.app_id == window.app_id
+                && image.title == window.title
+            {
+                paint_thumbnail(&picture, image);
+            }
+        }
+    }
+    wanted.sort_by_key(|window| window.id);
+    wanted.dedup();
+    let ids: Vec<_> = wanted
+        .iter()
+        .map(|window| (window.id, window.app_id.clone(), window.title.clone()))
+        .collect();
+    if ids != *state.active.borrow() && !state.cancelled.get() {
+        state.active.replace(ids);
+        let (request, receiver) = crate::thumbnails::start(wanted);
+        // Replacing the request stops the previous worker, which is what keeps
+        // a scrolled card from paying for tiles nobody can see.
+        *state.request.borrow_mut() = Some(request);
+        *state.receiver.borrow_mut() = Some(receiver);
+    }
+    if !state.reveal.shown.get() {
+        let elapsed = state.started.elapsed();
+        let waiting = state.request.borrow().is_some();
+        let painted = state
+            .tiles
+            .borrow()
+            .iter()
+            .take(state.prefetch)
+            .any(|tile| {
+                tile.picture
+                    .upgrade()
+                    .is_some_and(|picture| picture.paintable().is_some())
+            });
+        if (elapsed >= state.reveal_after && (!waiting || painted))
+            || std::time::Instant::now() >= state.deadline
+        {
+            state.reveal.reveal(panel.app.upgrade().as_deref());
+        }
+    }
+    if state.reveal.shown.get() {
+        return Some(std::time::Duration::from_millis(100));
+    }
+    let until_deadline = state
+        .deadline
+        .saturating_duration_since(std::time::Instant::now())
+        .max(std::time::Duration::from_millis(1));
+    Some(
+        std::time::Duration::from_millis(TASK_PREVIEW_TICK_MS)
+            .min(until_deadline.max(std::time::Duration::from_millis(1))),
+    )
 }

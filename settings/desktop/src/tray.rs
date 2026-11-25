@@ -161,7 +161,9 @@ impl Tray {
             Some("/org/freedesktop/DBus"),
             None,
             gio::DBusSignalFlags::NONE,
-            move |gio::DBusSignalRef { parameters: params, .. }| {
+            move |gio::DBusSignalRef {
+                      parameters: params, ..
+                  }| {
                 let Some((name, old, _new)) = params.get::<(String, String, String)>() else {
                     return;
                 };
@@ -211,7 +213,10 @@ impl Tray {
             None,
             gio::DBusSignalFlags::NONE,
             move |signal| {
-                if !matches!(signal.signal_name, "LayoutUpdated" | "ItemsPropertiesUpdated") {
+                if !matches!(
+                    signal.signal_name,
+                    "LayoutUpdated" | "ItemsPropertiesUpdated"
+                ) {
                     return;
                 }
                 if let Some(tray) = weak.upgrade() {
@@ -304,7 +309,11 @@ impl Tray {
             Some(PATH),
             None,
             gio::DBusSignalFlags::NONE,
-            move |gio::DBusSignalRef { signal_name: signal, parameters: params, .. }| {
+            move |gio::DBusSignalRef {
+                      signal_name: signal,
+                      parameters: params,
+                      ..
+                  }| {
                 let Some((key,)) = params.get::<(String,)>() else {
                     return;
                 };
