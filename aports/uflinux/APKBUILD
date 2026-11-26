@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=27
+pkgrel=28
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -17,7 +17,7 @@ makedepends="rsvg-convert python3"
 builddir="$srcdir"
 source="uflinux-boot-menu Ubuntu.pf2 theme.txt splash.png NOTICE uflinux-image-user uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.svg uflinux-entry.svg uflinux-bullet.svg
 	uflinux-boot-assets.py uflinux-splash-original.png plymouthd.conf
-	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-initramfs-resize uflinux-plymouth.files uflinux-f2fs-resize.files kms.modules scsi.modules uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-autostart uflinux-theme-sync uflinux-install uflinux-install-gui-backend
+	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-initramfs-resize uflinux-plymouth.files uflinux-f2fs-resize.files kms.modules scsi.modules uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-prompt.sh uflinux-autostart uflinux-theme-sync uflinux-install uflinux-install-gui-backend
 	uflinux-live.initd uflinux-device.initd uflinux-zram.initd uflinux-zram.confd uflinux.desktop uflinux-logo.svg artwork-NOTICE labwc-rc.xml labwc-menu.xml
 	labwc-autostart labwc-environment mako.conf
 	gtk-settings.ini 90-uflinux.gschema.override 45-uflinux-fonts.conf firefox-defaults.js
@@ -102,6 +102,7 @@ package() {
 	install -Dm755 "$srcdir/uflinux-autostart" "$pkgdir/usr/libexec/uflinux-autostart"
 	install -Dm755 "$srcdir/uflinux-theme-sync" "$pkgdir/usr/libexec/uflinux-theme-sync"
 	install -Dm755 "$srcdir/uflinux-compositor" "$pkgdir/usr/libexec/uflinux-compositor"
+	install -Dm644 "$srcdir/uflinux-prompt.sh" "$pkgdir/etc/profile.d/30-uflinux-prompt.sh"
 	install -Dm755 "$srcdir/uflinux-network-init" "$pkgdir/usr/libexec/uflinux-network-init"
 	install -Dm755 "$srcdir/uflinux-image-user" "$pkgdir/usr/libexec/uflinux-image-user"
 	install -Dm755 "$srcdir/uflinux-install" "$pkgdir/usr/sbin/uflinux-install"
@@ -187,6 +188,7 @@ defaults() {
 	# here would delete etc/conf.d/uflinux-zram before the later zram()
 	# split can claim it.
 	amove etc/fonts etc/rc.conf.d etc/xdg etc/greetd etc/pam.d etc/connman etc/iwd etc/conf.d/connman usr/bin \
+		etc/profile.d/30-uflinux-prompt.sh \
 		usr/share/wayland-sessions usr/share/backgrounds usr/share/themes usr/share/dbus-1 \
 		usr/share/icons usr/share/glib-2.0/schemas usr/lib/firefox usr/lib/firefox-esr usr/share/licenses/uflinux-defaults
 }
@@ -314,8 +316,9 @@ b5af280d82e376cfd2ac743f89ace033c68f1c8e18c2769faf85c0ba313e0504577947b42be7e633
 e92feea7df43f10d1191032283fd882e81a63046158d362fcfb018d89dd31ba2664b6f58aa1546acc749928b31b72d67c45c985ef7595a2c651be0cf7be4b124  uflinux-splash.initd
 a4df2659edcc5ad83752f9b61ef9331885ab422c66e273ab2c8da35fa606b69d33ce20769ba9a12090535d6a4e0ed994c767c54971f1774f24e43ea08620c116  uflinux-splash-stop.initd
 d361e5e8201481c6346ee6a886592c51265112be550d5224f1a7a6e116255c2f1ab8788df579d9b8372ed7bfd19bac4b6e70e00b472642966ab5b319b99a2686  LICENSE
-e7547d393b9489bfaf96ea7f1f580099e8d01487e7a59cc897001032e0f0f424b68d77d21e92ac38953fb8df4561796990bf8694d1759b4459c03dfe26809d65  uflinux-session
+9ec207ec468e74bec18a7d82603228b12918e24b9d1130f316852a104da5b3814a712ac6ee90f9201d6770989d2e8efd270f2ae9e80dfdde2002701adc58e06f  uflinux-session
 844131c113ff067ce0ce8be00ea3621a6f04185e5c78b9387dd1f31b7bdaab502442e962cd1b3358118de581461dc0ed21a4c55695f6c31e31dc37692adedf0d  uflinux-compositor
+8aa543ab3aa7627ee538935137fcdef8bd7d4aff809df567c0e14b4fccd7353665f027712c4ba66574c978e576da0f81639b469bd9efb870013cd00aac138038  uflinux-prompt.sh
 d031d31793d9945a2afbfb5b7a86be3d3dd13dc7e1a861f16237a7c3cf1a27d77498fc7b65596a0e690b99f26017d5efa454523e61c709a9241a793a600c6248  uflinux-autostart
 0c37806c49629bb84275ed096c735d37d879483bdf4e1320fdc7ab0a0755bf376544c023227ed1d2321997c27a26128139e1865d6caac291aaf09a145a62c367  uflinux-theme-sync
 5c77ef8a6de137ecf38b1c5d4f58652a0e75413f456d10836a4980f13bbe5f92465d2a785542bda5af9ae851cf5b55f5c20f56b13dd1071f7bcc41f9154a4499  uflinux-install
@@ -330,7 +333,7 @@ e6df4f4a610b45f3426de64299f2fcc0e53691cf4f62a571cc9a3a0c168628042f31ea328e202bce
 21d2469e73dbe0d293095b5eb42baada491048d910fbd41735cf0ff7ca6225f4719d99cacc274c31532e9bcb37ac85c70c9005d146e54e852af92c1bfec6561e  labwc-rc.xml
 4d5e99153a366ec53abf1a201ec8f0d174c4235581c7178038dcaf31b540ff53b794a4ba1bb3a6090c63f96173323b42ba4868427a896bc64d7a24ef80261e45  labwc-menu.xml
 f25b2a1b852ea3519078d149f2ab86eedaddb811a2f4c6437a4e572072ddf7b758fa8b2570c9ba6f266ed2ac585a5e3f11e056a8e6e77df3de89c8814f9acb7e  labwc-autostart
-efe45afdeec66523694e7ee75a5c195b27b9e3def66793cd116f92f96d86f583302201a2a3b1ca45aff0ab3858a81cee06a04f26823fc396bea5071391d16ac0  labwc-environment
+7e2f7846e9f9e0dfad7384a2b2cf0b52c8a8c1709f5b0c0929e0d7ce98d1f163a2f46ae4de58da459042200fb876042051e0782bc07399d6e2e47ea490579242  labwc-environment
 25c5a6c4b180a5df555a9bc9282a34ebdb2c8082d9d5ead4f7eb6a64e543cb8650222f149ac558348c45f53b115e7e289b3c70432a73661977eb0eb023976a92  mako.conf
 c7e0ac667a5b31d615c188032db66a1ebedc5230f20408b5b6c6b0370cb39c516a3cc5d36bb01cd9f5de248a0d761e20b1730632857c05dbe0ea5dbfe1f6f05d  gtk-settings.ini
 94b123a679be2db186c02a5a317a159eacc05216bc077727971a3e5a25d35f8ab7bcc47fcf78cfac0ccef20a479e7e44e40c3a80e50b2c03a2509ca236263429  90-uflinux.gschema.override

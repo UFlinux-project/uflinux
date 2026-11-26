@@ -5,3 +5,6 @@ QT_QPA_PLATFORM=wayland;xcb
 # labwc has no cursor theme option in rc.xml; it reads the theme from this
 # variable, as do the XWayland clients it starts.
 XCURSOR_THEME=simp1e-cursors-adw-dark
+# busybox ash reads $ENV for interactive non-login shells, so terminals
+# started from the desktop get the same prompt as login shells.
+ENV=/etc/profile.d/30-uflinux-prompt.sh

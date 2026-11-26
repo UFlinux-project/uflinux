@@ -6,6 +6,9 @@ if [ -r /etc/uflinux-locale ]; then
 	IFS= read -r LANG < /etc/uflinux-locale || :
 fi
 export LANG=${LANG:-C.UTF-8}
+# busybox ash reads $ENV for interactive non-login shells; labwc also exports
+# this through /etc/xdg/labwc/environment for anything started later.
+export ENV=/etc/profile.d/30-uflinux-prompt.sh
 # Respect existing XDG paths and initialize standard places before any UI caches them.
 xdg-user-dirs-update || :
 # PAM/elogind owns XDG_RUNTIME_DIR. Do not create a shared fallback in /tmp.

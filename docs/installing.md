@@ -116,6 +116,9 @@ Do not mix edge packages or another Alpine release branch into this system. A
 branch upgrade requires an explicitly tested UFLinux release for the new branch.
 Review `.apk-new` files after upgrades if you have edited system defaults.
 
+The shell prompt is one of those defaults: `/etc/profile.d/30-uflinux-prompt.sh`
+sets it for every account, and a personal `~/.profile` or `~/.ashrc` overrides it.
+
 Use `~/.config/labwc/` for personal compositor overrides. Defaults live in
 `/etc/xdg`. The desktop shell uses its packaged defaults when user files are absent. The Power icon
 shows battery status where available and a bolt on desktops. Super+Space opens the

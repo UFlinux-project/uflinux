@@ -110,7 +110,7 @@ for device_id, device in devices.items():
 for path in [*ROOT.glob("scripts/*.py"), *ROOT.glob("tests/*.py"), ROOT / "aports/uflinux/uflinux-install", ROOT / "aports/uflinux/uflinux-install-gui-backend", ROOT / "aports/uflinux/uflinux-boot-assets.py"]:
     ast.parse(path.read_text(), filename=str(path))
 for path in [*ROOT.glob("scripts/*.sh"), *ROOT.glob("tests/*.sh"), *ROOT.glob("profiles/*.sh"), *ROOT.glob("rds/scripts/*.sh"), *ROOT.glob("aports/*/APKBUILD"),
-             *[ROOT / "aports/uflinux" / n for n in ("uflinux-session", "uflinux-autostart", "uflinux-live.initd", "uflinux-image-user", "uflinux-compositor", "uflinux-network-init", "uflinux-bootsplash", "uflinux-splash.initd", "uflinux-splash-stop.initd", "uflinux-device.initd", "uflinux-zram.initd")], *ROOT.glob("settings/data/*.initd"), ROOT / "settings/data/uflinux-power-button"]:
+             *[ROOT / "aports/uflinux" / n for n in ("uflinux-session", "uflinux-autostart", "uflinux-live.initd", "uflinux-image-user", "uflinux-compositor", "uflinux-network-init", "uflinux-bootsplash", "uflinux-splash.initd", "uflinux-splash-stop.initd", "uflinux-device.initd", "uflinux-zram.initd", "uflinux-prompt.sh")], *ROOT.glob("settings/data/*.initd"), ROOT / "settings/data/uflinux-power-button"]:
     subprocess.run(["sh", "-n", str(path)], check=True)
 for path in (ROOT / "aports/uflinux").glob("*.xml"):
     ET.parse(path)
@@ -157,6 +157,16 @@ for path in ("/etc/xdg/gtk-3.0/settings.ini", "/etc/xdg/gtk-4.0/settings.ini",
     assert f'install -Dm644 "$srcdir/gtk-settings.ini" "$pkgdir{path}"' in uflinux_apkbuild, \
         f"gtk-settings.ini must be installed to {path}"
 assert 'install -Dm644 "$srcdir/90-uflinux.gschema.override"' in uflinux_apkbuild
+# The prompt ships as a profile.d drop-in that /etc/profile sources last, and
+# the desktop exports ENV so a non-login ash gets it too. If the drop-in is
+# renamed in only one of the three places, terminals silently keep the
+# upstream "host:dir # " prompt.
+assert 'install -Dm644 "$srcdir/uflinux-prompt.sh" "$pkgdir/etc/profile.d/30-uflinux-prompt.sh"' in uflinux_apkbuild
+assert "etc/profile.d/30-uflinux-prompt.sh" in uflinux_apkbuild, \
+    "uflinux-defaults must claim the profile.d prompt drop-in"
+for env_file in ("uflinux-session", "labwc-environment"):
+    assert "ENV=/etc/profile.d/30-uflinux-prompt.sh" in (ROOT / "aports/uflinux" / env_file).read_text(), \
+        f"{env_file} must export ENV so interactive ash loads the prompt"
 # Settings owns the search field in its header bar, so it cannot rely on the
 # environment for its buttons either: a theme or window manager that ships the
 # built-in "menu:close" layout would hide minimize and maximize. The window pins
