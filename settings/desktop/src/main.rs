@@ -5,22 +5,22 @@ mod background;
 mod catalog;
 mod clock_watch;
 mod desktop_icons;
-mod thumbnails;
-#[path = "../../shared/wayland_capture.rs"]
-mod wayland_capture;
 #[path = "../../start-menu/src/menu.rs"]
 mod menu;
 mod notifications;
-#[path = "../../shared/recording_bus.rs"]
-mod recording_bus;
-mod recording_indicator;
 mod panel;
 #[path = "../../shared/popup.rs"]
 mod popup;
+#[path = "../../shared/recording_bus.rs"]
+mod recording_bus;
+mod recording_indicator;
 mod start_search;
 mod supervisor;
+mod thumbnails;
 mod tray;
 mod tray_menu;
+#[path = "../../shared/wayland_capture.rs"]
+mod wayland_capture;
 #[path = "../../start-menu/src/widgets.rs"]
 mod widgets;
 fn main() {

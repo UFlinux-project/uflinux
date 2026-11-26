@@ -185,16 +185,37 @@ def main():
         if ptyxis is None:
             failures.append('favorite button vanished after launch')
             return finish(failures)
+        def preview_state(expected_title):
+            """(card visible, thumbnail visible) for one hover."""
+            pump()
+            card = image = False
+            for n in nodes():
+                if n.name == expected_title:
+                    card = card or n.getState().contains(pyatspi.STATE_SHOWING)
+                elif n.name == 'Preview of ' + expected_title:
+                    image = image or n.getState().contains(pyatspi.STATE_SHOWING)
+            return card, image
+
         for expected_title in ('UFLinux preview fixture', 'UFLinux preview updated'):
             hover(ptyxis)
+            # The card is built and captured offscreen, so nothing may be
+            # visible while the hover dwell and the capture are still running.
+            time.sleep(.1)
+            if preview_state(expected_title)[0]:
+                failures.append('preview card appeared before the hover dwell expired')
+            preview = None
             deadline = time.monotonic() + 4
             while time.monotonic() < deadline:
-                pump()
-                if any(n.name == 'Preview of ' + expected_title and
-                       n.getState().contains(pyatspi.STATE_SHOWING) for n in nodes()):
+                card, image = preview_state(expected_title)
+                if card:
+                    # Revealing a card whose thumbnail is still missing is the
+                    # pop-in this feature removes: the two must appear together.
+                    if not image:
+                        dump_tree()
+                        failures.append('preview card appeared before its thumbnail was painted')
                     preview = find(lambda n: n.name == expected_title)
                     break
-                time.sleep(.1)
+                time.sleep(.02)
             else:
                 dump_tree()
                 failures.append('captured preview image did not become visible')

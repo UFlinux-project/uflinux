@@ -72,7 +72,8 @@ pub fn load() -> Catalog {
     let files = gio::AppInfo::default_for_type("inode/directory", false)
         .or_else(|| gio_unix::DesktopAppInfo::new("thunar.desktop").map(|a| a.upcast()));
     let terminal = gio_unix::DesktopAppInfo::new("foot.desktop").map(|a| a.upcast());
-    let settings = gio_unix::DesktopAppInfo::new("org.uflinux.Settings.desktop").map(|a| a.upcast());
+    let settings =
+        gio_unix::DesktopAppInfo::new("org.uflinux.Settings.desktop").map(|a| a.upcast());
     let browser = gio::AppInfo::default_for_type("x-scheme-handler/http", false);
     for info in [files, terminal, settings, browser].into_iter().flatten() {
         if let Some(mut item) = entry(&info) {

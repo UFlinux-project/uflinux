@@ -264,9 +264,7 @@ impl DesktopIcons {
                 }
             },
         );
-        self.subscriptions
-            .borrow_mut()
-            .extend([changed, owner]);
+        self.subscriptions.borrow_mut().extend([changed, owner]);
     }
 
     pub fn set_outputs(self: &Rc<Self>, outputs: Vec<Output>) {
