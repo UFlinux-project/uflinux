@@ -1,0 +1,24 @@
+# Overrides Alpine's kms.modules: only display drivers needed to bring up a
+# console inside the initramfs. simpledrm/efifb are built into the kernel, so
+# this list covers VMs and pre-simpledrm hardware; full GPU drivers (amdgpu,
+# i915, xe, nouveau, radeon) load from the real rootfs via udev instead of
+# being force-copied and force-loaded here.
+kernel/drivers/gpu/drm/tiny/bochs.ko*
+kernel/drivers/gpu/drm/tiny/cirrus-qemu.ko*
+kernel/drivers/gpu/drm/virtio/virtio-gpu.ko*
+kernel/drivers/gpu/drm/vmwgfx/vmwgfx.ko*
+kernel/drivers/gpu/drm/qxl/qxl.ko*
+kernel/drivers/gpu/drm/ast/ast.ko*
+kernel/drivers/gpu/drm/mgag200/mgag200.ko*
+kernel/drivers/gpu/drm/vboxvideo/vboxvideo.ko*
+kernel/drivers/gpu/drm/hyperv/hyperv_drm.ko*
+kernel/drivers/hv/hv_vmbus.ko*
+# Helpers required by the drivers above (depmod in mkinitfs resolves the rest).
+kernel/drivers/gpu/drm/drm_ttm_helper.ko*
+kernel/drivers/gpu/drm/drm_vram_helper.ko*
+kernel/drivers/gpu/drm/drm_exec.ko*
+kernel/drivers/gpu/drm/ttm/ttm.ko*
+kernel/drivers/i2c/algos/i2c-algo-bit.ko*
+kernel/drivers/virtio/virtio.ko*
+kernel/drivers/virtio/virtio_ring.ko*
+kernel/drivers/virtio/virtio_dma_buf.ko*

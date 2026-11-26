@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=26
+pkgrel=27
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -17,7 +17,7 @@ makedepends="rsvg-convert python3"
 builddir="$srcdir"
 source="uflinux-boot-menu Ubuntu.pf2 theme.txt splash.png NOTICE uflinux-image-user uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.svg uflinux-entry.svg uflinux-bullet.svg
 	uflinux-boot-assets.py uflinux-splash-original.png plymouthd.conf
-	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-initramfs-resize uflinux-plymouth.files uflinux-f2fs-resize.files uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-autostart uflinux-theme-sync uflinux-install uflinux-install-gui-backend
+	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-initramfs-resize uflinux-plymouth.files uflinux-f2fs-resize.files kms.modules scsi.modules uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-autostart uflinux-theme-sync uflinux-install uflinux-install-gui-backend
 	uflinux-live.initd uflinux-device.initd uflinux-zram.initd uflinux-zram.confd uflinux.desktop uflinux-logo.svg artwork-NOTICE labwc-rc.xml labwc-menu.xml
 	labwc-autostart labwc-environment mako.conf
 	gtk-settings.ini 90-uflinux.gschema.override 45-uflinux-fonts.conf firefox-defaults.js
@@ -58,6 +58,13 @@ package() {
 	install -Dm755 "$srcdir/uflinux-initramfs-resize" "$pkgdir/usr/libexec/uflinux-initramfs-resize"
 	install -Dm644 "$srcdir/uflinux-plymouth.files" "$pkgdir/etc/mkinitfs/features.d/uflinux-plymouth.files"
 	install -Dm644 "$srcdir/uflinux-f2fs-resize.files" "$pkgdir/etc/mkinitfs/features.d/uflinux-f2fs-resize.files"
+	# Slim overrides for Alpine's kms/scsi features: the initramfs only gets
+	# boot-capable display and storage drivers; the rest load from the real
+	# rootfs. builder.py puts /project/aports/uflinux first in features_dir,
+	# and these files also ship in /etc/mkinitfs/features.d so that a later
+	# `mkinitfs` on the installed system rebuilds the same slim initramfs.
+	install -Dm644 "$srcdir/kms.modules" "$pkgdir/etc/mkinitfs/features.d/kms.modules"
+	install -Dm644 "$srcdir/scsi.modules" "$pkgdir/etc/mkinitfs/features.d/scsi.modules"
 	install -Dm755 "$srcdir/uflinux-bootsplash" "$pkgdir/usr/libexec/uflinux-bootsplash"
 	install -Dm755 "$srcdir/uflinux-splash.initd" "$pkgdir/etc/init.d/uflinux-splash"
 	install -Dm755 "$srcdir/uflinux-splash-stop.initd" "$pkgdir/etc/init.d/uflinux-splash-stop"
@@ -302,6 +309,8 @@ f1c3efa7e12ec821d099c4bd0c3406ec6eade14d9da67082c24c89c55de3db624bff2b71c9a4f538
 ae4c50b6f991aa86ad177661044d6a0ed0cc7c82809a3f9b79ab9f3a3b8aceb2af7305d39922e4b4fd506bf294a748e8467699446588b8b0d64b31720086346a  uflinux-initramfs-resize
 4bbefaa0a9b58aa89a6c869b5b55392a8d140007cb68c99cbb0ad89eb6da992f9484b5b421f7281674cab230be173b915edc10b0efd94daa4cd5e4916c2472d2  uflinux-plymouth.files
 b23b999001ec892a13620fb97884dd79231666a07c21583b99504a194592759550a1afe43ecfefdb75eb6c3067246102617c1cb23d9a8b747a1f60bdec96f273  uflinux-f2fs-resize.files
+f6b20d8305fe79135da9d4b601a4df6d97c8a4a27d207503f5e5b503f35492ca739c949ac61bf1f18ebf03b7ce9471df956c9cf2c096019a50c99f33978cdb7e  kms.modules
+b5af280d82e376cfd2ac743f89ace033c68f1c8e18c2769faf85c0ba313e0504577947b42be7e6333b8f1a96bf30196fa1889981deefe83de7a96b3649eab519  scsi.modules
 e92feea7df43f10d1191032283fd882e81a63046158d362fcfb018d89dd31ba2664b6f58aa1546acc749928b31b72d67c45c985ef7595a2c651be0cf7be4b124  uflinux-splash.initd
 a4df2659edcc5ad83752f9b61ef9331885ab422c66e273ab2c8da35fa606b69d33ce20769ba9a12090535d6a4e0ed994c767c54971f1774f24e43ea08620c116  uflinux-splash-stop.initd
 d361e5e8201481c6346ee6a886592c51265112be550d5224f1a7a6e116255c2f1ab8788df579d9b8372ed7bfd19bac4b6e70e00b472642966ab5b319b99a2686  LICENSE

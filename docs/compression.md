@@ -25,6 +25,28 @@ compressor identifier and block size, and tests the complete initramfs stream.
 Results are written to `checks/ARCH/compression.json`. Source/build inventories
 include the compression policy and patch checksum from `config/sources.lock.json`.
 
+## Kernel module and kernel image compression (zstd)
+
+The kernel build (`UFlinux-project/kernel`) compresses installed modules with
+Zstandard instead of gzip. Measured on the shipped x86_64 module set (top 120
+modules, zstd level 19 against the previous gzip): 44 MiB → 34 MiB, −22.8 %,
+which applies both to the kernel APK and to the RAM held by the mounted
+modloop, and zstd decompresses several times faster at `modprobe` time.
+Alpine's `kmod` already supports zstd. x86 kernels additionally embed a zstd
+self-decompressor (`KERNEL_ZSTD`), so the bzImage is smaller and starts faster
+regardless of bootloader codec support. The build fails if either flip does
+not take effect, and the package boot test requires a `.ko.zst` module.
+`System.map` is no longer packaged (8.1 MiB per kernel APK); nothing consumes
+it, and the `update-kernel` patch tolerates its absence.
+
+The initramfs module sets are slimmed by `aports/uflinux/kms.modules` and
+`scsi.modules`, which override Alpine's whole-tree KMS and SCSI feature files
+with boot-only driver lists (about 13.5 MiB and 4.9 MiB less uncompressed
+initramfs RAM respectively against the shipped tree; simpledrm/efifb are built
+into the kernel and full GPU drivers load from the real rootfs). Both files
+ship in `/etc/mkinitfs/features.d` so rebuilds on installed systems keep the
+slim selection. See the optimization audit entries 13–15 for details.
+
 ## Local comparison, 8 November 2026
 
 Both x86_64 development images contain the same desktop packages and artwork.

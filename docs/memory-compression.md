@@ -8,6 +8,13 @@ OpenRC service, which ships in the `uflinux` package and is enabled in the
 installs the package but does not enable it, so a live system keeps the
 512 MiB/no-swap reference case.
 
+Everything below this line is about compressed *swap*. Compression that reduces
+the always-resident footprint — zstd kernel modules, the zstd x86 kernel image,
+and the slimmed initramfs module sets — is documented in
+[boot-image compression](compression.md) and optimization audit entries 13–15.
+Every byte the initramfs or modloop saves is a byte that is never recompressed
+by zram or zswap later.
+
 Nothing is read from a board table. The service looks at the machine it is
 running on: how much memory is installed, and what CPU is doing the
 compressing.

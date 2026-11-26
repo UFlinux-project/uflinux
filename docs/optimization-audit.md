@@ -31,6 +31,9 @@ builds of this tree against each other and are not a hardware benchmark.
 | 10 | Load the renderer probe's GL and Vulkan libraries on demand | Faster `uflinux-settingsctl`, far smaller CLI footprint | Done |
 | 11 | Validate wallpapers without GdkPixbuf in the daemon | Smaller always-running daemon footprint | Done |
 | 12 | Bind Settings symbols lazily | Shorter dynamic-linker startup | Rejected (measured no-op) |
+| 13 | Zstd-compress kernel modules and the x86 kernel image | Smaller kernel APK, modloop and faster module load | Done |
+| 14 | Move chipset glue and niche drivers out of the kernel image | Smaller resident kernel text | Done |
+| 15 | Slim the initramfs KMS/SCSI module sets | Lower RAM held by the initramfs | Done |
 
 ### 1. Select firmware per device
 
@@ -300,6 +303,59 @@ both, and the `DT_FLAGS BIND_NOW` and
 this project's `RUSTFLAGS` — so `-z lazy` would mean overriding the distribution
 policy for a rounding error. The `dlopen` work in priority 10 already removes
 the relocations that mattered by removing the libraries that owned them.
+
+### 13. Zstd-compress kernel modules and the kernel image
+
+Implemented in the kernel build (`UFlinux-project/kernel`, `scripts/build.py`).
+Modules were already compressed, but with gzip; the kernel's own
+`MODULE_COMPRESS_ZSTD` flip replaces it. Alpine's `kmod` is built with zstd
+support, so `modprobe` reads `.ko.zst` with no new dependency, and mkinitfs
+`*.ko*` globs match the new suffix unchanged. Measured on the shipped x86_64
+module set (top 120 modules by size, gzip vs zstd level 19): **44 MiB → 34 MiB,
+−22.8 %**, which projects to roughly 20 MiB off both the kernel APK's module
+tree and the signed modloop, and the same delta off the RAM the modloop holds
+while mounted. Decompression at `request_module` time is several times faster
+than gzip, so demand-loading gets quicker too.
+
+x86 targets additionally flip `KERNEL_ZSTD`: the bzImage embeds its own zstd
+decompressor, so this is independent of the bootloader (GRUB 2.14 also supports
+zstd if the image is ever loaded directly). The build now fails if either flip
+does not survive `olddefconfig`, and the package boot test requires a
+`.ko.zst` module, so a silent regression to gzip fails packaging.
+
+Alongside, `System.map` is no longer staged or packaged (8.1 MiB per kernel
+APK): nothing in the images or the installed system consumes it, and the
+`update-kernel` zstd patch already tolerates its absence.
+
+### 14. Move chipset glue and niche drivers out of the kernel image
+
+Implemented in the same `configure()` step, for the generic (Alpine-base-config)
+targets only. `CRYPTO_DEV_CCP`, the Intel designware-I2C/pinctrl/LPSS family,
+Belkin/ARM USB serial, the Vivaldi keymap, NFC SHDLC and the Fusion MPT HBA move
+`=y → =m`; udev demand-loads each on probe, so machines without the hardware
+stop paying resident-text cost for it. `RD_BZIP2`/`RD_LZMA`/`RD_LZO` (the
+initramfs is zstd), the fair-share thermal governor, and OSS emulation
+(`SOUND_OSS_CORE`, `SND_OSSEMUL`) are dropped outright. The shipped config was
+already module-heavy (3522 `=m` against 2471 `=y`), so the remaining built-in
+set is mostly boot-essential; this trims the clear remainder. Board kernels
+(defconfig targets) are untouched.
+
+### 15. Slim the initramfs KMS and SCSI module sets
+
+Implemented in this repository: `aports/uflinux/kms.modules` and
+`scsi.modules` override Alpine's feature files, which otherwise copy the whole
+`kernel/drivers/gpu` and `kernel/drivers/scsi` trees into every initramfs and
+force-load them. The overrides list only boot-capable hardware: nine VM/basic
+display drivers (simpledrm and efifb are built in and cover real GPUs at early
+boot; full drivers load from the real rootfs) and the SCSI core plus virtio-scsi
+and Hyper-V storvsc (NVMe, AHCI, USB storage and MMC come from the other
+features). Measured against the shipped module tree: about **13.5 MiB** less
+uncompressed RAM for the KMS override and about **4.9 MiB** for SCSI, out of a
+159.71 MiB zstd initramfs that is fully RAM-resident. The files ship in
+`/etc/mkinitfs/features.d` (uflinux-initramfs subpackage) so `mkinitfs -u` on
+an installed system rebuilds the same slim initramfs; the builder already
+searches `aports/uflinux` first, so ISO and device builds pick the override up
+with no builder change.
 
 ## Recommended first implementation
 
