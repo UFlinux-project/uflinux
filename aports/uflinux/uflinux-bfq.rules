@@ -1,0 +1,15 @@
+# UFLinux block device I/O scheduling.
+#
+# The kernel is built with CONFIG_IOSCHED_BFQ=y, so bfq is offered by every
+# request queue that supports multiple schedulers. These rules pick it where
+# it helps and leave the rest (dm-crypt targets, loops, network block devices)
+# on the kernel default.
+
+# Enable BFQ on supported physical drives
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="sd*|nvme*n*|mmcblk*", ATTR{queue/scheduler}=="*bfq*", ATTR{queue/scheduler}="bfq"
+
+# Enable BFQ low-latency mode
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", TEST=="queue/iosched/low_latency", ATTR{queue/iosched/low_latency}="1"
+
+# HDD read-ahead
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ATTR{queue/rotational}=="1", ATTR{queue/read_ahead_kb}="128"

@@ -167,6 +167,33 @@ assert "etc/profile.d/30-uflinux-prompt.sh" in uflinux_apkbuild, \
 for env_file in ("uflinux-session", "labwc-environment"):
     assert "ENV=/etc/profile.d/30-uflinux-prompt.sh" in (ROOT / "aports/uflinux" / env_file).read_text(), \
         f"{env_file} must export ENV so interactive ash loads the prompt"
+# The tuning is only live if the split package that every image installs owns
+# the drop-ins: the OpenRC sysctl and modules services apply /usr/lib/sysctl.d
+# and /usr/lib/modules-load.d, and udev applies /usr/lib/udev/rules.d. Dropping
+# a path from the amove list ships the file in the umbrella package instead,
+# where no profile installs it, and the tuning silently stops applying.
+for path in ("/usr/lib/sysctl.d/60-uflinux.conf", "/usr/lib/modules-load.d/uflinux-fq-codel.conf",
+             "/usr/lib/udev/rules.d/60-uflinux-bfq.rules"):
+    assert f'"$pkgdir{path}"' in uflinux_apkbuild, \
+        f"the tuning drop-in must be installed to {path}"
+for claimed in ("usr/lib/sysctl.d", "usr/lib/modules-load.d", "usr/lib/udev/rules.d"):
+    assert claimed in uflinux_apkbuild.split("defaults() {", 1)[1].split("\n}", 1)[0], \
+        f"uflinux-defaults must claim {claimed}"
+# fq_codel is a module in the UFLinux kernel, so the qdisc default is inert
+# without the load list; and the congestion control must stay unset so the
+# kernel's BBRv3 default survives.
+sysctl = (ROOT / "aports/uflinux/uflinux-sysctl.conf").read_text()
+assert "net.core.default_qdisc = fq_codel" in sysctl
+assert "net.ipv4.tcp_congestion_control =" not in sysctl, \
+    "Setting the congestion control here would override the kernel's BBRv3 default"
+assert (ROOT / "aports/uflinux/uflinux-fq-codel.conf").read_text().split() == ["sch_fq_codel"]
+# The drop-ins are inert unless the services that read them start, so both the
+# live overlay and the installed/device rootfs have to enable them at boot.
+assert "'modules boot'" in (ROOT / "profiles/genapkovl-uflinux.sh").read_text()
+assert "'sysctl boot'" in (ROOT / "profiles/genapkovl-uflinux.sh").read_text()
+device_rootfs = (ROOT / "profiles/device-rootfs.sh").read_text()
+assert "modules sysctl" in device_rootfs, \
+    "device rootfs must enable modules and sysctl at boot for the tuning to apply"
 # Settings owns the search field in its header bar, so it cannot rely on the
 # environment for its buttons either: a theme or window manager that ships the
 # built-in "menu:close" layout would hide minimize and maximize. The window pins

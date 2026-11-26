@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=28
+pkgrel=29
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -23,6 +23,7 @@ source="uflinux-boot-menu Ubuntu.pf2 theme.txt splash.png NOTICE uflinux-image-u
 	gtk-settings.ini 90-uflinux.gschema.override 45-uflinux-fonts.conf firefox-defaults.js
 	labwc-portals.conf xdg-desktop-portal-wlr-labwc regreet.toml regreet.css greetd-installed.toml greetd-live.toml greetd.pam
 	connman.conf connman.confd iwd.conf uflinux-network-init uflinux-connman.conf uflinux3.ec384.pub uflinux-kernel.ec.pem.pub
+	uflinux-sysctl.conf uflinux-fq-codel.conf uflinux-bfq.rules
 	https://download.gnome.org/sources/gnome-backgrounds/3.38/gnome-backgrounds-3.38.0.tar.xz
 	labwc-themes-6a2e3634.tar.gz::https://codeload.github.com/labwc/labwc-themes/tar.gz/6a2e3634eef03e7f124359ad28ed5da2d931f96d"
 
@@ -159,6 +160,16 @@ package() {
 	install -Dm644 "$srcdir/connman.confd" "$pkgdir/etc/conf.d/connman"
 	install -Dm644 "$srcdir/iwd.conf" "$pkgdir/etc/iwd/main.conf"
 	install -Dm644 "$srcdir/uflinux-connman.conf" "$pkgdir/usr/share/dbus-1/system.d/uflinux-connman.conf"
+	# The OpenRC sysctl service applies /usr/lib/sysctl.d, then /etc/sysctl.d,
+	# then /etc/sysctl.conf, so a distro drop-in lives in the vendor path and
+	# an admin can override one key in /etc/sysctl.conf or mask the whole file
+	# with /etc/sysctl.d/60-uflinux.conf.
+	install -Dm644 "$srcdir/uflinux-sysctl.conf" "$pkgdir/usr/lib/sysctl.d/60-uflinux.conf"
+	# sch_fq_codel is a module in the UFLinux kernel, so default_qdisc needs
+	# it loaded before the sysctl drop-in has any effect. The OpenRC modules
+	# service reads /usr/lib/modules-load.d.
+	install -Dm644 "$srcdir/uflinux-fq-codel.conf" "$pkgdir/usr/lib/modules-load.d/uflinux-fq-codel.conf"
+	install -Dm644 "$srcdir/uflinux-bfq.rules" "$pkgdir/usr/lib/udev/rules.d/60-uflinux-bfq.rules"
 }
 
 release() {
@@ -188,6 +199,7 @@ defaults() {
 	# here would delete etc/conf.d/uflinux-zram before the later zram()
 	# split can claim it.
 	amove etc/fonts etc/rc.conf.d etc/xdg etc/greetd etc/pam.d etc/connman etc/iwd etc/conf.d/connman usr/bin \
+		usr/lib/sysctl.d usr/lib/udev/rules.d usr/lib/modules-load.d \
 		etc/profile.d/30-uflinux-prompt.sh \
 		usr/share/wayland-sessions usr/share/backgrounds usr/share/themes usr/share/dbus-1 \
 		usr/share/icons usr/share/glib-2.0/schemas usr/lib/firefox usr/lib/firefox-esr usr/share/licenses/uflinux-defaults
@@ -353,6 +365,9 @@ ac30e59bef50b6d70dfb268299ad4024284bae46c01ec35040014f53612eeb15bf17d4b50f4c497f
 34effd0b86702a3a63e6747554149c2ce4c265cf85c262627c50a6a6f9daa14794b76d119967f930ea04f445da1e573062f1f11eb2bc401412fcd697328903f3  uflinux-connman.conf
 b9b60fcb6cc9dea3bf6f20addcfa7215e036a4031730b16785d2a30b1dcea2db7605da9ff2e189ec7bae9912457badd788f74522b4ed517f7bf1e1dd49dcb980  uflinux3.ec384.pub
 b9b60fcb6cc9dea3bf6f20addcfa7215e036a4031730b16785d2a30b1dcea2db7605da9ff2e189ec7bae9912457badd788f74522b4ed517f7bf1e1dd49dcb980  uflinux-kernel.ec.pem.pub
+0adbd82bfcb0ca50aba49712cdbf98d13a89807154e351d33d171da2c4e1d1d076575ed9108eb12c376adc8421edb4d3b4fff54aa5db3831f20e38969d08a008  uflinux-sysctl.conf
+71d9f9f0e725edbb1a4feff2c17db405ed394e74ad5ed4c9107e15e5092b6750ad16af7d37d5dbef71dd24815585eaebcb2d52d5334cdae44369c87a828cdf99  uflinux-fq-codel.conf
+e97f0e2ca20cb55fbc5c0a05406d989a2ed237890f4af4f67dd15be52df03334e158483c42bfb92d6a146998fb10f4490de4165b7aeeae5f4c853992ac517c3c  uflinux-bfq.rules
 01000409d6d54af81e520b8b292c24bb64e763a493c69cf71cabb9f885c7feee5a1805db40e2d0544834c40b7866f889c106e9816fd8e8b8f5273b0a099f1488  gnome-backgrounds-3.38.0.tar.xz
 ff78da5b5709a69cebbc11586d3a31d65229b6545d8d600c28fc93fc4b08332a8a9d9c21594e3680ee17f03a8e3fe5fc9b2cb8b3223e5d687aa680a2355b9747  labwc-themes-6a2e3634.tar.gz
 "

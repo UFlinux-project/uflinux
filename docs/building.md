@@ -278,6 +278,32 @@ systems. `uflinux-defaults` supplies `rc_parallel="YES"` in
 Edit this file to set `rc_parallel="NO"` when diagnosing boot issues. APK preserves
 local edits during upgrades. This setting takes effect on the next boot.
 
+`uflinux-defaults` also supplies the system-wide shell prompt in
+`/etc/profile.d/30-uflinux-prompt.sh`: a cyan `user@host path ❯` prompt for the
+busybox ash that every account logs into. `/etc/profile` sources it for login
+shells, and the desktop session exports `ENV` pointing at the same file so a
+terminal emulator started from the compositor gets the prompt too. A personal
+`~/.profile` or `~/.ashrc` still overrides it.
+
+`uflinux-defaults` also carries the kernel and I/O tuning. OpenRC's `sysctl`
+service (enabled at `boot` in every profile) reads
+`/usr/lib/sysctl.d/60-uflinux.conf`, which raises the free-page watermarks,
+keeps the dentry cache, and caps the writeback backlog at fixed byte thresholds
+so a flush can't stall a desktop session on a hard drive. It sets `fq_codel` as
+the default qdisc, which needs `sch_fq_codel` loaded first; the kernel builds
+it as a module, so `/usr/lib/modules-load.d/uflinux-fq-codel.conf` asks the
+`modules` service for it. The congestion control is left alone on purpose: the
+UFLinux kernel is built with BBRv3 as its default.
+`/usr/lib/udev/rules.d/60-uflinux-bfq.rules` selects BFQ with low-latency mode
+on physical disks where the scheduler is available and raises read-ahead on
+rotating media.
+
+Both drop-ins sit in the vendor directory, so a machine overrides them the
+standard way: `sysctl` reads `/etc/sysctl.d` and `/etc/sysctl.conf` after the
+vendor path, and udev prefers `/etc/udev/rules.d` over `/usr/lib/udev/rules.d`.
+Either file can also be masked by dropping an empty file of the same name in
+its `/etc` counterpart.
+
 ### UFLinux musl
 
 `aports/musl` contains the APKBUILD and UFLinux-specific sources. The builder
