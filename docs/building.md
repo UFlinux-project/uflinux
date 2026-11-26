@@ -147,6 +147,16 @@ upstream source and Alpine compatibility patches are retained with build inputs.
   mounts. The assembled disk is re-read and checked for its geometry, identifiers,
   boot files and initramfs compression before it is compressed.
 
+Every boot file a stage produces — the ISO's GRUB menu, the installer's
+`grub.cfg`, a device image's `cmdline.txt` or `extlinux.conf` — is written by
+`uflinux-boot-menu`, which appends the CPU mitigation token from
+`/etc/uflinux/boot.conf`. That file ships with `mitigations=off`, so builds boot
+with the speculative-execution workarounds disabled. To ship the kernel's own
+choice instead, set `mitigations=auto` in that file; a token written into a
+board command line in `config/devices.json` is discarded, because the generator
+strips any inherited `mitigations=` before appending its own. See
+[Settings](settings.md#cpu-vulnerability-mitigations).
+
 The chroot exposes proc and selected device nodes, but not host sysfs. It is a
 build environment, not a security boundary for hostile source code. GitHub uses
 fresh disposable VMs and never supplies release private keys to compilation.

@@ -1,4 +1,5 @@
 //! Shared wire types and validation. This crate deliberately has no GTK dependency.
+pub mod boot;
 pub mod bus;
 pub mod clock;
 pub mod files;

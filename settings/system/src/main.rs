@@ -1,3 +1,4 @@
+mod boot;
 mod operations;
 mod power;
 mod routes;

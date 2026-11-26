@@ -227,6 +227,7 @@ def main():
     settings_metrics = None
     network_clock = None
     power_report = None
+    performance_report = None
     splash_report = None
     try:
         with tempfile.TemporaryDirectory(prefix="uflinux-vm-") as temporary, (out / "console.log").open("w") as log:
@@ -373,6 +374,9 @@ def main():
             transfer(child, ROOT / "tests/settings-power-vm.py", "/run/uflinux-settings-power.py")
             power = guest(child, "python3 /run/uflinux-settings-power.py")
             power_report = json.loads(re.search(r"UFLINUX_POWER_VM:(\{[^\r\n]*\})", power).group(1))
+            transfer(child, ROOT / "tests/settings-performance-vm.py", "/run/uflinux-settings-performance.py")
+            performance = guest(child, "python3 /run/uflinux-settings-performance.py")
+            performance_report = json.loads(re.search(r"UFLINUX_PERFORMANCE_VM:(\{[^\r\n]*\})", performance).group(1))
             with qmp(state) as request:
                 request("system_powerdown")
             time.sleep(3)
@@ -387,6 +391,8 @@ def main():
             if power_report is not None:
                 power_report["physical_key_poweroff"] = True
                 (out / "power.json").write_text(json.dumps(power_report, indent=2) + "\n")
+            if performance_report is not None:
+                (out / "performance.json").write_text(json.dumps(performance_report, indent=2) + "\n")
             child.close()
             child = None
             grub_mode_smoke(args, state, log, installed=False, key="t",
@@ -404,7 +410,8 @@ def main():
             "musl": musl,
             "iso_boot": True, "grub_usb_tty": True, "grub_installed_debug": True, "gui_install_reboot": True, "xfs_install_reboot": True, "unrelated_partition_preserved": True,
             "bootsplash": splash_report,
-            "settings_512m": settings_metrics, "network_clock": network_clock, "power": power_report}, indent=2) + "\n")
+            "settings_512m": settings_metrics, "network_clock": network_clock, "power": power_report,
+            "performance": performance_report}, indent=2) + "\n")
         return 0
     except (OSError, RuntimeError, subprocess.CalledProcessError, pexpect.ExceptionPexpect) as exc:
         print(f"VM validation failed: {exc}; see {out / 'console.log'}", file=sys.stderr)

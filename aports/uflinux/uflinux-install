@@ -24,8 +24,8 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
-def output(*args):
-    return run(*args, stdout=subprocess.PIPE).stdout.strip()
+def output(*args, **kwargs):
+    return run(*args, stdout=subprocess.PIPE, **kwargs).stdout.strip()
 
 
 def describe_apk_log(target):
@@ -324,6 +324,25 @@ mv "$temporary" /boot/vmlinuz-FLAVOR.efi
     run("chroot", str(target), "/etc/apk/commit_hooks.d/uflinux-efi-kernel", "post-commit")
 
 
+def boot_mitigations(target):
+    """The mitigations token for the generated entries.
+
+    The installed system's own policy wins, so reinstalling keeps the choice
+    made in Settings. A target without a policy file inherits the choice of
+    the running system, which is the live session during an installation.
+    """
+    for path in (target / "etc/uflinux/boot.conf", Path("/etc/uflinux/boot.conf")):
+        try:
+            lines = path.read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            key, _, value = line.partition("=")
+            if key.strip() == "mitigations":
+                return "auto" if value.strip() == "auto" else "off"
+    return "off"
+
+
 def install_grub(target, plan, media):
     arch, mode = plan["arch"], plan["mode"]
     boot = target / "boot"
@@ -341,7 +360,8 @@ def install_grub(target, plan, media):
     serial = {"aarch64": "ttyAMA0", "ppc64le": "hvc0"}.get(arch, "ttyS0")
     config = output("chroot", str(target), "/usr/libexec/uflinux-boot-menu",
                     f"/vmlinuz-{flavor}{extension}", " ".join(initrds), "",
-                    f"root=UUID={plan['root']['uuid']} rootfstype=xfs rw console=tty0 console={serial},115200", "/grub")
+                    f"root=UUID={plan['root']['uuid']} rootfstype=xfs rw console=tty0 console={serial},115200", "/grub",
+                    env=dict(os.environ, UFLINUX_MITIGATIONS=boot_mitigations(target)))
     write(boot, "grub/grub.cfg", config + "\n")
     write(target, "etc/update-grub.conf", "disable_trigger=1\n")
     if mode == "bios":

@@ -61,9 +61,11 @@ async fn authorized(
     operation: &SystemAction,
 ) -> Result<()> {
     let action = match operation {
-        SystemAction::Status | SystemAction::PowerStatus | SystemAction::GetRoutes { .. } => {
-            return Ok(());
-        }
+        SystemAction::Status
+        | SystemAction::PowerStatus
+        | SystemAction::BootStatus
+        | SystemAction::GetRoutes { .. } => return Ok(()),
+        SystemAction::SetMitigations { .. } => "org.uflinux.settings.boot-options",
         SystemAction::SetPowerProfile { .. } => "org.uflinux.settings.power-profile",
         SystemAction::SetPowerButtons { .. } => "org.uflinux.settings.power-admin",
         SystemAction::DdcDiscover | SystemAction::DdcBrightness { .. } => {
@@ -252,6 +254,8 @@ async fn execute(bus: gio::DBusConnection, operation: &SystemAction) -> Result<s
     gio::spawn_blocking(move||match operation {
         SystemAction::Status=>serde_json::to_value(status()).map_err(|e|e.to_string()),
         SystemAction::PowerStatus=>serde_json::to_value(settings_core::power::status()).map_err(|e|e.to_string()),
+        SystemAction::BootStatus=>serde_json::to_value(crate::boot::status()).map_err(|e|e.to_string()),
+        SystemAction::SetMitigations{enabled}=>serde_json::to_value(crate::boot::set(enabled)?).map_err(|e|e.to_string()),
         SystemAction::SetPowerProfile{profile}=>{crate::power::set_profile(profile)?;serde_json::to_value(settings_core::power::status()).map_err(|e|e.to_string())}
         SystemAction::SetPowerButtons{on_ac,on_battery}=>{crate::power::set_buttons(on_ac,on_battery)?;serde_json::to_value(settings_core::power::status()).map_err(|e|e.to_string())}
         SystemAction::SetTimezone{timezone}=>{timezone_set(&timezone)?;Ok(serde_json::json!({"ok":true}))}

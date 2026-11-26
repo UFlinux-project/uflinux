@@ -2,7 +2,7 @@
 
 Settings is a Rust workspace using plain GTK4, application-local CSS and the
 user's GTK theme. It does not depend on libadwaita, GNOME Settings or GNOME
-Settings Daemon. Super+I opens the ten-page interface: the navigation sidebar stays
+Settings Daemon. Super+I opens the eleven-page interface: the navigation sidebar stays
 visible and the header bar carries the settings search field plus minimize, maximize
 and close. Dynamic network
 lists use GtkListView; pages are constructed on demand and discarded when left.
@@ -19,9 +19,10 @@ uflinux-settingsctl volume -5
 uflinux-settingsctl brightness 5
 uflinux-settingsctl mute
 uflinux-settingsctl power-profile balanced
+uflinux-settingsctl mitigations status
 ```
 
-Other page names are `displays`, `audio`, `power`, `default-apps`, `datetime`, `appearance`,
+Other page names are `displays`, `audio`, `power`, `performance`, `default-apps`, `datetime`, `appearance`,
 `remote-desktop`, `screen-capture` and `about`. The Network panel provides connection selection, credentials and
 radio controls, split into Wi-Fi, Ethernet, Bluetooth and VPN tabs. Audio and the
 Sound panel split devices into Output and Input tabs;
@@ -83,7 +84,8 @@ from standard input. Never pass credentials as command arguments.
 The system helper is a separate root D-Bus service, authorized per typed operation
 with polkit. Its allowed actions are clocks/timezones and time synchronization,
 protected Wi-Fi
-profiles, exact additional routes and identity-checked DDC brightness. It accepts
+profiles, exact additional routes, identity-checked DDC brightness and the boot-time
+CPU mitigation setting. It accepts
 no shell commands or arbitrary paths. It normally exits after 45 idle seconds;
 saved routes keep its ConnMan subscription alive. Only the open GTK4 UI registers
 a libpolkit-agent-1/PAM authentication agent. Wheel administrators authenticate
@@ -190,6 +192,32 @@ can submit a `SystemAction` through `uflinux-settingsctl system-request` on stdi
 polkit authorization still applies. Administrator overrides in `/etc/tlp.conf`
 take precedence over drop-in defaults and may override the saved boot selection;
 the UI continues to show the actual reported profile.
+
+## CPU vulnerability mitigations
+
+UFLinux boots with `mitigations=off`, which trades speculative-execution
+workarounds for speed. Settings → Performance flips that choice; the change is
+written to `/etc/uflinux/boot.conf` and applied to the boot entries immediately,
+but it only takes effect on the next restart, and the page says so while the
+running kernel and the recorded policy disagree.
+
+`/etc/uflinux/boot.conf` is the single source of truth. The boot-entry generator
+in `uflinux-boot-menu` reads it whenever it writes a kernel command line, so a
+freshly generated GRUB configuration, Raspberry Pi `cmdline.txt`, extlinux menu
+and the installer's entries all carry the current token without any caller
+passing it on. `uflinux-settingsctl mitigations status|on|off` reads and changes
+the same state; changing it goes through `org.uflinux.settings.boot-options` and
+therefore through polkit. The helper rewrites the boot files in place, rolling
+the policy back when the entries do not come back as expected, and mounts a
+device image's unmounted boot partition for the duration of one operation.
+
+Only two states are offered. **Off** appends `mitigations=off`; **On** appends
+`mitigations=auto`, which lets the kernel pick the mitigations it considers
+appropriate for the CPU. Anything else in the policy file is read as **Off**.
+A boot entry with no token at all is reported as the kernel default rather than
+as **Off**, and a system whose entries disagree about the token shows the
+setting as unavailable instead of guessing. Editing the boot entries by hand
+remains possible; the next change from Settings rewrites them from the policy.
 
 ## Displays and other panels
 

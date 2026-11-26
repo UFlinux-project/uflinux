@@ -56,6 +56,24 @@ depend
                 self.assertIn("rootflags=ro", args)
                 self.assertIn("root=UUID=test", args)
 
+    def test_the_generated_kernel_command_line_keeps_the_root_and_policy(self):
+        # Raspberry Pi writes boot_arguments output straight into cmdline.txt,
+        # so the hand-over arguments and the mitigation policy have to survive
+        # that trip together.
+        profile = (ROOT / "profiles/device-rootfs.sh").read_text()
+        assignment = next(line for line in profile.splitlines() if line.startswith('rootargs='))
+        script = '''
+root_partuuid=test; rootfs="$1"; %s
+. "$2"
+boot_arguments standard "console=ttyS0,115200n8 $rootargs"
+''' % assignment
+        line = subprocess.check_output(
+            ["sh", "-c", script, "sh", "f2fs", str(ROOT / "aports/uflinux/uflinux-boot-menu")],
+            text=True).split()
+        self.assertIn("root=UUID=test", line)
+        self.assertIn("rootflags=ro", line)
+        self.assertIn("mitigations=off", line)
+
     def test_f2fs_root_is_not_resized_but_marked_complete(self):
         # Run the real start function, with destructive commands replaced by
         # traps. The initramfs already grew an F2FS root offline, so the

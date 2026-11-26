@@ -86,7 +86,10 @@ login with 512 MiB RAM, one display and no swap, then exercises all Settings pag
 and the flyout. Its power checks select and persist all three real TLP profiles,
 observe Settings/Ironbar synchronization, and press the virtual ACPI power button
 with Do nothing and Shut down policies. Suspend policy validation is distinct
-from physical suspend/resume certification.
+from physical suspend/resume certification. Its performance checks read the
+installed boot entries, switch CPU vulnerability mitigations on and off through
+the system service, and confirm that `/etc/uflinux/boot.conf`, the rewritten
+`grub.cfg` and the running service agree, including the restart-required state.
 
 The native firmware test additionally uses two mac80211_hwsim radios with
 hostapd and DHCP for personal, hidden and enterprise Wi-Fi, plus a controlled

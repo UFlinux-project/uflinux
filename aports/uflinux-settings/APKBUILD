@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-settings
 pkgver=0.1.0
-pkgrel=12
+pkgrel=13
 pkgdesc="UFLinux Settings, quick controls and resident Start menu"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86_64 aarch64 ppc64le riscv64"
@@ -82,6 +82,7 @@ package() {
 	install -Dm644 data/uflinux-acpid.conf "$pkgdir/etc/uflinux/acpid.conf"
 	install -Dm644 data/uflinux-acpi.map "$pkgdir/etc/uflinux/acpi.map"
 	install -Dm644 data/uflinux-power.json "$pkgdir/etc/uflinux/power.json"
+	install -Dm644 data/uflinux-boot.conf "$pkgdir/etc/uflinux/boot.conf"
 	install -Dm644 data/uflinux-tlp.conf "$pkgdir/etc/tlp.d/90-uflinux-profile.conf"
 	install -Dm644 data/uflinux-logind-power.conf "$pkgdir/etc/elogind/logind.conf.d/90-uflinux-power.conf"
 	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
@@ -113,7 +114,7 @@ daemon() {
 }
 system() {
 	pkgdesc="Authorized UFLinux system settings helper"
-	depends="polkit-elogind ddcutil tzdata openssl busybox-openrc tlp~1.10 tlp-openrc tlp-udev
+	depends="polkit-elogind ddcutil tzdata openssl busybox-openrc lsblk tlp~1.10 tlp-openrc tlp-udev
 		!tlp-pd !power-profiles-daemon !acpid !acpid-openrc $pkgname-system-openrc=$pkgver-r$pkgrel"
 	amove usr/libexec/uflinux-settings-system usr/share/dbus-1/system-services usr/share/dbus-1/system.d
 	amove usr/share/polkit-1 usr/lib/modules-load.d

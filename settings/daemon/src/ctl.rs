@@ -72,6 +72,11 @@ fn run() -> Result<()> {
             Some("wifi")=>Action::Wifi{enabled:enabled()?},
             Some("scan")=>Action::Scan,
             Some("power-profile")=>Action::SetPowerProfile{profile:PowerProfile::parse(args.get(1).ok_or("Choose a power profile")?)?},
+            Some("mitigations")=>match args.get(1).map(String::as_str){
+                Some("status")=>Action::System{operation:SystemAction::BootStatus},
+                Some("on")|Some("off")=>Action::System{operation:SystemAction::SetMitigations{enabled:enabled()?}},
+                _=>return Err("Usage: uflinux-settingsctl mitigations status|on|off".into()),
+            },
             Some("request")=> {
                 // Automation uses stdin, never a password-bearing command argument.
                 let mut input=String::new();
@@ -79,7 +84,7 @@ fn run() -> Result<()> {
                 if input.len()>MAX_REQUEST {return Err("Request too large".into());}
                 serde_json::from_str(&input).map_err(|_|"Invalid typed request".to_string())?
             }
-            _=>return Err("Usage: uflinux-settingsctl status|renderer|volume DELTA|brightness DELTA|mute|power-profile power-saver/balanced/performance|network on/off|wifi on/off|scan|request|system-request < request.json".into()),
+            _=>return Err("Usage: uflinux-settingsctl status|renderer|volume DELTA|brightness DELTA|mute|power-profile power-saver/balanced/performance|mitigations status/on/off|network on/off|wifi on/off|scan|request|system-request < request.json".into()),
         };
         let result=bus::execute(&action).await?;
         writeln!(std::io::stdout(),"{result}").map_err(|e|e.to_string())

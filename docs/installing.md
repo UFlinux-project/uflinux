@@ -137,3 +137,11 @@ The boot menu offers Standard (Plymouth and desktop), Debug (verbose startup
 and desktop), and TTY only (local and serial login). Compatible systems also
 show Memtest86+ 9.00 and supported UEFI systems offer Firmware Settings.
 [Memtest86+ source](https://memtest.org/download/v9.00/mt86plus_9.00.src.zip)
+
+Every entry also carries `mitigations=off`, UFLinux's default, which trades
+speculative-execution workarounds for speed. Turn the workarounds back on in
+Settings → Performance, or with `doas uflinux-settingsctl mitigations on`; either
+way the choice is recorded in `/etc/uflinux/boot.conf`, the boot entries are
+rewritten at once, and the new setting applies on the next restart. Reinstalling
+keeps the choice already recorded in the target. See
+[Settings](settings.md#cpu-vulnerability-mitigations) for what each state means.

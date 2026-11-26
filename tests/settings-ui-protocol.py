@@ -169,3 +169,17 @@ wait(lambda:(Gio.AppInfo.get_default_for_type('x-scheme-handler/http',False).get
 assert Gio.AppInfo.get_default_for_type('x-scheme-handler/https',False).get_id()=='uflinux-test-B.desktop'
 assert Gio.AppInfo.get_default_for_type('application/x-uflinux-unrelated',False).get_id()=='uflinux-test-A.desktop'
 print('GTK display drag/numeric synchronization, apply/revert and default-app association preservation passed')
+
+# The Performance page is the eleventh page. Its switch is deliberately not
+# clicked here: writing the boot entries asks for administrator authorization,
+# and this harness has no polkit agent (see settings-performance-vm.py, which
+# runs with one). The page must still render its controls and its state line,
+# and joining the shared page frame must not resize the window.
+before=window_size()
+page('performance')
+row=wait(lambda:find('Workarounds for CPU vulnerabilities','label'),'Mitigations row is missing')
+switch=next((child for child in row.parent if child.getRoleName() in ('switch','toggle button','check box')),None)
+assert switch is not None,'Mitigations row has no control: '+diagnostics()
+assert wait(lambda:any('Configured:' in (a.name or '') for a in tree() if a.getRoleName()=='label'),
+            'The page never reports what the boot entries are configured to do')
+assert window_size()==before,'The Performance page changed the window size'

@@ -129,8 +129,14 @@ for _ in range(180):
     time.sleep(.5)
 else:
     raise AssertionError('Settings did not render its first frame')
-for page in ('network', 'displays', 'audio', 'power', 'default-apps', 'datetime', 'appearance',
-             'screen-capture', 'about'):
+assert Path('/etc/uflinux/boot.conf').read_text().count('mitigations=off') == 1, \
+    "The installed boot policy must disable the mitigations by default"
+assert 'org.uflinux.settings.boot-options' in \
+    Path('/usr/share/polkit-1/actions/org.uflinux.settings.policy').read_text(), \
+    "The boot options action is not installed"
+assert state()['boot']['configured'] == 'off', state()['boot']
+for page in ('network', 'displays', 'audio', 'power', 'performance', 'default-apps',
+             'datetime', 'appearance', 'screen-capture', 'about'):
     run('uflinux-settings', '--page', page)
     time.sleep(.4)
 full_pss = pss(gui_pid())

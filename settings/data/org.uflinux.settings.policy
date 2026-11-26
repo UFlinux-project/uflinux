@@ -13,6 +13,11 @@
     <message>Authentication is required to change power-button settings</message>
     <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>
   </action>
+  <action id="org.uflinux.settings.boot-options">
+    <description>Change the CPU vulnerability mitigation setting used at boot</description>
+    <message>Authentication is required to change how the system boots</message>
+    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>
+  </action>
   <action id="org.uflinux.settings.datetime">
     <description>Change system date, time and synchronization</description>
     <message>Authentication is required to change system time settings</message>

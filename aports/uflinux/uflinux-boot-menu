@@ -9,12 +9,27 @@ boot_label() {
 	tty) printf 'TTY only' ;;
 	esac
 }
+# CPU vulnerability mitigations are off unless the installed policy says
+# otherwise. Callers building for another root pass UFLINUX_MITIGATIONS; the
+# file is read directly so a running system needs no helper.
+mitigations_policy() {
+	local value="${UFLINUX_MITIGATIONS-}" key setting
+	if [ -z "$value" ] && [ -r /etc/uflinux/boot.conf ]; then
+		while IFS== read -r key setting || [ -n "$key" ]; do
+			[ "$key" = mitigations ] && value="$setting"
+		done < /etc/uflinux/boot.conf
+	fi
+	[ "$value" = auto ] || value=off
+	printf '%s' "$value"
+}
+
 boot_arguments() {
 	local mode="$1" word
 	shift
 	for word in $*; do
-		case "$word" in quiet|splash|loglevel=*|debug_init|plymouth.enable=*|rc_runlevel=*) ;; *) printf '%s ' "$word" ;; esac
+		case "$word" in quiet|splash|loglevel=*|debug_init|plymouth.enable=*|rc_runlevel=*|mitigations=*) ;; *) printf '%s ' "$word" ;; esac
 	done
+	printf 'mitigations=%s ' "$(mitigations_policy)"
 	case "$mode" in
 	standard) printf 'quiet splash' ;;
 	debug) printf 'loglevel=7 ignore_loglevel debug_init plymouth.enable=0' ;;

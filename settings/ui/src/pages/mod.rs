@@ -1,6 +1,7 @@
 mod audio;
 mod displays;
 mod network;
+mod performance;
 mod power;
 mod preferences;
 mod remote_desktop;
@@ -26,6 +27,7 @@ pub fn build(app: &Rc<App>, page: &str, parent: &gtk::Box) {
         "network" => network::page(app, parent),
         "audio" => audio::page(app, parent),
         "power" => power::page(app, parent),
+        "performance" => performance::page(app, parent),
         "displays" => displays::page(app, parent),
         "default-apps" => preferences::defaults(app, parent),
         "datetime" => preferences::datetime(app, parent),

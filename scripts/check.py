@@ -262,6 +262,23 @@ assert "debug" not in profile, "Settings release profile must use Cargo's defaul
 for origin in ("uflinux-settings",):
     recipe = (ROOT / "aports" / origin / "APKBUILD").read_text()
     assert "unset CARGO_PROFILE_RELEASE_DEBUG" in recipe, f"{origin} must clear abuild's debug override"
+# Every boot entry is rendered by the one generator, and it has to append the
+# mitigation policy unconditionally: an entry that omits the token silently
+# boots with the kernel default, which is the slow choice the product decided
+# against. The shipped policy is the default, and the Settings recipe has to
+# install it, since the generator and the privileged helper both read it.
+menu = (ROOT / "aports/uflinux/uflinux-boot-menu").read_text()
+assert "printf 'mitigations=%s ' \"$(mitigations_policy)\"" in menu, \
+    "boot_arguments must append the mitigation policy for every boot mode"
+assert "mitigations=*)" in menu, "boot_arguments must strip an inherited mitigations word"
+assert "mitigations=off" in (ROOT / "settings/data/uflinux-boot.conf").read_text(), \
+    "The shipped boot policy must disable the mitigations"
+settings_recipe = (ROOT / "aports/uflinux-settings/APKBUILD").read_text()
+assert 'install -Dm644 data/uflinux-boot.conf "$pkgdir/etc/uflinux/boot.conf"' in settings_recipe, \
+    "uflinux-settings must install the default boot policy"
+assert "org.uflinux.settings.boot-options" in \
+    (ROOT / "settings/data/org.uflinux.settings.policy").read_text(), \
+    "The boot options action needs its own polkit identity"
 for path in (ROOT / ".github/workflows").glob("*.yml"):
     for action in re.findall(r"uses:\s*([^\s#]+)", path.read_text()):
         if not action.startswith("./"):

@@ -15,6 +15,8 @@ pub struct Snapshot {
     #[serde(default)]
     pub power: Power,
     #[serde(default)]
+    pub boot: Boot,
+    #[serde(default)]
     pub screen_capture: ScreenCapture,
     /// Probed from the capture backend at startup; runtime-only and never persisted.
     #[serde(default)]
@@ -971,6 +973,10 @@ pub enum SystemAction {
         on_ac: PowerButtonAction,
         on_battery: PowerButtonAction,
     },
+    BootStatus,
+    SetMitigations {
+        enabled: bool,
+    },
     SetTimezone {
         timezone: String,
     },
@@ -1076,6 +1082,68 @@ pub struct Battery {
     pub percent: Option<u8>,
     pub status: String,
     pub energy_full: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Mitigations {
+    /// `mitigations=off`: full speed, no runtime workaround for CPU bugs.
+    #[default]
+    Off,
+    /// `mitigations=auto`: the kernel decides, at the cost of some performance.
+    Auto,
+}
+impl Mitigations {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Disabled",
+            Self::Auto => "Enabled",
+        }
+    }
+    pub fn parse(s: &str) -> crate::Result<Self> {
+        match s.trim() {
+            "off" => Ok(Self::Off),
+            "auto" => Ok(Self::Auto),
+            _ => Err("Choose mitigations off or auto".into()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BootPolicy {
+    pub mitigations: Mitigations,
+}
+
+/// What the boot loader will do on the next restart, and what the system was
+/// configured to do. `applied` is `None` when the boot entries could not be
+/// read, which is the case on a device image whose boot partition is not
+/// mounted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Boot {
+    pub available: bool,
+    pub configured: Mitigations,
+    pub applied: Option<Mitigations>,
+    pub reboot_required: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+impl Default for Boot {
+    fn default() -> Self {
+        Self {
+            available: false,
+            configured: Mitigations::Off,
+            applied: None,
+            reboot_required: false,
+            reason: "Boot configuration has not been read yet".into(),
+        }
+    }
 }
 
 #[cfg(test)]
