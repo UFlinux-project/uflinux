@@ -44,8 +44,17 @@
 /* Each window preview has one icon/title/close header above its image.
    The min-width stops the card resizing between apps. */
 .uflinux-task-preview { min-width: 260px; padding: 2px; }
+/* Like the clock card and the tray flyout, the preview popover drops the arrow
+   and leaves a small gutter, so the shared popup-card border and shadow read
+   as one surface rather than a card inside a framed popover. */
+.uflinux-task-preview-popover { padding: 4px; }
 .uflinux-task-preview button { background: transparent; color: @theme_fg_color; border: none; box-shadow: none; border-radius: 6px; padding: 0 6px; min-height: 30px; }
 .uflinux-task-preview button:hover { background: alpha(@theme_fg_color, 0.10); }
+/* The thumbnail is a button so clicking it activates the window, but it must
+   not look like one: no fill on hover and no focus ring behind the image. */
+.uflinux-task-preview .uflinux-preview-image:hover,
+.uflinux-task-preview .uflinux-preview-image:focus,
+.uflinux-task-preview .uflinux-preview-image:active { background: transparent; outline-style: none; }
 .uflinux-task-preview .uflinux-task-heading { opacity: 0.7; padding: 2px 6px 4px; }
 .uflinux-task-preview .uflinux-task-row { padding: 0; }
 .uflinux-panel.software-renderer .uflinux-task-preview { box-shadow: none; }

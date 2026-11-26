@@ -19,6 +19,22 @@ from builder import (DEVICES, device_environment, device_image_name, device_nura
                      device_partitions, device_partition_script, device_packages,
                      device_repositories, device_target, device_uuids, device_verify_image)
 
+# The kernel index is resolved from the release server at build time, so the
+# offline tests stand in for it. The versions in the fixture are the ones the
+# assertions below expect; nothing there claims to be the current release.
+KERNEL_INDEX = json.loads((Path(__file__).resolve().parent / "fixtures" /
+                           "kernel-index.json").read_text())
+
+_kernel_index = patch("builder.kernels", return_value=KERNEL_INDEX)
+
+
+def setUpModule():
+    _kernel_index.start()
+
+
+def tearDownModule():
+    _kernel_index.stop()
+
 
 class DeviceLayoutTests(unittest.TestCase):
     def test_geometry_is_sector_aligned(self):

@@ -128,6 +128,20 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 publisher = importlib.util.module_from_spec(spec)
 loader.exec_module(publisher)
 
+# The kernel index is resolved from the release server at build time; these
+# tests only ask which packages an image installs, so they use the shared
+# fixture instead of the current release.
+_kernel_index = patch("builder.kernels", return_value=json.loads(
+    (Path(__file__).resolve().parent / "fixtures" / "kernel-index.json").read_text()))
+
+
+def setUpModule():
+    _kernel_index.start()
+
+
+def tearDownModule():
+    _kernel_index.stop()
+
 
 class PublicationTests(unittest.TestCase):
     def test_cleanup_refuses_to_traverse_active_mounts(self):

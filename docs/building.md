@@ -35,6 +35,15 @@ instead of failing. A release still fails, because its images cannot resolve
 `uflinux-files` without it. `check-packages.py` reads `EVENT` and `REF` to make
 that decision, and retries a transient 5xx from any index before reporting it.
 
+Kernel packages are fetched from the [kernel releases](https://github.com/UFlinux-project/kernel/releases)
+and are not pinned by tag either: a build resolves the newest release and checks
+each asset against the SHA-256 digest GitHub publishes with it.
+`config/kernels.json` names the repository, the kernel signing key hash, and
+the package target required per architecture, and `scripts/check.py` validates it
+offline. `python3 scripts/kernel-release.py` prints what would be selected, and
+`UFLINUX_KERNEL_TAG=<tag>` builds one release explicitly, which is how a workflow
+run keeps every job on the same kernel.
+
 ```sh
 export APK_REPOSITORY_URL=https://repo.uflinux.org/apk/v3.24/uflinux
 sudo --preserve-env=APK_REPOSITORY_URL bash scripts/build.sh --arch x86_64

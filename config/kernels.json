@@ -1,0 +1,12 @@
+{
+  "repository": "UFlinux-project/kernel",
+  "key": {
+    "name": "uflinux-kernel.ec.pem.pub",
+    "sha256": "1c97e84817f9928d0aa973d6ab8da406f0e66dccaa3a720d232caa36db9cc12e"
+  },
+  "targets": {
+    "x86_64": ["x86_64", "virt-x86_64"],
+    "aarch64": ["aarch64", "virt-aarch64", "dragon-q6a", "rpi"],
+    "riscv64": ["orangepi-rv2"]
+  }
+}

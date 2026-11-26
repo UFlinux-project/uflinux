@@ -8,7 +8,7 @@ import tempfile
 
 import pexpect
 
-from kernel_packages import KERNELS
+from kernel_packages import kernels
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--arch", choices=("x86_64", "aarch64"), required=True)
@@ -22,7 +22,7 @@ target = f"virt-{args.arch}" if args.device == "vm" else args.arch
 filesystem = "f2fs" if args.device == "pc-f2fs" else "xfs"
 if args.mode == "bios" and args.arch != "x86_64":
     parser.error("BIOS testing requires x86_64")
-version = KERNELS["packages"][args.arch][target]["name"].removeprefix(
+version = kernels()["packages"][args.arch][target]["name"].removeprefix(
     f"linux-uflinux-{target}-").rsplit("-r", 1)[0]
 abi = f"{version}-uflinux-{target}"
 args.log.parent.mkdir(parents=True, exist_ok=True)

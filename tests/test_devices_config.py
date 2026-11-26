@@ -32,11 +32,20 @@ class DevicesConfigTests(unittest.TestCase):
                 self.assertEqual(device["kernel"], "x86_64", device_id)
                 self.assertTrue(set(device["arches"]) == {"x86_64"}, device_id)
 
-    def test_device_kernel_is_published_for_every_architecture(self):
-        kernels = json.loads((root / "config/kernels.lock.json").read_text())
+    def test_device_kernel_is_required_for_every_architecture(self):
+        kernels = json.loads((root / "config/kernels.json").read_text())
         for device in devices.values():
             for arch in device["arches"]:
-                self.assertIn(device["kernel"].format(arch=arch), kernels["packages"][arch])
+                self.assertIn(device["kernel"].format(arch=arch), kernels["targets"][arch])
+
+    def test_the_kernel_release_is_not_pinned(self):
+        # Like the Nura and apps indexes, the kernel moves on its own: the build
+        # takes the newest release and checks each asset against the digest the
+        # release server publishes with it, so no tag or hash belongs here.
+        kernels = json.loads((root / "config/kernels.json").read_text())
+        self.assertNotIn("tag", kernels)
+        self.assertNotIn("packages", kernels)
+        self.assertEqual(kernels["repository"], "UFlinux-project/kernel")
 
     def test_boards_needing_a_device_tree_declare_one(self):
         # extlinux loads the tree by path from extlinux.conf, and the qcs6490

@@ -20,7 +20,20 @@ for architecture, config in arches.items():
     jobs = config["jobs"]
     assert isinstance(jobs, int) and not isinstance(jobs, bool) and jobs > 0, \
         f"{architecture} needs a positive integer jobs count"
-kernels = json.loads((ROOT / "config/kernels.lock.json").read_text())
+kernels = json.loads((ROOT / "config/kernels.json").read_text())
+# The kernel release itself is not pinned: the newest one is fetched at build
+# time and checked against the digest GitHub publishes with each asset. What the
+# configuration does pin is the repository, the signing key and the target list
+# every release has to carry.
+assert re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", kernels["repository"]), \
+    "kernels.json must name the kernel repository as owner/repo"
+assert re.fullmatch(r"[0-9a-f]{64}", kernels["key"]["sha256"]), \
+    "The kernel signing key needs its SHA-256"
+assert set(kernels["targets"]) <= set(arches), "Kernel targets list an unknown architecture"
+for arch, targets in kernels["targets"].items():
+    assert targets and len(set(targets)) == len(targets), f"{arch} lists kernel targets twice"
+    for target in targets:
+        assert re.fullmatch(r"[a-z0-9][a-z0-9_-]*", target), f"Kernel target must be a lowercase slug: {target}"
 devices = json.loads((ROOT / "config/devices.json").read_text())
 device_lock = json.loads((ROOT / "config/devices.lock.json").read_text())
 assert device_lock["schema"] == 1
@@ -29,8 +42,9 @@ for device_id, device in devices.items():
     assert device["label"], f"{device_id} needs a label"
     assert device["arches"] and set(device["arches"]) <= set(arches), f"{device_id} lists an unknown architecture"
     for arch in device["arches"]:
-        assert device["kernel"].format(arch=arch) in kernels["packages"][arch], \
-            f"{device_id} needs a pinned kernel for {arch}"
+        assert arch in kernels["targets"], f"{device_id} builds {arch}, which has no kernel targets"
+        assert device["kernel"].format(arch=arch) in kernels["targets"][arch], \
+            f"{device_id} needs a kernel target for {arch}"
     assert device["boot"] in {"efi", "rpi", "extlinux", "pc"}, f"{device_id} must use a known boot mode"
     if device["boot"] == "extlinux":
         assert re.fullmatch(r"[a-z0-9][a-z0-9._/-]*\.dtb", device.get("dtb", "")), \

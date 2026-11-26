@@ -12,7 +12,7 @@ import tempfile
 from builder import (ARCHES, Builder, ISO_EXCLUDED_PACKAGES, LOCK, PROJECT, SIGNING_KEY, sha,
                      unsigned_digest, PACKAGE_NAMES)
 from sbom import apk_metadata
-from kernel_packages import KEY, KEY_FILE, KERNELS, stage_kernels
+from kernel_packages import KEY, KEY_FILE, kernels, stage_kernels
 
 ALLOWED = set().union(*PACKAGE_NAMES.values())
 if not ISO_EXCLUDED_PACKAGES <= ALLOWED:
@@ -167,7 +167,7 @@ def main():
                 stage_kernels(builder, arch, staging)
                 shutil.copytree(staging, branch / arch)
             shutil.copy2(KEY_FILE, branch / KEY)
-            (branch / "kernels.json").write_text(json.dumps(KERNELS, indent=2) + "\n")
+            (branch / "kernels.json").write_text(json.dumps(kernels(), indent=2) + "\n")
             shutil.copy2(public, branch / (SIGNING_KEY + ".pub"))
             (branch / "releases.json").write_text(json.dumps(releases, indent=2) + "\n")
             (pages / ".nojekyll").touch()

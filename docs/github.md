@@ -78,13 +78,25 @@ Rebuild inputs remain available as workflow artifacts under the configured reten
 period; package inventories and test records remain in the image and VM artifacts.
 
 The kernel packages come from the [UFlinux kernel releases](https://github.com/UFlinux-project/kernel/releases).
-`config/kernels.lock.json` pins the release tag and asset SHA-256 hashes. For
-publication, the build converts the outer compression to Deflate for Alpine's
+No release tag is pinned: a build uses the newest release at the moment it resolves
+one, and checks every asset against the SHA-256 digest GitHub publishes with it.
+`config/kernels.json` holds what that release has to provide — the repository,
+the kernel signing key hash, and the required package target per architecture — so a
+newest release that stops carrying one of them fails the build instead of silently
+dropping a board. `scripts/kernel-release.py` prints the release that would be used;
+the workflow resolves it once and hands the tag to every later job through
+`UFLINUX_KERNEL_TAG`, so a kernel published mid-run cannot give the ISO and the
+repository different packages. Set that variable to build against one release
+explicitly.
+For publication, the build converts the outer compression to Deflate for Alpine's
 stock apk-tools and preserves the signed package contents. The current kernel
 generation is indexed in `<arch>/Packages.adb` beside the existing distro index.
 New installations configure both indexes and include the kernel public key.
 Existing installations can add the full URL to their architecture's
 `Packages.adb` and import the published `uflinux-kernel.ec.pem.pub` to use it.
+The published repository also carries a `kernels.json` naming the tag and asset
+hashes it was staged from; the post-deployment check re-reads that release and
+refuses the generation if the assets differ.
 
 The repository keeps the current generation and two previous generations of
 custom APKs. The next publication retrieves its history from the existing Pages repository.

@@ -1,5 +1,6 @@
 {
-  "tag": "kernels-c9b7a47ba9c85a41b13f1c0a",
+  "tag": "kernels-fixture",
+  "base": "https://github.com/UFlinux-project/kernel/releases/download/kernels-fixture",
   "key": {
     "name": "uflinux-kernel.ec.pem.pub",
     "sha256": "1c97e84817f9928d0aa973d6ab8da406f0e66dccaa3a720d232caa36db9cc12e"
@@ -8,35 +9,35 @@
     "x86_64": {
       "x86_64": {
         "name": "linux-uflinux-x86_64-7.3.6-r14.apk",
-        "sha256": "3ca733d2c1b3c97becb2e427d1027bceb51ee6b9dcec4af1bd849b41b84c2c30"
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
       },
       "virt-x86_64": {
         "name": "linux-uflinux-virt-x86_64-7.3.6-r14.apk",
-        "sha256": "3f7cb5816d9b963debcd4db146d8168dc8a0881e4aba9ebd46b4e4eb6a3f150a"
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
       }
     },
     "aarch64": {
       "aarch64": {
         "name": "linux-uflinux-aarch64-7.3.6-r14.apk",
-        "sha256": "34df74b737a5be2c69f421d3fc7a5e28dcc3f63ad84d918822ae625affd6285a"
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
       },
       "virt-aarch64": {
         "name": "linux-uflinux-virt-aarch64-7.3.6-r14.apk",
-        "sha256": "c184f9d7b617221a8419792870416475be0c81116464ca90068ccf98b7522da0"
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
       },
       "dragon-q6a": {
         "name": "linux-uflinux-dragon-q6a-7.0.11-r14.apk",
-        "sha256": "c212f44aeaa73846d36e4b5e980daf1ab9b3a014dc5607e5ed73bb59264fcc22"
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
       },
       "rpi": {
         "name": "linux-uflinux-rpi-6.18.50-r14.apk",
-        "sha256": "510795cabfb3876023ca7eddd36738234b59a39d385df8d5714faf99b0700096"
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
       }
     },
     "riscv64": {
       "orangepi-rv2": {
         "name": "linux-uflinux-orangepi-rv2-6.6.63-r14.apk",
-        "sha256": "8abc648d8c25d890db853c238682ac9c624d18147c17d4e67913561057f221b9"
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
       }
     }
   }

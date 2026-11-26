@@ -69,11 +69,14 @@ Beside the Start button, application buttons come from the pinned favourites in
 click opens a menu listing the group's windows with a close button each, and,
 for applications, entries to launch another window, pin or unpin the button and
 close all windows. Resting the pointer on a running app opens thumbnail cards
-with activation and close controls. Settings → Appearance → Window previews
-controls both these images and labwc's native Alt+Tab thumbnail grid; it defaults
-to enabled. With previews disabled, hover cards retain window titles and Alt+Tab
-uses the classic list. Pinned buttons can be rearranged by dragging one onto another; the
-new order is written back to the same file, and an unreadable file falls back
+with activation and close controls. Each card uses the same bordered,
+shadow-raised surface as the clock and Start menu popovers, and a thumbnail
+keeps no hover highlight of its own, so only the title and close buttons react
+to the pointer. Settings → Appearance → Window previews controls both these
+images and labwc's native Alt+Tab thumbnail grid; it defaults to enabled. With
+previews disabled, hover cards retain window titles and Alt+Tab uses the classic
+list. Pinned buttons can be rearranged by dragging one onto another; the new
+order is written back to the same file, and an unreadable file falls back
 to the defaults rather than blocking the panel. The clock opens a popover with a
 month-navigable calendar and a notification centre that reads Mako's list while
 the popover is open and dismisses notifications individually or together. Mako

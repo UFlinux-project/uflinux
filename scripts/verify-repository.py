@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import urllib.request
 
-from kernel_packages import KEY, KEY_FILE, KERNELS, kernel_index
+from kernel_packages import KEY, KEY_FILE, kernel_index, resolve
 
 from builder import ARCHES, Builder, PROJECT, SIGNING_KEY, TRUSTED_KEY, repository_url, sha, temporary_tree
 
@@ -87,14 +87,20 @@ def main():
         apk('update')
         kernel_metadata = ((staging / 'kernels.json').read_bytes() if args.staging
                            else bounded_download(repository + '/kernels.json'))
-        if json.loads(kernel_metadata) != KERNELS:
-            raise ValueError('Kernel repository generation differs from the input lock')
+        published = json.loads(kernel_metadata)
+        # The generation names the release it was staged from, so re-read that
+        # tag rather than the newest one: a kernel release published after this
+        # release must not fail the comparison, while the assets the manifest
+        # advertises are still checked against what the server really serves.
+        tag = published.get("tag")
+        if not isinstance(tag, str) or published != resolve(tag):
+            raise ValueError('Kernel repository generation differs from the kernel release it names')
         kernel_public = ((staging / KEY).read_bytes() if args.staging
                          else bounded_download(repository + '/' + KEY, 16384))
         if kernel_public != KEY_FILE.read_bytes():
             raise ValueError('Kernel repository key differs from the bundled release key')
         builder.put('etc/apk/keys/' + KEY, kernel_public.decode())
-        for arch, targets in KERNELS['packages'].items():
+        for arch, targets in published['packages'].items():
             if args.staging and arch != args.arch:
                 shutil.copytree(staging / arch, root / 'published' / arch)
             index = kernel_index(source, arch)

@@ -36,15 +36,23 @@ jobs:
       epoch: ${{ steps.matrix.outputs.epoch }}
       cache: ${{ steps.matrix.outputs.cache }}
       release: ${{ steps.matrix.outputs.release }}
+      kernel_tag: ${{ steps.kernel.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: python3 scripts/check.py
+      # The kernel release is the newest one at this moment, and every later job
+      # is handed that tag. Resolving "latest" per job would let a kernel
+      # published mid-run give the ISO and the repository different packages.
+      - name: Select the kernel release
+        id: kernel
+        run: echo "tag=$(python3 scripts/kernel-release.py)" >> "$GITHUB_OUTPUT"
       - name: Check Alpine package availability across all targets
         env:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
+          UFLINUX_KERNEL_TAG: ${{ steps.kernel.outputs.tag }}
         run: python3 scripts/check-packages.py
       - name: Validate shell and Actions workflows
         run: |
@@ -136,6 +144,8 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.checks.outputs.epoch }}
       APK_REPOSITORY_URL: ${{ vars.APK_REPOSITORY_URL }}
       RELEASE: ${{ needs.checks.outputs.release }}
+      UFLINUX_KERNEL_TAG: ${{ needs.checks.outputs.kernel_tag }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,16 +169,16 @@ jobs:
           release_args=()
           if [ "$RELEASE" = true ]; then release_args+=(--release); fi
           for stage in sign image; do
-            sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY bash scripts/build.sh --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --stage "$stage" "${release_args[@]}"
+            sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY,UFLINUX_KERNEL_TAG,GH_TOKEN bash scripts/build.sh --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --stage "$stage" "${release_args[@]}"
           done
       - name: Verify signatures, desktop and installer checks
         run: |
           release_args=()
           if [ "$RELEASE" = true ]; then release_args+=(--release); fi
-          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA bash scripts/build.sh --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --stage verify "${release_args[@]}"
+          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,UFLINUX_KERNEL_TAG,GH_TOKEN bash scripts/build.sh --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --stage verify "${release_args[@]}"
       - name: Exercise release signing and key cleanup with a disposable key
         if: matrix.arch == 'x86_64'
-        run: sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA python3 tests/signing-smoke.py --arch x86_64 --version '${{ needs.checks.outputs.version }}'
+        run: sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,UFLINUX_KERNEL_TAG,GH_TOKEN python3 tests/signing-smoke.py --arch x86_64 --version '${{ needs.checks.outputs.version }}'
       - name: Upload verification diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -264,6 +274,8 @@ jobs:
       SOURCE_DATE_EPOCH: ${{ needs.checks.outputs.epoch }}
       APK_REPOSITORY_URL: ${{ vars.APK_REPOSITORY_URL }}
       RELEASE: ${{ needs.checks.outputs.release }}
+      UFLINUX_KERNEL_TAG: ${{ needs.checks.outputs.kernel_tag }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -290,8 +302,8 @@ jobs:
           release_args=()
           if [ "$RELEASE" = true ]; then release_args+=(--release); fi
           build_args=(--arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}')
-          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY bash scripts/build.sh "${build_args[@]}" --stage sign "${release_args[@]}"
-          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY bash scripts/build.sh "${build_args[@]}" --device '${{ matrix.device }}' --stage device "${release_args[@]}"
+          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY,UFLINUX_KERNEL_TAG,GH_TOKEN bash scripts/build.sh "${build_args[@]}" --stage sign "${release_args[@]}"
+          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,GITHUB_SHA,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY,UFLINUX_KERNEL_TAG,GH_TOKEN bash scripts/build.sh "${build_args[@]}" --device '${{ matrix.device }}' --stage device "${release_args[@]}"
       - name: Boot and verify GRUB device images
         if: matrix.device == 'vm' || startsWith(matrix.device, 'pc-')
         run: |
@@ -364,6 +376,7 @@ jobs:
       VERSION: ${{ needs.checks.outputs.version }}
       SOURCE_DATE_EPOCH: ${{ needs.checks.outputs.epoch }}
       APK_REPOSITORY_URL: ${{ vars.APK_REPOSITORY_URL }}
+      UFLINUX_KERNEL_TAG: ${{ needs.checks.outputs.kernel_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -386,10 +399,10 @@ jobs:
         run: |
           previous=()
           if [ -d out/previous/repository ]; then previous+=(--previous out/previous/repository); fi
-          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY python3 scripts/publish-repository.py --version "$VERSION" "${previous[@]}"
+          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,APK_SIGNING_PRIVATE_KEY,APK_SIGNING_PUBLIC_KEY,UFLINUX_KERNEL_TAG,GH_TOKEN python3 scripts/publish-repository.py --version "$VERSION" "${previous[@]}"
       - name: Check fresh clients and retained-version upgrades through the Pages layout
         run: |
-          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY python3 scripts/verify-repository.py --version "$VERSION" --staging out/pages/apk/v3.24/uflinux
+          sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,UFLINUX_KERNEL_TAG,GH_TOKEN python3 scripts/verify-repository.py --version "$VERSION" --staging out/pages/apk/v3.24/uflinux
           sudo --preserve-env=SOURCE_DATE_EPOCH python3 scripts/release-records.py --version "$VERSION"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -406,7 +419,7 @@ jobs:
       - name: Check the deployed signed repository before publishing the release
         run: |
           for attempt in 1 2 3; do
-            if sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY python3 scripts/verify-repository.py --version "$VERSION"; then exit 0; fi
+            if sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,GITHUB_REPOSITORY,UFLINUX_KERNEL_TAG,GH_TOKEN python3 scripts/verify-repository.py --version "$VERSION"; then exit 0; fi
             if [ "$attempt" -eq 3 ]; then exit 1; fi
             sleep 10
           done

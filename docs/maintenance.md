@@ -36,6 +36,14 @@ index regularly, so the branch is the pin and the packages are checked against t
 branch's live index. Adding a board is a config change plus a package-availability
 check; nothing in the builder has to learn about it.
 
+The kernel release is not pinned either, so there is nothing to bump when the
+[kernel repository](https://github.com/UFlinux-project/kernel/releases) publishes:
+the next build picks the newest release up and verifies each asset against the
+digest GitHub publishes with it. Edit `config/kernels.json` only to trust a new
+kernel signing key or to change which package targets a release must carry; a
+release that stops carrying one fails the build rather than dropping the board.
+To reproduce an older image, build with `UFLINUX_KERNEL_TAG` set to its tag.
+
 Replace the reserved `noreply@example.invalid` packager identity with your real
 maintainer identity before public releases. It is a syntactically valid packaging
 default, not a monitored support address. Set the package project URL to your

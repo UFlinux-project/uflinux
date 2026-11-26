@@ -23,7 +23,8 @@ import urllib.request
 import zlib
 import zipfile
 
-from kernel_packages import KEY as KERNEL_KEY, KERNELS, LIVE_TARGET, kernel_index, live_flavor, stage_kernels
+from kernel_packages import (KEY as KERNEL_KEY, LIVE_TARGET, kernel_index, kernels,
+                             kernel_fingerprint, live_flavor, stage_kernels)
 
 PROJECT = Path(__file__).resolve().parents[1]
 LOCK = json.loads((PROJECT / "config/sources.lock.json").read_text())
@@ -124,7 +125,7 @@ def device_repositories(source, arch):
              f"{alpine['mirror']}/{alpine['branch']}/community"]
     if arch in LOCK["apps"]["arches"]:
         lines.append(LOCK["apps"]["url"])
-    if arch in KERNELS["packages"]:
+    if arch in kernels()["packages"]:
         lines.append(kernel_index(source, arch))
     return "\n".join(lines) + "\n"
 
@@ -168,7 +169,7 @@ def firmware_packages():
 def device_packages(device, arch):
     """Everything the device rootfs needs beyond the live system's package set."""
     target = device["kernel"].format(arch=arch)
-    item = KERNELS["packages"][arch][target]
+    item = kernels()["packages"][arch][target]
     kernel = "linux-uflinux-" + target
     version = item["name"].removeprefix(kernel + "-").removesuffix(".apk")
     packages = ["uflinux-desktop-meta", "uflinux-device", f"{kernel}={version}"] + list(device["packages"])
@@ -1416,7 +1417,7 @@ class Builder:
             self.chroot("xorriso", "-osirrox", "on", "-indev",
                         f"/image-out/uflinux-{self.args.version}-{arch}.iso",
                         "-extract", f"/apks/kernels/{arch}", "/iso-kernel")
-            expected = KERNELS["packages"][arch][LIVE_TARGET[arch]]["name"]
+            expected = kernels()["packages"][arch][LIVE_TARGET[arch]]["name"]
             for name in ("Packages.adb", expected):
                 if sha(media / name) != sha(directory / name):
                     raise RuntimeError(f"The ISO's offline kernel repository differs: {name}")
@@ -1469,7 +1470,7 @@ class Builder:
         """Prepare an installed rootfs for *device*: repos, keys and /project."""
         arch = self.args.arch
         root = self.root
-        fingerprint = hashlib.sha256(json.dumps([LOCK, DEVICE_LOCK, KERNELS, device],
+        fingerprint = hashlib.sha256(json.dumps([LOCK, DEVICE_LOCK, kernel_fingerprint(), device],
                                                 sort_keys=True).encode()).hexdigest()
         marker = root / ".uflinux-bootstrap"
         if marker.exists() and marker.read_text() != fingerprint:

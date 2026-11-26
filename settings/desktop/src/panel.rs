@@ -582,8 +582,11 @@ impl Panel {
                         }
                     });
                     // The hover preview is its own popover so the right-click
-                    // menu and the card can never fight over one child.
-                    let preview = gtk::Popover::new();
+                    // menu and the card can never fight over one child. Like
+                    // the clock and tray popovers it has no arrow and its own
+                    // class, so the shared popup card is the only frame shown.
+                    let preview = gtk::Popover::builder().has_arrow(false).build();
+                    preview.add_css_class("uflinux-task-preview-popover");
                     // A hover card must not take a pointer grab: that makes
                     // the anchor receive leave, close the card, then enter
                     // again even though the physical pointer never moved.
@@ -1081,6 +1084,7 @@ impl Panel {
                     }
                 });
                 let image_button = gtk::Button::builder().child(&stack).build();
+                image_button.add_css_class("uflinux-preview-image");
                 let target = activate.clone();
                 image_button.connect_clicked(move |_| target.emit_clicked());
                 tile.append(&image_button);
