@@ -293,7 +293,12 @@ x86_64, aarch64, and riscv64.
 The recipe compiles musl with `-O3 -fno-plt` on all four targets. On x86_64 and
 aarch64, BellSoft's glibc-string 2.43.1 supplies CPU-dispatched memory and string
 routines in both libc libraries. The builder verifies the pinned source archive
-and saves it with the package shard's offline build inputs.
+and saves it with the package shard's offline build inputs. Because those sources
+are arch specific, the recipe appends them and their checksums together in a
+conditional block at the end of the file; abuild matches a source with the
+checksum at the same position, so both lists must keep the same order. That block
+is maintained by hand, since `abuild checksum` rewrites the checksums as one
+unconditional block and would break the ppc64le and riscv64 builds.
 
 On an Ubuntu 26.04 build host, install `bolt-22` and `linux-perf`. The
 RISC-V job additionally needs `qemu-system-riscv`, `opensbi`, and `cpio`. Build
