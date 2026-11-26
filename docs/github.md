@@ -89,8 +89,14 @@ the workflow resolves it once and hands the tag to every later job through
 repository different packages. Set that variable to build against one release
 explicitly.
 For publication, the build converts the outer compression to Deflate for Alpine's
-stock apk-tools and preserves the signed package contents. The current kernel
-generation is indexed in `<arch>/Packages.adb` beside the existing distro index.
+stock apk-tools. The release packages are built unprivileged, so every path they
+carry is owned by `nobody`, and apk treats an owner it cannot restore as a broken
+package — which aborts an installation whose `/boot` is the vfat ESP. The build
+therefore rewrites that one owner name to `root` in the package descriptor and
+re-signs the package with the build key, since the rewrite drops the release
+signature and the release key is not one the build holds. The signed contents are
+otherwise preserved. The current kernel generation is indexed in
+`<arch>/Packages.adb` beside the existing distro index.
 New installations configure both indexes and include the kernel public key.
 Existing installations can add the full URL to their architecture's
 `Packages.adb` and import the published `uflinux-kernel.ec.pem.pub` to use it.

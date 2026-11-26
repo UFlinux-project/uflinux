@@ -289,7 +289,7 @@ def main():
             child.sendline("uflinux-test-password")
             child.expect(r"\r*\nUFLINUX_RC:([0-9]+)\r*\n")
             if child.match.group(1) != "0":
-                raise RuntimeError(f"Installer exited with status {child.match.group(1)}\n{child.before[-2000:]}")
+                raise RuntimeError(f"Installer exited with status {child.match.group(1)}\n{child.before[-8000:]}")
             guest(child, "test $(findmnt -n -o FSTYPE /mnt) = xfs; ! grep -q '^live:' /mnt/etc/passwd; ! grep -q initial_session /mnt/etc/greetd/config.toml; sha256sum -c /tmp/preserved.sha256; sfdisk --dump /dev/vda > /tmp/table.after; cmp /tmp/table.before /tmp/table.after")
             if args.mode == "uefi":
                 guest(child, "test -s /mnt/boot/EFI/BOOT/BOOT*.EFI; test -s /mnt/boot/grub/grub.cfg; ls -lh /mnt/boot/initramfs-uflinux-x86_64; efibootmgr -v")

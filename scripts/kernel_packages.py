@@ -8,6 +8,7 @@ job keeps every one of its steps on the same kernel.
 import hashlib
 import json
 import os
+import struct
 import time
 import urllib.error
 import urllib.request
@@ -102,8 +103,42 @@ def kernel_index(source, arch):
     return f"{source}/{arch}/Packages.adb"
 
 
+def _read(stream, count):
+    """Read exactly count bytes, or everything a closed stream still holds."""
+    chunks = []
+    while count > 0:
+        chunk = stream.read(count)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        count -= len(chunk)
+    return b"".join(chunks)
+
+
+def _ownership_header(stream, name):
+    """Return the leading ADB block with the package owner changed to root.
+
+    The release packages are built as an unprivileged user, so every path they
+    carry is owned by nobody:nobody. apk restores that owner, and a package it
+    could not restore is reported broken, which aborts the installer: /boot is
+    the vfat ESP on a UEFI system, and vfat cannot hold an owner other than the
+    one it was mounted with. The owner is named once, in the string table of
+    the descriptor block, so the change is a length preserving replacement of
+    that one name. The same string is the group, and the signature covers the
+    data blocks alone, so stage_kernels() restores validity by re-signing.
+    """
+    header = _read(stream, 16)
+    magic, field = struct.unpack_from("<8sI", header, 0)
+    if magic != b"ADB.pckg" or field >> 30 or not 16 <= field <= 16 * 1024 * 1024:
+        raise ValueError(f"Unexpected kernel APK descriptor in {name}")
+    block = header + _read(stream, field - 8)
+    if len(block) != field + 8 or block.count(b"\x06nobody\x00") != 1:
+        raise ValueError(f"Unexpected kernel APK ownership in {name}")
+    return block.replace(b"\x06nobody\x00", b"\x04root\x00\x00\x00")
+
+
 def deflate_package(source, destination):
-    """Rewrap the signed ADB stream without modifying any of its blocks."""
+    """Rewrap the signed ADB stream, changing only the package ownership."""
     with source.open("rb", buffering=0) as original, destination.open("wb") as output:
         header = original.read(6)
         if header[:5] != b"ADBc\x02":
@@ -111,10 +146,7 @@ def deflate_package(source, destination):
         compressor = zlib.compressobj(level=6, wbits=-15)
         output.write(b"ADBd")
         with subprocess.Popen(["zstd", "-dc"], stdin=original, stdout=subprocess.PIPE) as decoder:
-            magic = decoder.stdout.read(8)
-            if magic != b"ADB.pckg":
-                raise ValueError(f"Unexpected kernel APK payload in {source.name}")
-            output.write(compressor.compress(magic))
+            output.write(compressor.compress(_ownership_header(decoder.stdout, source.name)))
             while chunk := decoder.stdout.read(1024 * 1024):
                 output.write(compressor.compress(chunk))
             if decoder.wait():
@@ -145,6 +177,12 @@ def stage_kernels(builder, arch, directory, targets=None):
             converted = Path(temporary) / name
             deflate_package(source, converted)
             converted.replace(directory / name)
+        # The ownership rewrite invalidates the release signature, and the
+        # release key is not one this build can sign with. adbsign keeps the
+        # deflate framing of its input and always exits zero, so the following
+        # verification is what decides.
+        builder.chroot("apk", "adbsign", "--allow-untrusted", "--reset-signatures",
+                       "--sign-key", SIGNING_PRIVATE, f"{relative}/{name}")
         packages.append(f"{relative}/{name}")
     builder.chroot("apk", "verify", *packages)
     builder.chroot("apk", "mkndx", "--sign-key", SIGNING_PRIVATE,

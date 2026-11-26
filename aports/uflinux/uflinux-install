@@ -28,6 +28,26 @@ def output(*args):
     return run(*args, stdout=subprocess.PIPE).stdout.strip()
 
 
+def describe_apk_log(target):
+    """Report what apk recorded, since setup-disk only says that it failed.
+
+    A package that apk considers broken, for instance one whose owner it could
+    not restore on the vfat ESP, aborts the installation without naming itself.
+    """
+    try:
+        lines = (target / "var/log/apk.log").read_text(errors="replace").splitlines()
+    except OSError:
+        print("uflinux-install: the target holds no var/log/apk.log", file=sys.stderr)
+        return
+    recorded = [line for line in lines if "ERROR" in line or "WARNING" in line]
+    if not recorded:
+        print("uflinux-install: var/log/apk.log holds no errors or warnings", file=sys.stderr)
+        return
+    print("uflinux-install: last apk log records:", file=sys.stderr)
+    for line in recorded[-20:]:
+        print("  " + line, file=sys.stderr)
+
+
 def configure_early_graphics(target, kernel, drm=Path('/sys/class/drm')):
     """Include the active graphics drivers, not every GPU and its firmware."""
     modules = set()
@@ -386,7 +406,11 @@ def install(args, plan, password):
         if plan["mode"] == "uefi":
             env["USE_EFI"] = "1"
         with temporary_repositories(source_repositories, install_repositories):
-            run(*command, env=env)
+            try:
+                run(*command, env=env)
+            except subprocess.CalledProcessError:
+                describe_apk_log(target)
+                raise
     # setup-disk generates its own mkinitfs.conf, so extend it after installation.
     initfs_conf = target / "etc/mkinitfs/mkinitfs.conf"
     kernels = sorted((target / "lib/modules").glob("*-" + flavor))
