@@ -450,6 +450,15 @@ def install(args, plan, password):
     run(*user_command, args.user)
     run("chroot", str(target), "addgroup", args.user, "wheel")
     run("chroot", str(target), "addgroup", args.user, "netdev")
+    # Device access for the printing stack. The scanner group only exists once
+    # the printing stack has been enabled (Settings creates it), so both
+    # memberships are conditional; the Settings helper adds every interactive
+    # account to whichever groups are missing when the toggle is turned on.
+    for group in ("lp", "scanner"):
+        probe = subprocess.run(["chroot", str(target), "getent", "group", group],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if probe.returncode == 0:
+            run("chroot", str(target), "addgroup", args.user, group)
     run("chroot", str(target), "chpasswd", input=f"{args.user}:{password}\n")
     run("chroot", str(target), "passwd", "-l", "root", stdout=subprocess.DEVNULL)
     write(target, "etc/doas.d/uflinux.conf", "permit persist :wheel as root\n", 0o600)

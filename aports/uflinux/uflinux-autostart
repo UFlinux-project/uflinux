@@ -18,6 +18,7 @@ else
 	/usr/libexec/pipewire-launcher &
 fi
 /usr/libexec/uflinux-theme-sync &
+/usr/libexec/uflinux-printing-sync &
 mako &
 /usr/libexec/uflinux-settingsd &
 # The desktop supervises its own restarts, so the session needs no extra

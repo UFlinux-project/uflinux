@@ -33,6 +33,11 @@
     <message>Authentication is required to save a Wi-Fi profile</message>
     <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_admin</allow_active></defaults>
   </action>
+  <action id="org.uflinux.settings.printing">
+    <description>Enable printing and scanning and manage printers</description>
+    <message>Authentication is required to change printing settings</message>
+    <defaults><allow_any>no</allow_any><allow_inactive>no</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>
+  </action>
   <action id="org.uflinux.settings.brightness">
     <description>Control a connected monitor's brightness</description>
     <message>Authorization is required to control monitor brightness</message>

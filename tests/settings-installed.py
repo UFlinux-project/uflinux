@@ -135,8 +135,32 @@ assert 'org.uflinux.settings.boot-options' in \
     Path('/usr/share/polkit-1/actions/org.uflinux.settings.policy').read_text(), \
     "The boot options action is not installed"
 assert state()['boot']['configured'] == 'off', state()['boot']
+# The printing stack ships installed but inert: no print service may be in a
+# runlevel, and the Document Scanner must stay hidden for the unprivileged
+# account until the toggle is used.
+printing_policy = Path('/usr/share/polkit-1/actions/org.uflinux.settings.policy').read_text()
+assert 'org.uflinux.settings.printing' in printing_policy, \
+    "The printing action is not installed"
+subprocess.check_output(
+    ['apk', 'info', '-e', 'cups', 'cups-client', 'cups-filters', 'avahi', 'sane-backends',
+     'sane-utils', 'sane-airscan', 'sane-udev', 'simple-scan'], text=True, timeout=60)
+for service in ('cupsd', 'avahi-daemon'):
+    assert not Path('/etc/runlevels/default', service).exists(), \
+        f'{service} must not start at boot on a fresh install'
+    assert not Path('/etc/runlevels/boot', service).exists(), \
+        f'{service} must not start at boot on a fresh install'
+assert state()['printing'] == {'installed': True, 'enabled': False, 'running': False,
+                               'shared': False, 'discovery': False, 'queues': [],
+                               'devices': [], 'scanners': [], 'default': '',
+                               'error': None}, state()['printing']
+system_entry = Path('/usr/share/applications/org.gnome.SimpleScan.desktop')
+scanner_entry = Path(user.pw_dir) / '.local/share/applications/org.gnome.SimpleScan.desktop'
+assert system_entry.is_file(), 'The image does not ship the Document Scanner'
+assert scanner_entry.is_file(), 'The Document Scanner override was not written for the account'
+assert 'NoDisplay=true' in scanner_entry.read_text(), \
+    'The Document Scanner must be hidden while printing is disabled'
 for page in ('network', 'displays', 'audio', 'power', 'performance', 'default-apps',
-             'datetime', 'appearance', 'screen-capture', 'about'):
+             'datetime', 'appearance', 'screen-capture', 'printing', 'about'):
     run('uflinux-settings', '--page', page)
     time.sleep(.4)
 full_pss = pss(gui_pid())

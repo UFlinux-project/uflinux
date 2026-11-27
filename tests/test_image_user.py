@@ -40,9 +40,12 @@ test "$(awk -F: '$1 == "user" { print $7 }' /etc/passwd)" = /bin/ash
 hash=$(awk -F: '$1 == "user" { print $2 }' /etc/shadow)
 salt=$(printf "%s" "$hash" | cut -d '$' -f3)
 test "$(busybox cryptpw -m sha512 -S "$salt" user)" = "$hash"
-for group in wheel audio video input netdev; do
+for group in wheel audio video input netdev lp; do
     id -nG user | tr ' ' '\n' | grep -qx "$group"
 done
+# The scanner group only exists once the printing stack has been enabled, so
+# the image script must skip it rather than fail.
+test "$(grep -c '^scanner:' /etc/group)" = 0
 test "$(stat -c %a /etc/sudoers.d/uflinux-user)" = 440
 test "$(stat -c %a /etc/doas.d/uflinux-user.conf)" = 600
 grep -qxF 'user ALL=(ALL:ALL) ALL' /etc/sudoers.d/uflinux-user

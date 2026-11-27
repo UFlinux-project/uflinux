@@ -4,6 +4,7 @@ mod network;
 mod performance;
 mod power;
 mod preferences;
+mod printing;
 mod remote_desktop;
 mod screen_capture;
 use crate::{
@@ -34,6 +35,7 @@ pub fn build(app: &Rc<App>, page: &str, parent: &gtk::Box) {
         "appearance" => preferences::appearance(app, parent),
         "screen-capture" => screen_capture::page(app, parent),
         "remote-desktop" => remote_desktop::page(app, parent),
+        "printing" => printing::page(app, parent),
         "about" => preferences::about(app, parent),
         _ => {}
     }

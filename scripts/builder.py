@@ -1268,7 +1268,7 @@ class Builder:
         with tarfile.open(archive) as tar:
             tar.extractall(source.parent, filter="data")
         self.chroot("apk", "add", "--virtual", ".uflinux-q6a-build", "build-base", "bison", "flex", "python3", "gawk",
-                    "linux-headers", "patch", "gettext-dev", "xz-dev")
+                    "bsd-compat-headers", "linux-headers", "patch", "gettext-dev", "xz-dev")
         self.chroot("patch", "--batch", "--fuzz=0", "-p1", "-d", "/opt/uflinux/grub-2.14",
                     "-i", "/project/patches/grub-q6a-efi-fixup.patch")
         build = (self.root / "opt/uflinux/grub-q6a")

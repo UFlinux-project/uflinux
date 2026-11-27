@@ -1,4 +1,4 @@
-use crate::{audio, bluetooth, capture, devices, display, network, rdp, vpn};
+use crate::{audio, bluetooth, capture, devices, display, network, printing, rdp, vpn};
 use futures_util::future::join3;
 use gio::prelude::*;
 use glib::variant::ToVariant;
@@ -194,6 +194,11 @@ pub fn run() -> Result<()> {
         let probed=app.clone();glib::MainContext::default().spawn_local(async move{
             let state = rdp::query(&probed.system).await;
             probed.view.borrow_mut().rdp=state;
+            probed.publish();
+        });
+        let probed=app.clone();glib::MainContext::default().spawn_local(async move{
+            let state = printing::query(&probed.system).await;
+            probed.view.borrow_mut().printing=state;
             probed.publish();
         });
         app.refresh_boot();
@@ -476,6 +481,10 @@ impl App {
         self.publish();
         Ok(())
     }
+    async fn refresh_printing(self: &Rc<Self>) {
+        let state = printing::query(&self.system).await;
+        self.view.borrow_mut().printing = state;
+    }
     async fn execute(self: &Rc<Self>, action: Action, caller: &str) -> Result<serde_json::Value> {
         match &action {
             Action::Refresh => {
@@ -498,6 +507,7 @@ impl App {
                 self.refresh_clock().await;
                 self.refresh_power();
                 self.refresh_boot();
+                self.refresh_printing().await;
                 self.queue_brightness(true);
                 self.publish();
             }
@@ -796,6 +806,32 @@ impl App {
                     state = rdp::query(&self.system).await;
                 }
                 self.view.borrow_mut().rdp = state;
+                self.publish();
+                return Ok(value);
+            }
+            Action::PrintingStatus => {
+                let state = printing::query(&self.system).await;
+                let value = serde_json::to_value(&state).map_err(|_| "Invalid printing state")?;
+                self.view.borrow_mut().printing = state;
+                self.publish();
+                return Ok(value);
+            }
+            Action::PrintingSystem { operation } => {
+                let expected = match operation {
+                    PrintingSystemAction::Enable => Some(true),
+                    PrintingSystemAction::Disable => Some(false),
+                    _ => None,
+                };
+                let value = printing::system(&self.system, operation).await?;
+                let mut state = printing::query(&self.system).await;
+                // OpenRC starts cupsd asynchronously, so the first read after an
+                // enable can still miss the runlevel symlink. Read again before
+                // the panel is redrawn.
+                if expected.is_some_and(|want| state.enabled != want) {
+                    let _ = glib::timeout_future(Duration::from_millis(600)).await;
+                    state = printing::query(&self.system).await;
+                }
+                self.view.borrow_mut().printing = state;
                 self.publish();
                 return Ok(value);
             }

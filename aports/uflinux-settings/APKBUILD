@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux-settings
 pkgver=0.1.0
-pkgrel=13
+pkgrel=14
 pkgdesc="UFLinux Settings, quick controls and resident Start menu"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="x86_64 aarch64 ppc64le riscv64"

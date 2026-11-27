@@ -14,8 +14,6 @@
 # UFLINUX_INITRAMFS_MODULES, and the device tree the boot loader is told about:
 # UFLINUX_DTB for extlinux, UFLINUX_DEVICETREE for GRUB.
 set -eu
-# shellcheck source=aports/uflinux/uflinux-boot-menu
-. /usr/libexec/uflinux-boot-menu
 
 device="$UFLINUX_DEVICE"
 arch="$UFLINUX_ARCH"
@@ -81,6 +79,8 @@ write_mkinitfs_conf
 
 # shellcheck disable=SC2086
 apk add --no-progress $UFLINUX_PACKAGES
+# shellcheck source=aports/uflinux/uflinux-boot-menu
+. /usr/libexec/uflinux-boot-menu
 /usr/libexec/uflinux-image-user
 
 # Fetch the Qualcomm EFI fixup driver without adding the Nura repository to

@@ -80,6 +80,10 @@ async fn authorized(
         SystemAction::SetRoutes { .. } | SystemAction::Enterprise { .. } => {
             "org.uflinux.settings.network-admin"
         }
+        SystemAction::Printing { printing } => match printing {
+            settings_core::PrintingSystemAction::Status => return Ok(()),
+            _ => "org.uflinux.settings.printing",
+        },
         _ => "org.uflinux.settings.datetime",
     };
     let details: HashMap<String, String> = HashMap::new();
@@ -287,6 +291,7 @@ async fn execute(bus: gio::DBusConnection, operation: &SystemAction) -> Result<s
             files::atomic(&path,format!("{security}[Settings]\nHidden=true\nAutoConnect=false\n").as_bytes(),0o600)?;
             Ok(serde_json::json!({"ok":true}))
         }
+        SystemAction::Printing{printing}=>crate::printing::execute(printing),
         _=>Err("Unknown operation".into()),
     }).await.map_err(|_|"System worker failed".to_string())?
 }

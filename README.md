@@ -56,6 +56,10 @@ riscv64 image ships Firefox ESR. Firefox uses a streamlined toolbar with horizon
 bookmarks bar; users can change these defaults.
 Settings offers TLP Power saver, Balanced and Performance modes. Physical
 power-button actions are configured in Settings and handled by BusyBox acpid.
+Printing and scanning (CUPS, SANE and GNOME Document Scanner) ship installed but
+disabled: the Printing page's single switch starts the services, grants the
+account printer and scanner device access and reveals the scanner app, and
+nothing runs until it is turned on.
 All live ISOs and board/VM disk images provide **user / user**, with
 password-authenticated `sudo` and `doas` access and the UFLinux graphical session.
 The live ISO also retains **live / live**, with passwordless local `doas`; root is locked

@@ -6,7 +6,7 @@ state, ConnMan authentication and display rollback. The privileged system helper
 uses polkit and normally exits after 45 idle seconds; saved additional routes keep
 its ConnMan subscription alive. Authentication uses libpolkit-agent-1 and PAM.
 
-Open `uflinux-settings`, use `--page network|displays|audio|power|default-apps|datetime|appearance|screen-capture|about`,
+Open `uflinux-settings`, use `--page network|displays|audio|power|default-apps|datetime|appearance|screen-capture|printing|about`,
 or `--panel network|sound|power --output DP-1` for the taskbar menus.
 `--quick-settings` remains an alias for the Network panel. The separate resident
 launcher runs as `uflinux-desktop start-menu [--output DP-1]`, toggling the

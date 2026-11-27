@@ -1,0 +1,49 @@
+#!/bin/sh
+# Keeps the Document Scanner shortcut in step with the printing stack.
+#
+# The stack is off until UFLinux Settings turns it on, and the system desktop
+# entry that simple-scan ships is visible by default, so a session has to write
+# its own NoDisplay override the first time it runs. Settings does the same
+# write for every account when the switch flips; this script covers the cases it
+# cannot: a fresh install that never touched the switch, an account created
+# after the switch was turned off, and a home directory restored from a skeleton
+# that predates the current state.
+#
+# It runs unprivileged from the session autostart and only ever touches the
+# calling user's own directory.
+set -eu
+
+id=org.gnome.SimpleScan.desktop
+system=/usr/share/applications/$id
+[ -f "$system" ] || exit 0
+home=${HOME:-}
+[ -n "$home" ] || exit 0
+directory="$home/.local/share/applications"
+override="$directory/$id"
+
+# The same test the settings daemon uses: runlevel membership is a symlink, so
+# an existing file means the print service starts at boot.
+if [ -e /etc/runlevels/default/cupsd ]; then
+	enabled=1
+else
+	enabled=0
+fi
+
+if [ "$enabled" = 1 ]; then
+	[ -f "$override" ] || exit 0
+	grep -qs '^NoDisplay=true$' "$override" || exit 0
+	rm -f "$override"
+	exit 0
+fi
+
+wanted=$(mktemp "${TMPDIR:-/tmp}/uflinux-printing-sync.XXXXXX") || exit 0
+trap 'rm -f "$wanted"' EXIT
+cp "$system" "$wanted"
+printf 'NoDisplay=true\n' >>"$wanted"
+if [ -f "$override" ] && cmp -s "$wanted" "$override"; then
+	exit 0
+fi
+mkdir -p "$directory"
+chmod 755 "$directory"
+cp "$wanted" "$override"
+chmod 644 "$override"

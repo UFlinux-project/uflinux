@@ -144,6 +144,12 @@ in this document.
 - Installed-system tests cancel and grant authorization through the actual GTK
   polkit authentication agent. UI tests make GTK critical errors fatal, including
   repeated flyout activation and focus dismissal.
+- Printing ships inert: the installed-image checks confirm the CUPS/SANE packages
+  and Document Scanner are present while `cupsd` and `avahi-daemon` are in no
+  runlevel, and the protocol tests round-trip the printing status and
+  administration requests. Enabling, starting, adding or removing a queue,
+  sharing and the test page all go through `org.uflinux.settings.printing` and
+  the same polkit agent; a snapshot without the printing surface still parses.
 - UFLinux-owned code and packages use GPL-3.0-only. Third-party packages and
   patches retain their respective licenses.
 

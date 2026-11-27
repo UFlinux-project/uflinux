@@ -1,7 +1,7 @@
 # Maintainer: UFLinux contributors <noreply@example.invalid>
 pkgname=uflinux
 pkgver=0.1.0
-pkgrel=30
+pkgrel=32
 pkgdesc="Minimal Alpine desktop with labwc"
 url="${UFLINUX_PROJECT_URL:-https://github.com}"
 arch="noarch"
@@ -17,7 +17,7 @@ makedepends="rsvg-convert python3"
 builddir="$srcdir"
 source="uflinux-boot-menu Ubuntu.pf2 theme.txt splash.png NOTICE uflinux-image-user uflinux-openrc.conf uflinux.plymouth uflinux-spinner.svg uflinux-lock.svg uflinux-entry.svg uflinux-bullet.svg
 	uflinux-boot-assets.py uflinux-splash-original.png plymouthd.conf
-	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-initramfs-resize uflinux-plymouth.files uflinux-f2fs-resize.files kms.modules scsi.modules uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-prompt.sh uflinux-autostart uflinux-theme-sync uflinux-install uflinux-install-gui-backend
+	uflinux-bootsplash uflinux-initramfs-init uflinux-initramfs-splash uflinux-initramfs-resize uflinux-plymouth.files uflinux-f2fs-resize.files kms.modules scsi.modules uflinux-splash.initd uflinux-splash-stop.initd LICENSE uflinux-session uflinux-compositor uflinux-prompt.sh uflinux-autostart uflinux-theme-sync uflinux-printing-sync uflinux-install uflinux-install-gui-backend
 	uflinux-live.initd uflinux-device.initd uflinux-zram.initd uflinux-zram.confd uflinux.desktop uflinux-logo.svg artwork-NOTICE labwc-rc.xml labwc-menu.xml
 	labwc-autostart labwc-environment mako.conf
 	gtk-settings.ini 90-uflinux.gschema.override 45-uflinux-fonts.conf firefox-defaults.js
@@ -102,6 +102,7 @@ package() {
 	install -Dm755 "$srcdir/uflinux-session" "$pkgdir/usr/bin/uflinux-session"
 	install -Dm755 "$srcdir/uflinux-autostart" "$pkgdir/usr/libexec/uflinux-autostart"
 	install -Dm755 "$srcdir/uflinux-theme-sync" "$pkgdir/usr/libexec/uflinux-theme-sync"
+	install -Dm755 "$srcdir/uflinux-printing-sync" "$pkgdir/usr/libexec/uflinux-printing-sync"
 	install -Dm755 "$srcdir/uflinux-compositor" "$pkgdir/usr/libexec/uflinux-compositor"
 	install -Dm644 "$srcdir/uflinux-prompt.sh" "$pkgdir/etc/profile.d/30-uflinux-prompt.sh"
 	install -Dm755 "$srcdir/uflinux-network-init" "$pkgdir/usr/libexec/uflinux-network-init"
@@ -193,7 +194,7 @@ defaults() {
 	depends="adw-gtk3 papirus-icon-theme simp1e-cursors-adw-dark gsettings-desktop-schemas uflinux-initramfs=$pkgver-r$pkgrel"
 	replaces="plymouth greetd greetd-agreety-config connman connman-openrc iwd busybox-openrc"
 	replaces_priority=100
-	amove usr/libexec/uflinux-boot-menu usr/share/uflinux/grub-theme usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init usr/libexec/uflinux-image-user
+	amove usr/libexec/uflinux-boot-menu usr/share/uflinux/grub-theme usr/libexec/uflinux-autostart usr/libexec/uflinux-theme-sync usr/libexec/uflinux-printing-sync usr/libexec/uflinux-compositor usr/libexec/uflinux-network-init usr/libexec/uflinux-image-user
 	# Split functions run in $subpackages order and amove claims whole
 	# directories, so etc/conf.d is named per-file: amoving the directory
 	# here would delete etc/conf.d/uflinux-zram before the later zram()
@@ -208,7 +209,8 @@ defaults() {
 initramfs() {
 	pkgdesc="UFLinux early boot animation and mkinitfs integration"
 	depends="mkinitfs plymouth plymouth-drm"
-	replaces="plymouth"
+	# The theme and slim KMS/SCSI lists override files from these packages.
+	replaces="plymouth mkinitfs"
 	replaces_priority=100
 	amove etc/plymouth etc/mkinitfs usr/share/plymouth \
 		usr/libexec/uflinux-bootsplash usr/libexec/uflinux-initramfs-init usr/libexec/uflinux-initramfs-splash usr/libexec/uflinux-initramfs-resize
@@ -246,6 +248,15 @@ desktop() {
 	# uflinux-rds-vaapi adds the out-of-process ffmpeg H.264 encoder; it is a
 	# separate package so that a system that never enables RDP can drop it.
 	depends="$depends uflinux-rds uflinux-rds-vaapi"
+	# Printing and scanning (CUPS + SANE). Everything is installed but inert:
+	# cupsd and avahi-daemon are in no runlevel and the Document Scanner stays
+	# hidden until the "Enable printing" toggle in Settings turns the stack on.
+	# cups-filters provides the filters and the driverless/browsed helpers,
+	# sane-airscan and sane-udev give network and USB scanner support, and
+	# simple-scan is the scanner front end the same toggle shows. Driver
+	# packages (hplip, gutenprint) are deliberately not shipped; they install on
+	# demand, and "everywhere" IPP Everywhere covers most network printers.
+	depends="$depends cups cups-client cups-filters avahi avahi-libs sane-backends sane-utils sane-airscan sane-udev simple-scan"
 	install -d "$subpkgdir"
 }
 
@@ -307,7 +318,7 @@ sha512sums="
 3ce0f7942ed389fa01615fe77177f8649d3c717b45ab65e855953acb7cdcb37c19415d2de6e1e2b1275ae4a2ecf0803490cfca382f63ac78221f36c03b34932c  theme.txt
 b296599b1332ec42ce6b94d2365d60a2b7d0ed34ad5733793e3817fd9cd9fefa1d1f3ef63797452d129aef93454768e7c69412ca8b2b948d96c19101b26be748  splash.png
 cbf3bed939825f60856f568f3b12dcf0329c9fa393df34975d53a946cb9a8f33006afba0c8bfe4502ae18f73b094f16732e0ce365f1c9795e2fee507501b7c80  NOTICE
-51b9323ee7513c1214550c1a1c8c527e1fb7cdca8ab07b18420ddc3434440b7aa366dba39a79f1d2cf26bcbbaf52afb4534514e5ca2979a8f645ca25bfb38ec4  uflinux-image-user
+93839316c2271734566989cde4007366642334b5f773c8ddf4bf1e9ef64e88754805371acfda8d1bef7d7976f922ec09c41083445d619bd7de2b7e101e99ea4a  uflinux-image-user
 e609def5a7fde0e7a128b5eb705e0d96cbddf8530614b9663d4f47a7e7b872fa8555170c093e4571d5937b60ddd46b074eaa7e5272fd2447bf0fe3e6151addcb  uflinux-openrc.conf
 10521c4f6117171e6a6ce28419b241cea95237462acc5d89119962a7340862260aecd32a69f3012a235e5f6a85afad5700c0e9771cf3049f28d85be4644c3ea4  uflinux.plymouth
 2656a127ebcff1432a2101d0e84183c09865e709e754ce20b80e4ec4cb70e6f83724ae7bcc262ce66d05f46e0bc07761a4a003a2165b574aea6ca539063b84c1  uflinux-spinner.svg
@@ -331,9 +342,10 @@ d361e5e8201481c6346ee6a886592c51265112be550d5224f1a7a6e116255c2f1ab8788df579d9b8
 9ec207ec468e74bec18a7d82603228b12918e24b9d1130f316852a104da5b3814a712ac6ee90f9201d6770989d2e8efd270f2ae9e80dfdde2002701adc58e06f  uflinux-session
 844131c113ff067ce0ce8be00ea3621a6f04185e5c78b9387dd1f31b7bdaab502442e962cd1b3358118de581461dc0ed21a4c55695f6c31e31dc37692adedf0d  uflinux-compositor
 8aa543ab3aa7627ee538935137fcdef8bd7d4aff809df567c0e14b4fccd7353665f027712c4ba66574c978e576da0f81639b469bd9efb870013cd00aac138038  uflinux-prompt.sh
-d031d31793d9945a2afbfb5b7a86be3d3dd13dc7e1a861f16237a7c3cf1a27d77498fc7b65596a0e690b99f26017d5efa454523e61c709a9241a793a600c6248  uflinux-autostart
+71275b34fe8d7dfc28f7ef70f0e6bd8ea5c27b3440338b780b63689eec4820eb969658221a914353309b3e0a1b303043bbb9f804b0f6177aa667f93db61b0155  uflinux-autostart
 0c37806c49629bb84275ed096c735d37d879483bdf4e1320fdc7ab0a0755bf376544c023227ed1d2321997c27a26128139e1865d6caac291aaf09a145a62c367  uflinux-theme-sync
-3b02496b2a5e2baf2c9495fc106d30b4e1a1d1096ad625eecaa8db5ec3f3ebc66700028953418bf4ce09af4d562cb0e1a725f2def60a7ed443623bf5c48062b1  uflinux-install
+f1f4ec320d4a3bf4039b397e0a50fde2f9b030207dbf01e745e3485ef89b22fa2912c4f9d79fdc21e10aaad3d808b583e8ff904bbfc810d8058c53c18a15250b  uflinux-printing-sync
+7175615ae4201b7e42d70652f5e4715aadd07d7a1dffe6cb94fd559602f54e0f90618adf27ee90b3308cba1abc1c6efaf5525e14a71e59db5d8743eb532037b3  uflinux-install
 5e4bce32685ed0a704eb413ed7cd57bdeeb963f26e178a5c810c66c14c95809894f8caa747ca0032f7fecff4d000abf95a4ff993704b8aea93b5a1209203e868  uflinux-install-gui-backend
 7153126defd63a0b0a46cd40080194b8435f751413e9ac97eaa9fc66f81b661d7f5f5b6398931fcab52adac8e609f560dcb461700575f0c84a5d85c36f664ef8  uflinux-live.initd
 165b1feddab305879799c0a9409188c353e0a6fc0f984047fe5c6951dec532f073fd561a127313184d356d6a30ea39b4327f9f75ceecf581c7d24eb028e1d574  uflinux-device.initd

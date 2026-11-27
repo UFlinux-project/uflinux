@@ -26,6 +26,11 @@ pub struct Snapshot {
     /// installed rather than failing to parse the whole state.
     #[serde(default)]
     pub rdp: Rdp,
+    /// Printing and scanning view. Absent from a snapshot produced by a daemon
+    /// without the printing stack, in which case the page shows it as not
+    /// installed rather than failing to parse the whole state.
+    #[serde(default)]
+    pub printing: Printing,
     pub about: BTreeMap<String, String>,
     pub error: Option<String>,
 }
@@ -769,6 +774,235 @@ impl CodecTier {
     }
 }
 
+/// CUPS and SANE view. `installed` is false when the printing stack is absent,
+/// so the page explains itself instead of showing an empty Printing tab.
+///
+/// The stack ships in the image but inert: with `enabled` false there is no
+/// cupsd, no avahi-daemon and no listener at all, so the whole feature costs
+/// nothing until the switch is flipped.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Printing {
+    /// False while cupsd is missing from the image.
+    pub installed: bool,
+    /// True when cupsd is in the default runlevel, i.e. the toggle is on.
+    pub enabled: bool,
+    /// True while cupsd is actually running; a disabled queue set can be
+    /// enabled but stopped, and the page then offers Start.
+    pub running: bool,
+    /// cupsd's share-printers state.
+    pub shared: bool,
+    /// mDNS/DNS-SD discovery state, i.e. whether avahi-daemon is up.
+    pub discovery: bool,
+    /// Configured queues, empty until a printer is added.
+    pub queues: Vec<PrinterQueue>,
+    /// Devices `lpinfo -v` reported without a queue of their own.
+    pub devices: Vec<DiscoveredDevice>,
+    pub scanners: Vec<ScannerDevice>,
+    /// Queue CUPS marks as the system default, empty when none is set.
+    pub default: String,
+    /// Last helper or backend failure, shown verbatim on the page.
+    pub error: Option<String>,
+}
+impl Default for Printing {
+    fn default() -> Self {
+        Self {
+            installed: false,
+            enabled: false,
+            running: false,
+            shared: false,
+            discovery: false,
+            queues: Vec::new(),
+            devices: Vec::new(),
+            scanners: Vec::new(),
+            default: String::new(),
+            error: None,
+        }
+    }
+}
+
+/// One CUPS queue as `lpstat` reports it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrinterQueue {
+    pub name: String,
+    pub state: PrinterState,
+    /// IPP device URI as configured.
+    pub uri: String,
+    /// Driver or make-and-model string; empty for a driverless IPP queue.
+    pub driver: String,
+    pub is_default: bool,
+    /// False while the queue rejects new jobs.
+    pub accepting: bool,
+    /// Extra status text from lpstat, e.g. "disabled since ...".
+    pub detail: String,
+    /// How the queue is reached, so the page can group wired and network.
+    pub kind: DeviceKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PrinterState {
+    Idle,
+    Processing,
+    /// Stopped by the user or by an error; it needs cupsenable.
+    Stopped,
+    #[default]
+    Unknown,
+}
+impl PrinterState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::Processing => "Printing",
+            Self::Stopped => "Stopped",
+            Self::Unknown => "Unknown",
+        }
+    }
+}
+
+/// A device `lpinfo -v` found that has no queue yet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoveredDevice {
+    /// Full device URI, passed back unchanged when the queue is created.
+    pub uri: String,
+    pub kind: DeviceKind,
+    pub description: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeviceKind {
+    Usb,
+    /// Reached over the network: ipp, ipps, https, http, socket, lpd, smb.
+    Network,
+    /// A `direct` backend entry, typically a locally attached vendor device.
+    Direct,
+    #[default]
+    Other,
+}
+impl DeviceKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Usb => "USB",
+            Self::Network => "Network",
+            Self::Direct => "Local",
+            Self::Other => "Other",
+        }
+    }
+
+    /// Classifies a CUPS device URI by its scheme, the only signal that is
+    /// always present and never wrong about the transport. Some backends
+    /// advertise a scheme with no colon at all (`direct hp`), so the leading
+    /// token is the scheme whether it is followed by `:` or by a space.
+    pub fn from_uri(uri: &str) -> Self {
+        let head = uri.split([':', ' ']).next().unwrap_or("");
+        match head {
+            "usb" | "hpusb" | "usbhp" => Self::Usb,
+            "direct" => Self::Direct,
+            // The HP backend serves both transports and says which one it used
+            // in the path, and `beh` is a generic wrapper for anything.
+            "hp" | "hpnp" => {
+                if uri.contains("/net/") || uri.contains("?ip=") {
+                    Self::Network
+                } else {
+                    Self::Usb
+                }
+            }
+            "ipp" | "ipps" | "https" | "http" | "socket" | "lpd" | "smb" | "dnssd" | "ippusb" => {
+                Self::Network
+            }
+            _ => Self::Other,
+        }
+    }
+}
+
+/// One scanner as `scanimage -L` reported it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScannerDevice {
+    /// SANE backend name, e.g. "airscan:e0:EPSON XP-4100 Series".
+    pub name: String,
+    pub vendor: String,
+    pub model: String,
+    pub kind: ScannerKind,
+}
+impl ScannerDevice {
+    /// What the page lists the device under.
+    pub fn title(&self) -> String {
+        match (self.vendor.is_empty(), self.model.is_empty()) {
+            (true, true) => self.name.clone(),
+            (true, false) => self.model.clone(),
+            (false, true) => self.vendor.clone(),
+            (false, false) => format!("{} {}", self.vendor, self.model),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScannerKind {
+    Usb,
+    /// Reached over the network, including eSCL and WSD scanners.
+    Network,
+    #[default]
+    Other,
+}
+impl ScannerKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Usb => "USB",
+            Self::Network => "Network",
+            Self::Other => "Other",
+        }
+    }
+
+    /// Classifies a SANE device name by the backend that owns it, the only
+    /// hint available without opening the device.
+    pub fn from_backend(name: &str) -> Self {
+        let Some((backend, _)) = name.split_once(':') else {
+            return Self::Other;
+        };
+        match backend {
+            "airscan" | "net" | "escl" | "http" | "wsd" | "epsonds" => Self::Network,
+            _ => Self::Usb,
+        }
+    }
+}
+
+/// Splits a SANE device description such as `EPSON XP-4100 Scanner` into the
+/// maker and the model, which is what a device list wants to show.
+pub fn split_scanner_description(description: &str) -> (String, String) {
+    let trimmed = description.trim();
+    let trimmed = trimmed
+        .strip_suffix("Scanner")
+        .or_else(|| trimmed.strip_suffix("scanner"))
+        .unwrap_or(trimmed)
+        .trim_end();
+    match trimmed.split_once(char::is_whitespace) {
+        Some((vendor, model)) => (vendor.to_string(), model.trim().to_string()),
+        // A one word description is a maker name far more often than a bare
+        // model number, and the panel shows the two joined anyway.
+        None => (trimmed.to_string(), String::new()),
+    }
+}
+
+/// What the privileged helper reports back for one read-only status request.
+/// The helper owns every CUPS and SANE parser, so the classification travels
+/// with the data and the daemon only merges it into the panel state.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrintingObservation {
+    #[serde(default)]
+    pub queues: Vec<PrinterQueue>,
+    #[serde(default)]
+    pub devices: Vec<DiscoveredDevice>,
+    #[serde(default)]
+    pub scanners: Vec<ScannerDevice>,
+    #[serde(default)]
+    pub shared: bool,
+    #[serde(default)]
+    pub default: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 /// Exhaustive actions, not an arbitrary D-Bus proxy or command runner.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
@@ -943,8 +1177,53 @@ pub enum Action {
     RdpSystem {
         operation: RdpSystemAction,
     },
+    /// Re-reads cupsd and SANE; the answer is the whole Printing section.
+    PrintingStatus,
+    /// Privileged printing operations, forwarded to the Settings system service.
+    PrintingSystem {
+        operation: PrintingSystemAction,
+    },
     System {
         operation: SystemAction,
+    },
+}
+/// What the privileged printing helper is allowed to do. Exhaustive for the
+/// same reason as SystemAction: the helper never runs an arbitrary command.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PrintingSystemAction {
+    /// Gathers queues, devices and scanners as root. Read-only, so it needs no
+    /// polkit action: cupsd's own policy refuses `lpinfo -v` to a plain user and
+    /// `/etc/cups/*.conf` is 0640 root:lp, so only the helper can look.
+    Status,
+    /// Writes the policy file, rc-update add + rc-service start.
+    Enable,
+    /// rc-service stop + rc-update del.
+    Disable,
+    Start,
+    Stop,
+    /// cupsctl --share-printers / --no-share-printers.
+    SetShared {
+        shared: bool,
+    },
+    AddPrinter {
+        name: String,
+        uri: String,
+        /// Empty asks CUPS for a driverless/IPP Everywhere queue.
+        driver: String,
+    },
+    RemovePrinter {
+        name: String,
+    },
+    SetDefaultPrinter {
+        name: String,
+    },
+    SetPrinterEnabled {
+        name: String,
+        enabled: bool,
+    },
+    TestPage {
+        name: String,
     },
 }
 /// What the in-package uflinux-rds-system helper is allowed to do over its own
@@ -997,6 +1276,12 @@ pub enum SystemAction {
     SetRoutes {
         service: String,
         routes: Vec<Route>,
+    },
+    /// Printing and scanning administration. Its own variant so that the
+    /// polkit action, not the datetime fallback, decides who may run it. The
+    /// payload is called `printing` because `operation` is this enum's tag.
+    Printing {
+        printing: PrintingSystemAction,
     },
     Enterprise {
         profile: Enterprise,
@@ -1252,6 +1537,161 @@ mod rdp_tests {
             assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
             assert_eq!(serde_json::to_string(&action).unwrap(), json);
         }
+    }
+
+    #[test]
+    fn printing_actions_round_trip_with_kebab_case_tags() {
+        for (json, action) in [
+            (r#"{"action":"printing-status"}"#, Action::PrintingStatus),
+            (
+                r#"{"action":"printing-system","operation":{"operation":"enable"}}"#,
+                Action::PrintingSystem {
+                    operation: PrintingSystemAction::Enable,
+                },
+            ),
+            (
+                r#"{"action":"printing-system","operation":{"operation":"disable"}}"#,
+                Action::PrintingSystem {
+                    operation: PrintingSystemAction::Disable,
+                },
+            ),
+            (
+                r#"{"action":"printing-system","operation":{"operation":"set-shared","shared":true}}"#,
+                Action::PrintingSystem {
+                    operation: PrintingSystemAction::SetShared { shared: true },
+                },
+            ),
+            (
+                r#"{"action":"printing-system","operation":{"operation":"add-printer","name":"Office","uri":"ipp://192.0.2.10/ipp/print","driver":""}}"#,
+                Action::PrintingSystem {
+                    operation: PrintingSystemAction::AddPrinter {
+                        name: "Office".into(),
+                        uri: "ipp://192.0.2.10/ipp/print".into(),
+                        driver: String::new(),
+                    },
+                },
+            ),
+            (
+                r#"{"action":"printing-system","operation":{"operation":"remove-printer","name":"Office"}}"#,
+                Action::PrintingSystem {
+                    operation: PrintingSystemAction::RemovePrinter {
+                        name: "Office".into(),
+                    },
+                },
+            ),
+            (
+                r#"{"action":"printing-system","operation":{"operation":"set-default-printer","name":""}}"#,
+                Action::PrintingSystem {
+                    operation: PrintingSystemAction::SetDefaultPrinter {
+                        name: String::new(),
+                    },
+                },
+            ),
+            (
+                r#"{"action":"printing-system","operation":{"operation":"set-printer-enabled","name":"Office","enabled":false}}"#,
+                Action::PrintingSystem {
+                    operation: PrintingSystemAction::SetPrinterEnabled {
+                        name: "Office".into(),
+                        enabled: false,
+                    },
+                },
+            ),
+            (
+                r#"{"action":"printing-system","operation":{"operation":"test-page","name":"Office"}}"#,
+                Action::PrintingSystem {
+                    operation: PrintingSystemAction::TestPage {
+                        name: "Office".into(),
+                    },
+                },
+            ),
+            (
+                r#"{"action":"system","operation":{"operation":"printing","printing":{"operation":"status"}}}"#,
+                Action::System {
+                    operation: SystemAction::Printing {
+                        printing: PrintingSystemAction::Status,
+                    },
+                },
+            ),
+        ] {
+            let parsed: Action = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+            assert_eq!(serde_json::to_string(&action).unwrap(), json);
+        }
+    }
+
+    #[test]
+    fn unknown_printing_operations_are_rejected() {
+        assert!(
+            serde_json::from_str::<Action>(r#"{"action":"printing-system","operation":"enable"}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<Action>(
+                r#"{"action":"printing-system","operation":{"operation":"run","command":"id"}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<PrintingSystemAction>(
+                r#"{"operation":"add-printer","name":"Office","uri":"ipp://h/p"}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<SystemAction>(
+                r#"{"operation":"printing","printing":{"operation":"reboot"}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn snapshots_without_printing_still_parse() {
+        let mut value = serde_json::to_value(Snapshot::default()).unwrap();
+        value.as_object_mut().unwrap().remove("printing");
+        let snapshot: Snapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(snapshot.printing, Printing::default());
+    }
+
+    #[test]
+    fn device_transports_are_recognised_from_an_address() {
+        assert_eq!(DeviceKind::from_uri("usb:/dev/usb/lp0"), DeviceKind::Usb);
+        assert_eq!(
+            DeviceKind::from_uri("hp:/net/OfficeJet?ip=192.0.2.5"),
+            DeviceKind::Network
+        );
+        assert_eq!(DeviceKind::from_uri("hp:/usb/OfficeJet"), DeviceKind::Usb);
+        assert_eq!(
+            DeviceKind::from_uri("ipp://192.0.2.5/ipp/print"),
+            DeviceKind::Network
+        );
+        assert_eq!(DeviceKind::from_uri("dnssd://x"), DeviceKind::Network);
+        assert_eq!(DeviceKind::from_uri("direct hp"), DeviceKind::Direct);
+        assert_eq!(DeviceKind::from_uri("beh"), DeviceKind::Other);
+        assert_eq!(
+            ScannerKind::from_backend("airscan:e0:EPSON"),
+            ScannerKind::Network
+        );
+        assert_eq!(
+            ScannerKind::from_backend("epson2:libusb:001:003"),
+            ScannerKind::Usb
+        );
+    }
+
+    #[test]
+    fn scanner_descriptions_split_into_vendor_and_model() {
+        assert_eq!(
+            split_scanner_description("EPSON WorkForce Pro WF-4820 Scanner"),
+            ("EPSON".to_string(), "WorkForce Pro WF-4820".to_string())
+        );
+        assert_eq!(
+            split_scanner_description("Canon"),
+            ("Canon".to_string(), String::new())
+        );
+        assert_eq!(
+            split_scanner_description("  "),
+            (String::new(), String::new())
+        );
     }
 
     #[test]

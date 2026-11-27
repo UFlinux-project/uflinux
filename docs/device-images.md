@@ -298,7 +298,10 @@ once the board has more than 4 GiB. See
 Every device image ships a regular account: **user / user**. Select the UFLinux
 session at the graphical greeter, or use this account on the text/serial console.
 The account belongs to `wheel`, `audio`, `video`, `input`, `netdev` and, when
-available, `render`. Both `sudo` and `doas` allow administrative commands with
+available, `render`, `lp` and `scanner`. The last two give the account access to
+USB printers and scanners once printing is enabled in Settings; the `scanner`
+group itself only exists after that switch has been turned on at least once.
+Both `sudo` and `doas` allow administrative commands with
 the account's password. To change it after login:
 
 ```sh

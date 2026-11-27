@@ -5,7 +5,7 @@ if ! id user >/dev/null 2>&1; then
 	adduser -D -s /bin/ash -G users user
 	printf 'user:user\n' | chpasswd
 fi
-for group in wheel audio video input netdev render; do
+for group in wheel audio video input netdev render lp scanner; do
 	if getent group "$group" >/dev/null; then
 		addgroup user "$group"
 	fi

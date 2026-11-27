@@ -14,6 +14,7 @@
 !/settings/daemon/src/bluetooth.rs
 !/settings/daemon/src/vpn.rs
 !/settings/daemon/src/rdp.rs
+!/settings/daemon/src/printing.rs
 !/settings/ui/
 !/settings/screencapture/
 !/settings/system/
@@ -26,6 +27,7 @@
 !/settings/system/src/operations.rs
 !/settings/system/src/power.rs
 !/settings/system/src/routes.rs
+!/settings/system/src/printing.rs
 !/settings/core/
 /settings/core/*
 !/settings/core/src/

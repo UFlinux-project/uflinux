@@ -2,7 +2,7 @@
 
 Settings is a Rust workspace using plain GTK4, application-local CSS and the
 user's GTK theme. It does not depend on libadwaita, GNOME Settings or GNOME
-Settings Daemon. Super+I opens the eleven-page interface: the navigation sidebar stays
+Settings Daemon. Super+I opens the twelve-page interface: the navigation sidebar stays
 visible and the header bar carries the settings search field plus minimize, maximize
 and close. Dynamic network
 lists use GtkListView; pages are constructed on demand and discarded when left.
@@ -23,7 +23,7 @@ uflinux-settingsctl mitigations status
 ```
 
 Other page names are `displays`, `audio`, `power`, `performance`, `default-apps`, `datetime`, `appearance`,
-`remote-desktop`, `screen-capture` and `about`. The Network panel provides connection selection, credentials and
+`remote-desktop`, `printing`, `screen-capture` and `about`. The Network panel provides connection selection, credentials and
 radio controls, split into Wi-Fi, Ethernet, Bluetooth and VPN tabs. Audio and the
 Sound panel split devices into Output and Input tabs;
 Power provides battery status, brightness and power modes. Tabs share one fixed
@@ -66,6 +66,27 @@ custom certificate instead of the generated self-signed one. Changes are written
 sessions. Enabling the service, starting it and disconnecting a session go through
 `org.uflinux.rds.configure` and therefore through polkit.
 
+Printing administers CUPS and SANE, which ship installed but completely inert:
+`cupsd` and `avahi-daemon` are in no runlevel, and GNOME Document Scanner is
+hidden. One "Enable printing" switch adds the interactive accounts to the `lp`
+and `scanner` groups, puts both services in the default runlevel and starts
+them, and reveals the scanner app; turning it off stops and disables both
+services and hides the app again. Group changes and the app shortcut take
+effect at the next login. The page lists the configured queues with their
+state and lets a queue be printed to, paused, made the default or removed; it
+lists the devices CUPS discovered over USB, DNS-SD and the other browse
+protocols, with an Add button per device and an Add printer dialog that takes a
+name, address and driver (an empty driver uses IPP Everywhere, falling back to
+a raw queue). A share switch maps to `cupsctl`'s `_share_printers`. Detected
+scanners are listed from `scanimage -L`, run against a curated `SANE_CONFIG_DIR`
+that excludes the backends which abort without a session bus, and the page
+launches Document Scanner directly. Everything privileged goes through
+`org.uflinux.settings.printing`, so an unprivileged user authenticates with
+their own password in the same graphical prompt the other pages use; reading
+status needs no polkit action because the daemon only stats the runlevel and
+started markers. Driver packages such as `hplip` or `gutenprint` are not
+shipped and install on demand.
+
 ## Services and authorization
 
 `uflinux-settingsd` is a headless GLib/GIO session service. A sleeping Wayland
@@ -84,8 +105,8 @@ from standard input. Never pass credentials as command arguments.
 The system helper is a separate root D-Bus service, authorized per typed operation
 with polkit. Its allowed actions are clocks/timezones and time synchronization,
 protected Wi-Fi
-profiles, exact additional routes, identity-checked DDC brightness and the boot-time
-CPU mitigation setting. It accepts
+profiles, exact additional routes, identity-checked DDC brightness, the boot-time
+CPU mitigation setting and the printing administration above. It accepts
 no shell commands or arbitrary paths. It normally exits after 45 idle seconds;
 saved routes keep its ConnMan subscription alive. Only the open GTK4 UI registers
 a libpolkit-agent-1/PAM authentication agent. Wheel administrators authenticate
