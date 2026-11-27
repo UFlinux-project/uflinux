@@ -11,6 +11,7 @@ import tempfile
 import pexpect
 
 from builder import LOCK, sha
+from vm_control import SHELL_PROMPT
 
 spec = importlib.util.spec_from_file_location("iso_vm", Path(__file__).with_name("vm-test.py"))
 vm = importlib.util.module_from_spec(spec)
@@ -53,7 +54,7 @@ def run_install(child, mode):
     child.sendline("uflinux-test-password")
     child.expect("Repeat password:")
     child.sendline("uflinux-test-password")
-    child.expect(r"[$#] ")
+    child.expect(SHELL_PROMPT)
     vm.guest(child, "test -s /mnt/boot/grub/grub.cfg; sync; umount -R /mnt")
     child.sendline("doas poweroff")
     child.expect(pexpect.EOF)

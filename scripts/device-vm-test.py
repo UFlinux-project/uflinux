@@ -9,6 +9,7 @@ import tempfile
 import pexpect
 
 from kernel_packages import kernels
+from vm_control import SHELL_PROMPT
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--arch", choices=("x86_64", "aarch64"), required=True)
@@ -52,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix="uflinux-device-vm-") as temporary:
         guest.sendline("user")
         guest.expect("Password:")
         guest.sendline("user")
-        guest.expect(r"[$#] ")
+        guest.expect(SHELL_PROMPT)
         guest.sendline(f'test "$(uname -r)" = "{abi}" && test -b /dev/vda && '
                        f'test "$(findmnt -no FSTYPE /)" = {filesystem} && printf "UFLINUX_%s\\n" BOOT_OK')
         guest.expect("UFLINUX_BOOT_OK")

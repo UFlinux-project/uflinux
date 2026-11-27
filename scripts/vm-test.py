@@ -16,7 +16,7 @@ import time
 
 import pexpect
 from builder import LOCK, sha
-from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key
+from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, SHELL_PROMPT
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHES = json.loads((ROOT / "config/architectures.json").read_text())
@@ -80,7 +80,7 @@ def login(child, user, password):
     child.sendline(user)
     child.expect("Password:")
     child.sendline(password)
-    child.expect(r"[$#] ")
+    child.expect(SHELL_PROMPT)
 
 
 def transfer(child, source, destination):
@@ -156,7 +156,7 @@ def grub_mode_smoke(args, state, log, installed, key, expected):
             child.sendline("doas true")
             child.expect("Password:")
             child.sendline("uflinux-test-password")
-            child.expect(r"[$#] ")
+            child.expect(SHELL_PROMPT)
         guest(child, "grep -qw plymouth.enable=0 /proc/cmdline; " + expected)
         child.sendline("doas poweroff")
         child.expect(pexpect.EOF)
@@ -312,7 +312,7 @@ def main():
             child.sendline("doas true")
             child.expect(r"[Pp]assword:")
             child.sendline("uflinux-test-password")
-            child.expect(r"[$#] ")
+            child.expect(SHELL_PROMPT)
             guest(child, "test -f /run/uflinux-splash/completed; ! pgrep -x plymouthd")
             splash_report["installed_handoff_without_daemon"] = True
             try:

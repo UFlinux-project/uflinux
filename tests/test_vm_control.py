@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key
+from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, SHELL_PROMPT
 
 
 class GreeterTests(unittest.TestCase):
@@ -121,6 +121,15 @@ class BootTests(unittest.TestCase):
     def test_live_budget_does_not_change_installed_acceptance_budget(self):
         self.assertEqual(memory_mib(), 4096)
         self.assertEqual(memory_mib(installed=True), 512)
+
+    def test_shell_prompt_matches_the_shipped_prompt_and_plain_shells(self):
+        # etc/profile.d/30-uflinux-prompt.sh paints the arrow in colour, so the
+        # console really shows the escape sequences around it.
+        self.assertRegex("\x1b[1;36mlive@uflinux \x1b[0m~ \x1b[36m❯ \x1b[0m", SHELL_PROMPT)
+        for prompt in ("uflinux:~ # ", "[alice@uflinux ~]$ "):
+            self.assertRegex(prompt, SHELL_PROMPT)
+        # Waiting on the prompt must not be satisfied by the login banner.
+        self.assertNotRegex("Welcome to UFLinux\r\n\r\nuflinux login: ", SHELL_PROMPT)
 
     def test_partial_apk_installation_fails_even_if_login_succeeds(self):
         console = "100%\r\nERROR: System state may be inconsistent: failed to write database: No space left on device\r\nuflinux login: "

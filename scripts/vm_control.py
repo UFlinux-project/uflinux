@@ -4,6 +4,13 @@ import json
 import socket
 import time
 
+# The console prompt the boot tests wait for before sending a command. The
+# shipped prompt ends in "❯ " (etc/profile.d/30-uflinux-prompt.sh), but the
+# tests also drive shells without that drop-in: the initramfs rescue shell,
+# `su`/`ash` before the profile is sourced, and foreign images. Matching all
+# of them here keeps a future restyle of the prompt a one-line change.
+SHELL_PROMPT = r"(?:[$#]|\u276f) "
+
 
 def press_key(request, key):
     """Release each key explicitly, including repeated password characters."""
