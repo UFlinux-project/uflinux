@@ -184,9 +184,29 @@ def gui_install_smoke(args, state, log):
 def splash_smoke(child, state, out):
     # Verify real boot handoff, then reopen only inside this disposable guest to
     # capture two frames without inserting any artificial production boot delay.
-    guest(child, "test -f /run/uflinux-splash/completed; ! pgrep -x plymouthd; rc-service greetd stop")
+    #
+    # The greeter session owns the DRM master on tty1, and it only hands the
+    # console back when cage exits, which OpenRC does not wait for. Give the
+    # compositor a moment to leave, otherwise plymouthd loses the VT and the
+    # re-open below fails for a reason unrelated to the boot splash itself.
+    guest(child, "test -f /run/uflinux-splash/completed; ! pgrep -x plymouthd; rc-service greetd stop; "
+                 "for n in $(seq 1 15); do pgrep -x cage >/dev/null || pgrep -x labwc >/dev/null || break; sleep 1; done")
     try:
-        guest(child, "/usr/libexec/uflinux-bootsplash start; test -f /run/uflinux-splash/started; plymouth --ping")
+        # uflinux-bootsplash never fails its own exit code, and it logs the reason it
+        # gave up only into its private state directory, so a bare non-zero return
+        # cannot say whether plymouthd or show-splash lost the VT. Re-run the check
+        # with that context when it fails.
+        restart = "/usr/libexec/uflinux-bootsplash start; test -f /run/uflinux-splash/started; plymouth --ping"
+        try:
+            guest(child, restart)
+        except RuntimeError as failure:
+            context = guest(child, "set -x; cat /proc/cmdline; ls -l /dev/dri /dev/fb[0-9] 2>&1; "
+                                   "grep -w drm /proc/devices; "
+                                   "cat /sys/class/vtconsole/vtcon1/name /sys/class/vtconsole/vtcon1/mode 2>&1; "
+                                   "loginctl list-sessions 2>&1; pgrep -l -x plymouthd; pgrep -l -x cage; "
+                                   "pgrep -l -x labwc; dmesg | tail -40; ls -l /run/uflinux-splash; "
+                                   "plymouth --ping; cat /run/uflinux-splash/daemon.log 2>&1; true")
+            raise RuntimeError(str(failure) + "\n" + context) from None
         frames = []
         with qmp(state) as request:
             for number in (1, 2):
