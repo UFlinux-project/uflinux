@@ -182,9 +182,35 @@ class ReuseTests(ShardTests):
             self.assertIn('reused=true', record)
             self.assertIn('origins=' + origin, record)
             outputs.write_text('')
-            # An origin that always compiles must never report itself as reused,
-            # otherwise its shard would be missing from the merge.
+            # A profile origin is reusable too, so the gate skips it as well.
+            musl = sorted(reuse.expected_files('musl', self.VERSION))
+            self.assertIn('reused=true', self.run_reuse(out, 'musl', self.published_repository('musl', musl), outputs))
+            outputs.write_text('')
+            # An origin whose published set is incomplete must never report itself
+            # as reused, otherwise its shard would be missing from the merge.
             self.assertIn('reused=false', self.run_reuse(out, 'musl', self.published_repository(origin, filenames), outputs))
+
+    def test_a_reused_profile_origin_retains_empty_profile_inputs(self):
+        # A job that did not compile generates no BOLT, PGO or Clang profile, but
+        # the merge and the release asset set still expect the archive names.
+        for origin, extra in (('musl', ('musl-bolt-profiles.tar.gz',)),
+                              ('connman', ('clang-aport-profiles.tar.gz',)),
+                              ('uflinux-settings', ('cargo-sources.tar.gz',))):
+            with self.subTest(origin=origin), tempfile.TemporaryDirectory() as temporary:
+                out = Path(temporary)
+                filenames = sorted(reuse.expected_files(origin, self.VERSION))
+                self.fixture(out)
+                shutil.rmtree(out / 'package-shards/x86_64' / origin)
+                self.run_reuse(out, origin, self.published_repository(origin, filenames))
+                inputs = out / 'package-shards/x86_64' / origin / 'inputs/x86_64'
+                self.assertEqual(sorted(path.name for path in inputs.iterdir()),
+                                 sorted(('build-apks.tar.gz', 'sources.tar.gz') + extra))
+                for path in inputs.iterdir():
+                    with tarfile.open(path, 'r:gz') as archive:
+                        self.assertEqual(archive.getnames(), ['.'])
+                merge.collect(out, self.ARCH, self.VERSION)
+                merged = json.loads((out / 'metadata/x86_64/compile.json').read_text())
+                self.assertEqual(merged['reused'], [origin])
 
     def test_reuse_writes_a_shard_the_merge_accepts_without_a_rebuild_proof(self):
         origin = 'uflinux-regreet'

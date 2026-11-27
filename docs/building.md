@@ -148,16 +148,19 @@ release key, and its recorded build inputs must match the current lockfile. A
 reused shard is marked as such, and `merge-packages.py` then reports it separately
 instead of demanding a clean-rebuild proof that was never produced locally.
 
-Reuse is deliberately limited. `musl`, `uflinux-rds`, `uflinux-settings`, `connman`
-and `gpu-screen-recorder` always compile, because their shards must also carry
-freshly generated BOLT, PGO and Clang profiling archives. `uflinux` is reusable only
-on a release tag that matches an already published release. If the repository is
-unreachable, `releases.json` is missing, or a downloaded APK fails any check, the
-origin simply compiles: reuse never turns a network problem into a build failure.
+Every origin is eligible, including the ones that normally hand profiling inputs to
+a release: a job that did not compile generates no BOLT, PGO or Clang profile, so a
+reused shard retains deterministic empty archives under the names a compiled shard
+would use, and the release asset set is unchanged. `uflinux` is listed too, but its
+version is the distribution version, so it is reusable only on a release tag that
+matches an already published release. If the repository is unreachable,
+`releases.json` is missing, or a downloaded APK fails any check, the origin simply
+compiles: reuse never turns a network problem into a build failure.
 
 In GitHub Actions each compile job runs the script for its own origin before
-compiling, and skips the compile and clean-rebuild steps when the fetch produced a
-complete shard. Every job still uploads a shard, so image assembly is unaffected.
+compiling, and skips the compiler cache, the musl profiling tools, the compile and
+the clean-rebuild steps when the fetch produced a complete shard. Every job still
+uploads a shard, so image assembly is unaffected.
 
 Thirty-four custom APKs are built: patched ConnMan (runtime/OpenRC/dev/docs/debug, seven),
 ReGreet (one), the GTK4 portal backend (one), the simp1e cursor theme (two: the

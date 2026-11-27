@@ -13,6 +13,11 @@ The APKs keep their published bytes and their published signing key, and the
 record marks them as reused so the merge can account for the missing rebuild
 proof.
 
+A reused origin supplies no profile input, and none is expected of it: a job
+that did not compile generates no BOLT, PGO or Clang profile, so its shard
+retains deterministic empty archives in place of the ones a compile would write
+and the release asset set stays unchanged.
+
 Anything this script cannot reuse it leaves unsharded, and it never fails on a
 repository it cannot reach: the caller compiles the origins left behind.
 """
@@ -29,15 +34,21 @@ import urllib.error
 import urllib.request
 
 from builder import (APPS_BUNDLED_KEY, ARCHES, BUILD_KEY, CARGO_ORIGINS, CLANG_APORTS,
-                     CLANG_APORT_PROFILES, LOCK, PACKAGE_NAMES, archive_tree, package_output,
-                     package_revision, package_version, repository_url, sha, unsigned_digest)
+                     CLANG_APORT_PROFILES, LOCK, MUSL_BOLT_ARCHES, PACKAGE_NAMES, archive_tree,
+                     package_output, package_revision, package_version, repository_url, sha,
+                     unsigned_digest)
 import sbom
 
-# Origins whose published packages can stand in for a compile. Origins that
-# publish optimisation or profile inputs (musl, ConnMan, gpu-screen-recorder,
-# uflinux-settings, uflinux-rds) are excluded: their shards must also carry
-# freshly generated profile archives.
-REUSABLE_ORIGINS = ("uflinux-regreet", "xdg-desktop-portal-gtk4", "simp1e-cursors", "uflinux")
+# Origins whose published packages can stand in for a compile: every origin,
+# including the ones that publish optimisation or profile inputs (musl,
+# ConnMan, gpu-screen-recorder, uflinux-settings, uflinux-rds), since a job
+# that does not compile generates no profile to hand on. The distribution meta
+# package is listed too, but its version is the distribution version rather
+# than a lockfile entry, so it only matches on a release tag that reuses an
+# already published release.
+REUSABLE_ORIGINS = ("musl", "connman", "gpu-screen-recorder", "uflinux-regreet",
+                    "uflinux-settings", "uflinux-rds", "xdg-desktop-portal-gtk4",
+                    "simp1e-cursors", "uflinux")
 APK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~-]*\.apk")
 RELEASES_LIMIT = 1024 * 1024
 
@@ -142,10 +153,18 @@ def retained_archive(destination, epoch):
         archive_tree(Path(empty), destination, epoch)
 
 
-def retained_inputs(origin, destination, epoch):
+def retained_inputs(origin, arch, destination, epoch):
+    """Write the input archives a compiled shard of this origin would carry.
+
+    A reused shard has nothing to rebuild from, so every archive is a
+    deterministic empty one. Keeping the names is what lets the merge, the
+    release asset set and a later rebuild attempt treat the shard as complete.
+    """
     names = ["build-apks", "sources"]
     if origin in CARGO_ORIGINS:
         names.append("cargo-sources")
+    if origin == "musl" and arch in MUSL_BOLT_ARCHES:
+        names.append("musl-bolt-profiles")
     if origin in CLANG_APORTS:
         names.append(CLANG_APORT_PROFILES[:-len(".tar.gz")])
     for name in names:
@@ -193,7 +212,7 @@ def reuse(builder, origin, names, repository):
         download(repository, builder.args.arch, name, packages / name)
         inspect(packages / name, builder.args.arch, origin, expected)
     shutil.copy2(APPS_BUNDLED_KEY, packages / BUILD_KEY)
-    retained_inputs(origin, inputs, builder.epoch)
+    retained_inputs(origin, builder.args.arch, inputs, builder.epoch)
     record = reuse_record(builder, origin, repository)
     metadata.mkdir(parents=True, exist_ok=True)
     (metadata / "compile.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
@@ -227,14 +246,9 @@ def main():
     args = parser.parse_args()
 
     repository = repository_url(args.repository_url or os.environ.get("APK_REPOSITORY_URL"))
-    requested = tuple(args.package or REUSABLE_ORIGINS)
-    # An origin outside the reuse list is always compiled, so a caller can
-    # unconditionally ask about the origin of its own compile job.
-    origins = tuple(origin for origin in requested if origin in REUSABLE_ORIGINS)
-    for origin in requested:
-        if origin not in origins:
-            print(f"Reusing nothing for {origin} on {args.arch}: "
-                  "origin always compiles", flush=True)
+    # Every origin is asked about, so a caller can unconditionally run this
+    # script for the origin of its own compile job.
+    origins = requested = tuple(args.package or REUSABLE_ORIGINS)
 
     from builder import Builder
     args.package = None

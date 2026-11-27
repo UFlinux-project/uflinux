@@ -93,8 +93,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y qemu-user-binfmt binfmt-support
           python3 scripts/preflight.py --arch '${{ matrix.arch }}'
+      - name: Reuse published packages
+        id: reuse
+        run: python3 scripts/reuse-packages.py --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --package '${{ matrix.package }}'
       - name: Install musl profiling tools
-        if: matrix.package == 'musl' && (matrix.arch == 'x86_64' || matrix.arch == 'aarch64' || matrix.arch == 'riscv64')
+        if: matrix.package == 'musl' && steps.reuse.outputs.reused != 'true' && (matrix.arch == 'x86_64' || matrix.arch == 'aarch64' || matrix.arch == 'riscv64')
         run: |
           sudo apt-get install --no-install-recommends -y bolt-22 linux-perf
           if [ '${{ matrix.arch }}' = riscv64 ]; then
@@ -102,15 +105,13 @@ jobs:
             qemu-system-riscv64 --version
           fi
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.reuse.outputs.reused != 'true'
         id: cache
         with:
           path: .cache/build/${{ matrix.package }}
           key: compile-v2-${{ matrix.arch }}-${{ matrix.package }}-${{ (matrix.settings_pgo || matrix.rds_pgo) && 'pgo-' || '' }}${{ needs.checks.outputs.cache }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             compile-v2-${{ matrix.arch }}-${{ matrix.package }}-${{ (matrix.settings_pgo || matrix.rds_pgo) && 'pgo-' || '' }}${{ needs.checks.outputs.cache }}-
-      - name: Reuse published packages
-        id: reuse
-        run: python3 scripts/reuse-packages.py --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --package '${{ matrix.package }}'
       - name: Compile without release secrets
         if: steps.reuse.outputs.reused != 'true'
         run: |
@@ -123,7 +124,7 @@ jobs:
         run: |
           timeout --signal=INT --kill-after=60s ${{ (matrix.settings_pgo || matrix.rds_pgo) && '120m' || '40m' }} sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,CARGO_BUILD_JOBS,GITHUB_REPOSITORY,GITHUB_SHA python3 scripts/reproducibility.py --arch x86_64 --version '${{ needs.checks.outputs.version }}' --package '${{ matrix.package }}'
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: always()
+        if: always() && steps.reuse.outputs.reused != 'true'
         with:
           path: .cache/build/${{ matrix.package }}
           key: ${{ steps.cache.outputs.cache-primary-key }}
