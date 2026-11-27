@@ -190,23 +190,31 @@ def splash_smoke(child, state, out):
     # compositor a moment to leave, otherwise plymouthd loses the VT and the
     # re-open below fails for a reason unrelated to the boot splash itself.
     guest(child, "test -f /run/uflinux-splash/completed; ! pgrep -x plymouthd; rc-service greetd stop; "
-                 "for n in $(seq 1 15); do pgrep -x cage >/dev/null || pgrep -x labwc >/dev/null || break; sleep 1; done")
+                 "for n in $(seq 1 15); do pgrep -x cage >/dev/null || pgrep -x labwc >/dev/null || break; sleep 1; done; "
+                 "chvt 1 || :")
+    # Every probe is individually tolerated: guest() runs the script under sh -e, so a
+    # single unsupported path would abort the trace before the daemon log is printed.
+    diagnostics = ("cat /proc/cmdline || :; ls -l /dev/dri /dev/fb[0-9] 2>&1 || :; "
+                   "grep -w drm /proc/devices || :; cat /sys/class/vtconsole/vtcon*/name 2>&1 || :; "
+                   "loginctl list-sessions 2>&1 || :; pgrep -l -x plymouthd || :; pgrep -l -x cage || :; "
+                   "pgrep -l -x labwc || :; dmesg | tail -40 || :; ls -l /run/uflinux-splash || :; "
+                   "plymouth --ping || :; echo uflinux-splash-daemon-log:; "
+                   "cat /run/uflinux-splash/daemon.log 2>&1 || :")
+    restart = "/usr/libexec/uflinux-bootsplash start; test -f /run/uflinux-splash/started; plymouth --ping"
     try:
         # uflinux-bootsplash never fails its own exit code, and it logs the reason it
         # gave up only into its private state directory, so a bare non-zero return
-        # cannot say whether plymouthd or show-splash lost the VT. Re-run the check
-        # with that context when it fails.
-        restart = "/usr/libexec/uflinux-bootsplash start; test -f /run/uflinux-splash/started; plymouth --ping"
+        # cannot say whether plymouthd or show-splash lost the VT. The greeter can
+        # still be releasing tty1 when the first attempt runs, so retry once after a
+        # longer settle before treating the re-open as broken.
         try:
             guest(child, restart)
-        except RuntimeError as failure:
-            context = guest(child, "set -x; cat /proc/cmdline; ls -l /dev/dri /dev/fb[0-9] 2>&1; "
-                                   "grep -w drm /proc/devices; "
-                                   "cat /sys/class/vtconsole/vtcon1/name /sys/class/vtconsole/vtcon1/mode 2>&1; "
-                                   "loginctl list-sessions 2>&1; pgrep -l -x plymouthd; pgrep -l -x cage; "
-                                   "pgrep -l -x labwc; dmesg | tail -40; ls -l /run/uflinux-splash; "
-                                   "plymouth --ping; cat /run/uflinux-splash/daemon.log 2>&1; true")
-            raise RuntimeError(str(failure) + "\n" + context) from None
+        except RuntimeError:
+            time.sleep(5)
+            guest(child, restart)
+    except RuntimeError as failure:
+        context = guest(child, diagnostics)
+        raise RuntimeError(str(failure) + "\n" + context) from None
         frames = []
         with qmp(state) as request:
             for number in (1, 2):
