@@ -39,8 +39,8 @@ for _ in range(90):
         break
     time.sleep(1)
 assert daemons, "The installed graphical login did not start Settings service"
-service = daemons[0]
-environment = dict(item.split("=", 1) for item in Path(f"/proc/{service}/environ").read_bytes().decode().split("\0") if "=" in item)
+service_pid = daemons[0]
+environment = dict(item.split("=", 1) for item in Path(f"/proc/{service_pid}/environ").read_bytes().decode().split("\0") if "=" in item)
 environment["UFLINUX_SETTINGS_BENCH"] = "1"
 assert environment.get("WAYLAND_DISPLAY") and environment.get("DBUS_SESSION_BUS_ADDRESS")
 
@@ -153,11 +153,11 @@ assert 'org.uflinux.settings.printing' in printing_policy, \
 subprocess.check_output(
     ['apk', 'info', '-e', 'cups', 'cups-client', 'cups-filters', 'avahi', 'sane-backends',
      'sane-utils', 'sane-airscan', 'sane-udev', 'simple-scan'], text=True, timeout=60)
-for service in ('cupsd', 'avahi-daemon'):
-    assert not Path('/etc/runlevels/default', service).exists(), \
-        f'{service} must not start at boot on a fresh install'
-    assert not Path('/etc/runlevels/boot', service).exists(), \
-        f'{service} must not start at boot on a fresh install'
+for inert_service in ('cupsd', 'avahi-daemon'):
+    assert not Path('/etc/runlevels/default', inert_service).exists(), \
+        f'{inert_service} must not start at boot on a fresh install'
+    assert not Path('/etc/runlevels/boot', inert_service).exists(), \
+        f'{inert_service} must not start at boot on a fresh install'
 assert state()['printing'] == {'installed': True, 'enabled': False, 'running': False,
                                'shared': False, 'discovery': False, 'queues': [],
                                'devices': [], 'scanners': [], 'default': '',
@@ -181,7 +181,7 @@ assert list(processes('labwc')) and desktop_pid() == desktop
 messages = subprocess.check_output(['dmesg'], text=True)
 assert 'Out of memory' not in messages and 'Killed process' not in messages
 metrics = {'ram_mib': 512, 'swap': False, 'displays': 1,
-           'service_pss_bytes': pss(service), 'desktop_initial_pss_bytes': initial_pss,
+           'service_pss_bytes': pss(service_pid), 'desktop_initial_pss_bytes': initial_pss,
            'desktop_closed_pss_bytes': closed_pss, 'full_ui_pss_bytes': full_pss,
            'exercise_seconds': round(time.monotonic() - started, 2), 'oom': False,
            'renderer': snapshot['displays']['renderer'],
