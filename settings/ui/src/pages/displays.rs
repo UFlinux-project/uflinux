@@ -378,12 +378,12 @@ pub fn page(app: &Rc<App>, parent: &gtk::Box) {
         }
     }));
     parent.append(&button(app, "Revert pending changes", || {
-        Action::RevertDisplays
+        Action::RevertDisplays {}
     }));
     brightness(app, parent, Surface::Full);
     app.execute(
         Action::System {
-            operation: SystemAction::DdcDiscover,
+            operation: SystemAction::DdcDiscover {},
         },
         None,
     );
@@ -465,7 +465,7 @@ pub fn confirmation(app: &Rc<App>, id: u64) {
     let keep = button(app, "Keep settings", move || Action::ConfirmDisplays { id });
     keep.add_css_class("suggested-action");
     parent.append(&keep);
-    parent.append(&button(app, "Revert", || Action::RevertDisplays));
+    parent.append(&button(app, "Revert", || Action::RevertDisplays {}));
     let weak = window.downgrade();
     let application = Rc::downgrade(app);
     glib::timeout_add_local(std::time::Duration::from_millis(200), move || {

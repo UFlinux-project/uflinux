@@ -87,9 +87,9 @@ fn status(app: &Rc<App>) -> (gtk::Box, gtk::Box) {
         |s| s.printing.enabled,
         |on| Action::PrintingSystem {
             operation: if on {
-                PrintingSystemAction::Enable
+                PrintingSystemAction::Enable {}
             } else {
-                PrintingSystemAction::Disable
+                PrintingSystemAction::Disable {}
             },
         },
     );
@@ -101,10 +101,10 @@ fn status(app: &Rc<App>) -> (gtk::Box, gtk::Box) {
     controls.set_halign(gtk::Align::Start);
     body.append(&controls);
     let start = button(app, "Start service", || Action::PrintingSystem {
-        operation: PrintingSystemAction::Start,
+        operation: PrintingSystemAction::Start {},
     });
     let stop = button(app, "Stop service", || Action::PrintingSystem {
-        operation: PrintingSystemAction::Stop,
+        operation: PrintingSystemAction::Stop {},
     });
     controls.append(&start);
     controls.append(&stop);

@@ -292,7 +292,7 @@ impl Client {
                     .await?;
                 }
             }
-            Action::Scan => {
+            Action::Scan {} => {
                 let technologies = self.view.borrow().technologies.clone();
                 let t = technologies
                     .iter()

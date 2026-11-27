@@ -67,13 +67,13 @@ fn run() -> Result<()> {
             Some("status")=> { println!("{}",bus::session("GetState",None).await?); return Ok(()); }
             Some("brightness")=>Action::AdjustBrightness{delta:number()?},
             Some("volume")=>Action::AdjustVolume{delta:number()?},
-            Some("mute")=>Action::ToggleMute,
+            Some("mute")=>Action::ToggleMute {},
             Some("network")=>Action::Networking{enabled:enabled()?},
             Some("wifi")=>Action::Wifi{enabled:enabled()?},
-            Some("scan")=>Action::Scan,
+            Some("scan")=>Action::Scan {},
             Some("power-profile")=>Action::SetPowerProfile{profile:PowerProfile::parse(args.get(1).ok_or("Choose a power profile")?)?},
             Some("mitigations")=>match args.get(1).map(String::as_str){
-                Some("status")=>Action::System{operation:SystemAction::BootStatus},
+                Some("status")=>Action::System{operation:SystemAction::BootStatus {}},
                 Some("on")|Some("off")=>Action::System{operation:SystemAction::SetMitigations{enabled:enabled()?}},
                 _=>return Err("Usage: uflinux-settingsctl mitigations status|on|off".into()),
             },

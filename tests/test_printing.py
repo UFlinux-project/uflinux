@@ -65,7 +65,7 @@ class WireTests(unittest.TestCase):
         operations = read(ROOT / 'settings/system/src/operations.rs')
         arm = operations.split('SystemAction::Printing { printing } =>')[1]
         body = arm.split('_ => "org.uflinux.settings.datetime"')[0]
-        self.assertIn('PrintingSystemAction::Status => return Ok(())', body)
+        self.assertIn('PrintingSystemAction::Status {} => return Ok(())', body)
         self.assertIn('"org.uflinux.settings.printing"', body)
         self.assertIn('crate::printing::execute(printing)', operations)
 

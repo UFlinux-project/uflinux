@@ -78,9 +78,9 @@ fn status(app: &Rc<App>) -> (gtk::Box, gtk::Box) {
         |s| s.rdp.enabled,
         |on| Action::RdpSystem {
             operation: if on {
-                RdpSystemAction::Enable
+                RdpSystemAction::Enable {}
             } else {
-                RdpSystemAction::Disable
+                RdpSystemAction::Disable {}
             },
         },
     );
@@ -338,7 +338,7 @@ fn certificate(app: &Rc<App>) -> gtk::Box {
             .await;
             let applied = if write.is_ok() {
                 bus::execute(&Action::RdpSystem {
-                    operation: RdpSystemAction::ApplyCertificate,
+                    operation: RdpSystemAction::ApplyCertificate {},
                 })
                 .await
             } else {

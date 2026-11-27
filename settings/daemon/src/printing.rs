@@ -75,7 +75,7 @@ fn apply(mut state: Printing, observed: PrintingObservation) -> Printing {
 
 /// One read-only round trip to the helper.
 async fn observe(system: &gio::DBusConnection) -> settings_core::Result<PrintingObservation> {
-    let value = crate::printing::system(system, &PrintingSystemAction::Status).await?;
+    let value = crate::printing::system(system, &PrintingSystemAction::Status {}).await?;
     serde_json::from_value(value)
         .map_err(|_| "The printing helper reported an unreadable state".into())
 }

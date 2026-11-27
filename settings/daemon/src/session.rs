@@ -288,7 +288,7 @@ impl App {
             }
             app.ddc_busy.set(true);
             glib::MainContext::default().spawn_local(async move {
-                let result=app.system(&SystemAction::DdcDiscover).await.and_then(|value|
+                let result=app.system(&SystemAction::DdcDiscover {}).await.and_then(|value|
                     serde_json::from_value::<Vec<Brightness>>(value).map_err(|_|"Invalid brightness reply".into()));
                 {
                     let mut view=app.view.borrow_mut();
@@ -357,7 +357,7 @@ impl App {
         }
         let app = self.clone();
         glib::MainContext::default().spawn_local(async move {
-            let next = app.system(&SystemAction::BootStatus).await;
+            let next = app.system(&SystemAction::BootStatus {}).await;
             app.boot_pending.set(false);
             let state = match next {
                 Ok(value) => match serde_json::from_value(value) {
@@ -487,7 +487,7 @@ impl App {
     }
     async fn execute(self: &Rc<Self>, action: Action, caller: &str) -> Result<serde_json::Value> {
         match &action {
-            Action::Refresh => {
+            Action::Refresh {} => {
                 self.view.borrow_mut().error = None;
                 // About reads /proc and several sysfs trees; keep it off the main context.
                 let about = match gio::spawn_blocking(information).await {
@@ -521,7 +521,7 @@ impl App {
             }
             Action::Networking { .. }
             | Action::Wifi { .. }
-            | Action::Scan
+            | Action::Scan {}
             | Action::Connect { .. }
             | Action::Disconnect { .. }
             | Action::Forget { .. }
@@ -560,7 +560,7 @@ impl App {
                 let mut found = None;
                 for attempt in 0..80 {
                     if attempt % 12 == 0 {
-                        if let Err(error) = network.execute(&Action::Scan).await {
+                        if let Err(error) = network.execute(&Action::Scan {}).await {
                             if !["Busy", "InProgress", "in progress"]
                                 .iter()
                                 .any(|word| error.contains(word))
@@ -586,7 +586,7 @@ impl App {
                 network.execute(&Action::Connect { service: found }).await?;
             }
             Action::BluetoothPower { .. }
-            | Action::BluetoothScan
+            | Action::BluetoothScan {}
             | Action::BluetoothPair { .. }
             | Action::BluetoothUnpair { .. }
             | Action::BluetoothTrust { .. }
@@ -638,7 +638,7 @@ impl App {
                     })
                     .await?;
             }
-            Action::ToggleMute => {
+            Action::ToggleMute {} => {
                 let audio = self.audio.borrow().clone().ok_or("Audio is unavailable")?;
                 let device = audio.device(false, "")?;
                 let muted = !audio
@@ -693,7 +693,7 @@ impl App {
                 files::save_json(&files::config_dir().join("displays.json"), &outputs, 0o600)?;
                 self.publish();
             }
-            Action::RevertDisplays => {
+            Action::RevertDisplays {} => {
                 self.revert().await?;
             }
             Action::SetAppearance { appearance } => {
@@ -709,7 +709,7 @@ impl App {
                 self.view.borrow_mut().screen_capture = screen_capture.clone();
                 self.publish();
             }
-            Action::ResetScreenCapture => {
+            Action::ResetScreenCapture {} => {
                 let defaults = ScreenCapture::default();
                 files::save_json(
                     &files::config_dir().join("screen-capture.json"),
@@ -719,7 +719,7 @@ impl App {
                 self.view.borrow_mut().screen_capture = defaults;
                 self.publish();
             }
-            Action::ScreenCaptureCapabilities => {
+            Action::ScreenCaptureCapabilities {} => {
                 let caps = self.view.borrow().capture_capabilities.clone();
                 if caps.backend_available {
                     return Ok(serde_json::to_value(caps).map_err(|_| "Invalid capture state")?);
@@ -730,7 +730,7 @@ impl App {
                 self.publish();
                 return Ok(value);
             }
-            Action::RdpStatus => {
+            Action::RdpStatus {} => {
                 let rdp = rdp::query(&self.system).await;
                 let value = serde_json::to_value(&rdp).map_err(|_| "Invalid RDP state")?;
                 self.view.borrow_mut().rdp = rdp;
@@ -792,8 +792,8 @@ impl App {
             Action::RdpSystem { operation } => {
                 let current = self.view.borrow().rdp.clone();
                 let expected = match operation {
-                    RdpSystemAction::Enable => Some(true),
-                    RdpSystemAction::Disable => Some(false),
+                    RdpSystemAction::Enable {} => Some(true),
+                    RdpSystemAction::Disable {} => Some(false),
                     _ => None,
                 };
                 let value = rdp::system(&self.system, operation, &current).await?;
@@ -809,7 +809,7 @@ impl App {
                 self.publish();
                 return Ok(value);
             }
-            Action::PrintingStatus => {
+            Action::PrintingStatus {} => {
                 let state = printing::query(&self.system).await;
                 let value = serde_json::to_value(&state).map_err(|_| "Invalid printing state")?;
                 self.view.borrow_mut().printing = state;
@@ -818,8 +818,8 @@ impl App {
             }
             Action::PrintingSystem { operation } => {
                 let expected = match operation {
-                    PrintingSystemAction::Enable => Some(true),
-                    PrintingSystemAction::Disable => Some(false),
+                    PrintingSystemAction::Enable {} => Some(true),
+                    PrintingSystemAction::Disable {} => Some(false),
                     _ => None,
                 };
                 let value = printing::system(&self.system, operation).await?;
@@ -836,13 +836,13 @@ impl App {
                 return Ok(value);
             }
             Action::System { operation } => {
-                if matches!(operation, SystemAction::DdcDiscover) {
+                if matches!(operation, SystemAction::DdcDiscover {}) {
                     self.queue_brightness(true);
                     return Ok(serde_json::json!([]));
                 }
                 let value = match self.system(operation).await {
                     Ok(value) => value,
-                    Err(_) if matches!(operation, SystemAction::DdcDiscover) => {
+                    Err(_) if matches!(operation, SystemAction::DdcDiscover {}) => {
                         self.view.borrow_mut().displays.brightness_status="External-display brightness is unavailable. An active local session and DDC/CI support are required.".into();
                         self.publish();
                         return Ok(serde_json::json!([]));
@@ -851,7 +851,7 @@ impl App {
                 };
                 if matches!(
                     operation,
-                    SystemAction::PowerStatus
+                    SystemAction::PowerStatus {}
                         | SystemAction::SetPowerButtons { .. }
                         | SystemAction::SetPowerProfile { .. }
                 ) {
@@ -861,7 +861,7 @@ impl App {
                 }
                 if matches!(
                     operation,
-                    SystemAction::BootStatus | SystemAction::SetMitigations { .. }
+                    SystemAction::BootStatus {} | SystemAction::SetMitigations { .. }
                 ) {
                     self.view.borrow_mut().boot =
                         serde_json::from_value(value.clone()).map_err(|_| "Invalid boot state")?;
@@ -873,7 +873,7 @@ impl App {
                         | SystemAction::SetTimezone { .. }
                         | SystemAction::SetTime { .. }
                 ) {
-                    if let Ok(value) = self.system(&SystemAction::Status).await {
+                    if let Ok(value) = self.system(&SystemAction::Status {}).await {
                         if let Ok(status) = serde_json::from_value(value) {
                             self.view.borrow_mut().datetime = status;
                             self.publish();

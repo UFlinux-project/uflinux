@@ -99,7 +99,7 @@ fn wifi_tab(app: &Rc<App>, surface: Surface, compact: bool) -> gtk::Box {
         |enabled| Action::Wifi { enabled },
     );
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.append(&button(app, "Scan", || Action::Scan));
+    buttons.append(&button(app, "Scan", || Action::Scan {}));
     let hidden = gtk::Button::with_label("Join hidden network…");
     let weak = Rc::downgrade(app);
     hidden.connect_clicked(move |_| {
@@ -140,7 +140,7 @@ fn bluetooth_tab(app: &Rc<App>, surface: Surface) -> gtk::Box {
         |s| s.bluetooth.powered,
         |enabled| Action::BluetoothPower { enabled },
     );
-    tab.append(&button(app, "Scan", || Action::BluetoothScan));
+    tab.append(&button(app, "Scan", || Action::BluetoothScan {}));
     let devices = column();
     tab.append(&devices);
     let signature = Rc::new(RefCell::new(Vec::<String>::new()));

@@ -213,7 +213,7 @@ impl Client {
                     .await?;
                 }
             }
-            Action::BluetoothScan => {
+            Action::BluetoothScan {} => {
                 // BlueZ answers StartDiscovery with org.bluez.Error.InProgress
                 // when a discovery is already running, and refuses outright
                 // when the adapter is off. Telling those apart keeps an

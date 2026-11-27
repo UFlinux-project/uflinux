@@ -1007,7 +1007,7 @@ pub struct PrintingObservation {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Action {
-    Refresh,
+    Refresh {},
     SetPowerProfile {
         profile: PowerProfile,
     },
@@ -1017,7 +1017,7 @@ pub enum Action {
     Wifi {
         enabled: bool,
     },
-    Scan,
+    Scan {},
     Connect {
         service: String,
     },
@@ -1049,7 +1049,7 @@ pub enum Action {
     BluetoothPower {
         enabled: bool,
     },
-    BluetoothScan,
+    BluetoothScan {},
     BluetoothPair {
         device: String,
     },
@@ -1123,7 +1123,7 @@ pub enum Action {
     ConfirmDisplays {
         id: u64,
     },
-    RevertDisplays,
+    RevertDisplays {},
     Brightness {
         id: String,
         percent: f64,
@@ -1134,17 +1134,17 @@ pub enum Action {
     AdjustVolume {
         delta: f64,
     },
-    ToggleMute,
+    ToggleMute {},
     SetAppearance {
         appearance: Appearance,
     },
     SetScreenCapture {
         screen_capture: ScreenCapture,
     },
-    ResetScreenCapture,
-    ScreenCaptureCapabilities,
+    ResetScreenCapture {},
+    ScreenCaptureCapabilities {},
     /// Re-reads the broker state; the answer is the whole Rdp section.
-    RdpStatus,
+    RdpStatus {},
     SetRdpPorts {
         rdp_port: u16,
         web_port: u16,
@@ -1178,7 +1178,7 @@ pub enum Action {
         operation: RdpSystemAction,
     },
     /// Re-reads cupsd and SANE; the answer is the whole Printing section.
-    PrintingStatus,
+    PrintingStatus {},
     /// Privileged printing operations, forwarded to the Settings system service.
     PrintingSystem {
         operation: PrintingSystemAction,
@@ -1195,13 +1195,13 @@ pub enum PrintingSystemAction {
     /// Gathers queues, devices and scanners as root. Read-only, so it needs no
     /// polkit action: cupsd's own policy refuses `lpinfo -v` to a plain user and
     /// `/etc/cups/*.conf` is 0640 root:lp, so only the helper can look.
-    Status,
+    Status {},
     /// Writes the policy file, rc-update add + rc-service start.
-    Enable,
+    Enable {},
     /// rc-service stop + rc-update del.
-    Disable,
-    Start,
-    Stop,
+    Disable {},
+    Start {},
+    Stop {},
     /// cupsctl --share-printers / --no-share-printers.
     SetShared {
         shared: bool,
@@ -1232,19 +1232,19 @@ pub enum PrintingSystemAction {
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum RdpSystemAction {
     /// rc-update add + rc-service start.
-    Enable,
+    Enable {},
     /// rc-service stop + rc-update del.
-    Disable,
-    Start,
-    Stop,
+    Disable {},
+    Start {},
+    Stop {},
     /// Installs the configured certificate/key and restarts the gateway.
-    ApplyCertificate,
+    ApplyCertificate {},
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SystemAction {
-    Status,
-    PowerStatus,
+    Status {},
+    PowerStatus {},
     SetPowerProfile {
         profile: PowerProfile,
     },
@@ -1252,7 +1252,7 @@ pub enum SystemAction {
         on_ac: PowerButtonAction,
         on_battery: PowerButtonAction,
     },
-    BootStatus,
+    BootStatus {},
     SetMitigations {
         enabled: bool,
     },
@@ -1265,7 +1265,7 @@ pub enum SystemAction {
     SetTimeSync {
         enabled: bool,
     },
-    DdcDiscover,
+    DdcDiscover {},
     DdcBrightness {
         id: String,
         percent: f64,
@@ -1467,7 +1467,7 @@ mod rdp_tests {
     #[test]
     fn rdp_actions_round_trip_with_kebab_case_tags() {
         for (json, action) in [
-            (r#"{"action":"rdp-status"}"#, Action::RdpStatus),
+            (r#"{"action":"rdp-status"}"#, Action::RdpStatus {}),
             (
                 r#"{"action":"set-rdp-ports","rdp_port":3391,"web_port":3392}"#,
                 Action::SetRdpPorts {
@@ -1523,13 +1523,13 @@ mod rdp_tests {
             (
                 r#"{"action":"rdp-system","operation":{"operation":"apply-certificate"}}"#,
                 Action::RdpSystem {
-                    operation: RdpSystemAction::ApplyCertificate,
+                    operation: RdpSystemAction::ApplyCertificate {},
                 },
             ),
             (
                 r#"{"action":"rdp-system","operation":{"operation":"enable"}}"#,
                 Action::RdpSystem {
-                    operation: RdpSystemAction::Enable,
+                    operation: RdpSystemAction::Enable {},
                 },
             ),
         ] {
@@ -1542,17 +1542,17 @@ mod rdp_tests {
     #[test]
     fn printing_actions_round_trip_with_kebab_case_tags() {
         for (json, action) in [
-            (r#"{"action":"printing-status"}"#, Action::PrintingStatus),
+            (r#"{"action":"printing-status"}"#, Action::PrintingStatus {}),
             (
                 r#"{"action":"printing-system","operation":{"operation":"enable"}}"#,
                 Action::PrintingSystem {
-                    operation: PrintingSystemAction::Enable,
+                    operation: PrintingSystemAction::Enable {},
                 },
             ),
             (
                 r#"{"action":"printing-system","operation":{"operation":"disable"}}"#,
                 Action::PrintingSystem {
-                    operation: PrintingSystemAction::Disable,
+                    operation: PrintingSystemAction::Disable {},
                 },
             ),
             (
@@ -1608,7 +1608,7 @@ mod rdp_tests {
                 r#"{"action":"system","operation":{"operation":"printing","printing":{"operation":"status"}}}"#,
                 Action::System {
                     operation: SystemAction::Printing {
-                        printing: PrintingSystemAction::Status,
+                        printing: PrintingSystemAction::Status {},
                     },
                 },
             ),
@@ -1643,6 +1643,35 @@ mod rdp_tests {
             )
             .is_err()
         );
+    }
+
+    /// serde ignores `deny_unknown_fields` on an internally tagged variant that
+    /// has no fields at all, so every no-payload verb is an empty struct
+    /// variant. Without that, the daemon would accept a verb carrying junk and
+    /// hand it to the helper instead of answering Invalid.
+    #[test]
+    fn verbs_without_a_payload_reject_extra_fields() {
+        for json in [
+            r#"{"action":"printing-system","operation":{"operation":"status","extra":true}}"#,
+            r#"{"action":"printing-status","extra":true}"#,
+            r#"{"action":"refresh","extra":true}"#,
+            r#"{"action":"system","operation":{"operation":"status","extra":true}}"#,
+            r#"{"action":"rdp-system","operation":{"operation":"apply-certificate","extra":true}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Action>(json).is_err(),
+                "{json} was accepted"
+            );
+        }
+        for json in [
+            r#"{"operation":"status","extra":true}"#,
+            r#"{"operation":"start","extra":true}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<PrintingSystemAction>(json).is_err(),
+                "{json} was accepted"
+            );
+        }
     }
 
     #[test]

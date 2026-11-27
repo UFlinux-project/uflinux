@@ -30,7 +30,7 @@ pub fn page(app: &Rc<App>, parent: &gtk::Box) {
         "Return every option on this page, including the advanced view, to its original value.",
     ));
     parent.append(&button(app, "Restore defaults", || {
-        Action::ResetScreenCapture
+        Action::ResetScreenCapture {}
     }));
 }
 
@@ -435,7 +435,7 @@ fn backend(app: &Rc<App>, parent: &gtk::Box) {
     refresh.set_valign(gtk::Align::Center);
     refresh.connect_clicked(move |_| {
         if let Some(app) = weak.upgrade() {
-            app.execute(Action::ScreenCaptureCapabilities, None);
+            app.execute(Action::ScreenCaptureCapabilities {}, None);
         }
     });
     parent.append(&row("Re-detect backend", &refresh));

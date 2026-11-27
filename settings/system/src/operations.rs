@@ -61,14 +61,14 @@ async fn authorized(
     operation: &SystemAction,
 ) -> Result<()> {
     let action = match operation {
-        SystemAction::Status
-        | SystemAction::PowerStatus
-        | SystemAction::BootStatus
+        SystemAction::Status {}
+        | SystemAction::PowerStatus {}
+        | SystemAction::BootStatus {}
         | SystemAction::GetRoutes { .. } => return Ok(()),
         SystemAction::SetMitigations { .. } => "org.uflinux.settings.boot-options",
         SystemAction::SetPowerProfile { .. } => "org.uflinux.settings.power-profile",
         SystemAction::SetPowerButtons { .. } => "org.uflinux.settings.power-admin",
-        SystemAction::DdcDiscover | SystemAction::DdcBrightness { .. } => {
+        SystemAction::DdcDiscover {} | SystemAction::DdcBrightness { .. } => {
             "org.uflinux.settings.brightness"
         }
         SystemAction::ForgetCredentials { ssid } if !credentials().contains_key(ssid) => {
@@ -81,7 +81,7 @@ async fn authorized(
             "org.uflinux.settings.network-admin"
         }
         SystemAction::Printing { printing } => match printing {
-            settings_core::PrintingSystemAction::Status => return Ok(()),
+            settings_core::PrintingSystemAction::Status {} => return Ok(()),
             _ => "org.uflinux.settings.printing",
         },
         _ => "org.uflinux.settings.datetime",
@@ -256,9 +256,9 @@ async fn execute(bus: gio::DBusConnection, operation: &SystemAction) -> Result<s
     }
     let operation = operation.clone();
     gio::spawn_blocking(move||match operation {
-        SystemAction::Status=>serde_json::to_value(status()).map_err(|e|e.to_string()),
-        SystemAction::PowerStatus=>serde_json::to_value(settings_core::power::status()).map_err(|e|e.to_string()),
-        SystemAction::BootStatus=>serde_json::to_value(crate::boot::status()).map_err(|e|e.to_string()),
+        SystemAction::Status {}=>serde_json::to_value(status()).map_err(|e|e.to_string()),
+        SystemAction::PowerStatus {}=>serde_json::to_value(settings_core::power::status()).map_err(|e|e.to_string()),
+        SystemAction::BootStatus {}=>serde_json::to_value(crate::boot::status()).map_err(|e|e.to_string()),
         SystemAction::SetMitigations{enabled}=>serde_json::to_value(crate::boot::set(enabled)?).map_err(|e|e.to_string()),
         SystemAction::SetPowerProfile{profile}=>{crate::power::set_profile(profile)?;serde_json::to_value(settings_core::power::status()).map_err(|e|e.to_string())}
         SystemAction::SetPowerButtons{on_ac,on_battery}=>{crate::power::set_buttons(on_ac,on_battery)?;serde_json::to_value(settings_core::power::status()).map_err(|e|e.to_string())}
@@ -275,7 +275,7 @@ async fn execute(bus: gio::DBusConnection, operation: &SystemAction) -> Result<s
             settings_core::clock::set_time_sync(enabled)?;
             Ok(serde_json::json!({"ok":true}))
         }
-        SystemAction::DdcDiscover=>serde_json::to_value(ddc_discover()?).map_err(|e|e.to_string()),
+        SystemAction::DdcDiscover {}=>serde_json::to_value(ddc_discover()?).map_err(|e|e.to_string()),
         SystemAction::DdcBrightness{id,percent}=>{ddc_set(&id,percent)?;Ok(serde_json::json!({"ok":true}))}
         SystemAction::Enterprise{profile}=>{enterprise(&profile)?;Ok(serde_json::json!({"ok":true}))}
         SystemAction::ForgetCredentials{ssid}=>{

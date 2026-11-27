@@ -16,7 +16,7 @@ impl App {
             self.desktop_ddc_discovered.set(true);
             self.execute(
                 Action::System {
-                    operation: SystemAction::DdcDiscover,
+                    operation: SystemAction::DdcDiscover {},
                 },
                 None,
             );
@@ -215,7 +215,7 @@ impl App {
         if panel == "power" && !self.desktop_ddc_discovered.replace(true) {
             self.execute(
                 Action::System {
-                    operation: SystemAction::DdcDiscover,
+                    operation: SystemAction::DdcDiscover {},
                 },
                 None,
             );

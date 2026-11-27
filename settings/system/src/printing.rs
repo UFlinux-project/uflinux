@@ -65,21 +65,21 @@ struct Account {
 pub fn execute(action: PrintingSystemAction) -> Result<Value> {
     use PrintingSystemAction::*;
     match action {
-        Status => serde_json::to_value(observe()).map_err(|e| e.to_string()),
-        Enable => {
+        Status {} => serde_json::to_value(observe()).map_err(|e| e.to_string()),
+        Enable {} => {
             enable()?;
             Ok(json!({"ok": true}))
         }
-        Disable => {
+        Disable {} => {
             disable()?;
             Ok(json!({"ok": true}))
         }
-        Start => {
+        Start {} => {
             service(AVAHI_SERVICE, "start");
             service(CUPS_SERVICE, "start");
             Ok(json!({"ok": true}))
         }
-        Stop => {
+        Stop {} => {
             service(CUPS_SERVICE, "stop");
             service(AVAHI_SERVICE, "stop");
             Ok(json!({"ok": true}))

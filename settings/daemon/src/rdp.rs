@@ -146,11 +146,11 @@ async fn helper(system: &gio::DBusConnection, request: &Value) -> Result<Value> 
 
 fn helper_request(operation: &RdpSystemAction, current: &Rdp) -> Value {
     match operation {
-        RdpSystemAction::Enable => json!({"operation": "enable"}),
-        RdpSystemAction::Disable => json!({"operation": "disable"}),
-        RdpSystemAction::Start => json!({"operation": "start"}),
-        RdpSystemAction::Stop => json!({"operation": "stop"}),
-        RdpSystemAction::ApplyCertificate => match current.certificate_mode {
+        RdpSystemAction::Enable {} => json!({"operation": "enable"}),
+        RdpSystemAction::Disable {} => json!({"operation": "disable"}),
+        RdpSystemAction::Start {} => json!({"operation": "start"}),
+        RdpSystemAction::Stop {} => json!({"operation": "stop"}),
+        RdpSystemAction::ApplyCertificate {} => match current.certificate_mode {
             CertificateMode::SelfSigned => {
                 json!({"operation": "apply-certificate", "mode": "self-signed"})
             }
@@ -722,15 +722,15 @@ mod tests {
             custom_key_path: Some("/k.pem".into()),
             ..Default::default()
         };
-        let request = helper_request(&RdpSystemAction::ApplyCertificate, &current);
+        let request = helper_request(&RdpSystemAction::ApplyCertificate {}, &current);
         assert_eq!(request["operation"], "apply-certificate");
         assert_eq!(request["mode"], "custom");
         assert_eq!(request["certificate_path"], "/c.pem");
         assert_eq!(
-            helper_request(&RdpSystemAction::Enable, &current),
+            helper_request(&RdpSystemAction::Enable {}, &current),
             json!({"operation": "enable"})
         );
-        let request = helper_request(&RdpSystemAction::ApplyCertificate, &Rdp::default());
+        let request = helper_request(&RdpSystemAction::ApplyCertificate {}, &Rdp::default());
         assert_eq!(request["mode"], "self-signed");
         assert!(request.get("certificate_path").is_none());
     }

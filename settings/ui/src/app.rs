@@ -336,7 +336,7 @@ impl App {
                         Err(_)=>{let _=glib::timeout_future(std::time::Duration::from_millis(200*(attempt+1))).await;}
                     }
                 }
-                match loaded{Some(raw)=>{app.update(&raw);app.execute(Action::Refresh,None);},None=>app.error("The settings service could not start. Check the session D-Bus and service package.")}
+                match loaded{Some(raw)=>{app.update(&raw);app.execute(Action::Refresh {},None);},None=>app.error("The settings service could not start. Check the session D-Bus and service package.")}
             }
             Err(_)=>app.error("No user D-Bus session is available"),
         }
@@ -850,7 +850,7 @@ impl App {
         if panel == "power" {
             self.execute(
                 Action::System {
-                    operation: SystemAction::DdcDiscover,
+                    operation: SystemAction::DdcDiscover {},
                 },
                 None,
             );

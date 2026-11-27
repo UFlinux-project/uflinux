@@ -243,7 +243,7 @@ pub fn datetime(app: &Rc<App>, parent: &gtk::Box) {
         }
     });
     parent.append(&save);
-    parent.append(&button(app, "Refresh clock status", || Action::Refresh));
+    parent.append(&button(app, "Refresh clock status", || Action::Refresh {}));
 }
 pub fn appearance(app: &Rc<App>, parent: &gtk::Box) {
     let weak = Rc::downgrade(app);
@@ -468,6 +468,6 @@ pub fn about(app: &Rc<App>, parent: &gtk::Box) {
     });
     parent.append(&copy);
     parent.append(&button(app, "Refresh system information", || {
-        Action::Refresh
+        Action::Refresh {}
     }));
 }
