@@ -194,8 +194,9 @@ def check_device(device_id):
         found, _ = alpine_index(arch)
         # The UFLinux subpackages are built from this repository's own aports tree,
         # and the Nura extras are validated against the pinned Nura index below.
-        installed = [name for name in device_packages(device, arch)
-                     if not name.startswith(("uflinux", "linux-uflinux-")) and name not in device["nura_packages"]]
+        installed = [re.split(r"[=<>~]", name)[0] for name in device_packages(device, arch)
+                     if not name.startswith(("uflinux", "linux-uflinux-"))
+                     and re.split(r"[=<>~]", name)[0] not in device["nura_packages"]]
         missing = set(installed) - found - local
         if missing:
             raise RuntimeError(f"{device_id} ({arch}): unavailable device packages: {', '.join(sorted(missing))}")

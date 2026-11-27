@@ -43,6 +43,9 @@ const DESKTOP_ID: &str = "org.gnome.SimpleScan.desktop";
 const SYSTEM_DESKTOP: &str = "/usr/share/applications/org.gnome.SimpleScan.desktop";
 const CUPS_SERVICE: &str = "cupsd";
 const AVAHI_SERVICE: &str = "avahi-daemon";
+/// OpenRC drops one empty file per running service here. The daemon reads the
+/// very same marker, so both halves of the surface agree on what "running" is.
+const STARTED_DIR: &str = "/run/openrc/started";
 /// Groups that make a locally attached device usable from a desktop session.
 /// Scheduler administration stays with the helper alone.
 const USER_GROUPS: [&str; 2] = ["lp", "scanner"];
@@ -376,6 +379,14 @@ fn observe() -> PrintingObservation {
     if !Path::new("/usr/sbin/cupsd").exists() {
         return observed;
     }
+    // Every probe below is a client request to the scheduler, and each one
+    // waits out its whole timeout while cupsd is down. The stack ships
+    // installed but inert, so the marker is what keeps one read-only request
+    // from turning into minutes of blocking; the daemon applies the same rule
+    // before it forwards a status request at all.
+    if !scheduler_running() {
+        return observed;
+    }
     ensure_root_admin();
     if let Ok(text) = command("/usr/bin/lpstat", &["-p", "-d"], 10) {
         parse_queues(&text, &mut observed);
@@ -396,6 +407,13 @@ fn observe() -> PrintingObservation {
     }
     observed.scanners = scan_scanners();
     observed
+}
+
+/// True while OpenRC reports cupsd as running. The daemon refuses to ask for a
+/// fresh observation before this holds, and the check is repeated here so that
+/// a direct status request stays cheap as well.
+fn scheduler_running() -> bool {
+    fs::symlink_metadata(format!("{STARTED_DIR}/{CUPS_SERVICE}")).is_ok()
 }
 
 /// cupsd refuses every administrative verb to a uid outside `lpadmin`, root

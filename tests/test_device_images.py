@@ -170,6 +170,12 @@ class DeviceRootfsTests(unittest.TestCase):
                          "e2fsprogs-extra", "cloud-utils-growpart", "linux-uflinux-virt-x86_64=7.3.6-r14",
                          "musl-locales", "labwc-lang", "firefox", "vulkan-loader"):
             self.assertIn(required, packages)
+        # The minirootfs already carries Alpine's musl, so only an exact version
+        # makes apk replace it with the UFLinux build.
+        musl = builder.LOCK["musl"]["version"] + "-r" + builder.LOCK["musl"]["revision"]
+        self.assertIn("musl=" + musl, packages)
+        self.assertIn("musl-utils=" + musl, packages)
+        self.assertNotIn("musl", packages)
         self.assertNotIn("uflinux-live", packages)
         self.assertEqual(packages.count("efibootmgr"), 1)
         # dtbloader and the Nura kernel reach the image through

@@ -177,8 +177,15 @@ def device_packages(device, arch):
     packages += ["musl-locales", "musl-locales-lang", "glib-lang", "gtk4.0-lang",
                  "labwc-lang", "vulkan-loader", "xfsprogs"]
     packages += browser_packages(arch)
-    packages += ["alpine-base", "musl", "musl-utils", "apk-tools", "zstd", "util-linux", "dosfstools", "mtools",
-                 "e2fsprogs", "e2fsprogs-extra", "cloud-utils-growpart"]
+    # The rootfs starts from Alpine's minirootfs, which already carries Alpine's
+    # own musl, and `apk add` only ever installs what is missing: an unversioned
+    # demand for musl is satisfied by the installed copy, so the UFLinux build
+    # would be skipped and verify_musl_installed() would fail on the image. The
+    # explicit version is what turns the demand into an upgrade, the way the
+    # ISO's `apk upgrade --repository /repo` does for the live system.
+    musl = LOCK["musl"]["version"] + "-r" + LOCK["musl"]["revision"]
+    packages += ["alpine-base", "musl=" + musl, "musl-utils=" + musl, "apk-tools", "zstd", "util-linux",
+                 "dosfstools", "mtools", "e2fsprogs", "e2fsprogs-extra", "cloud-utils-growpart"]
     packages += firmware_packages()
     # f2fs-tools provides resize.f2fs, which the initramfs runs offline to
     # expand an F2FS root before mounting it (see the uflinux-f2fs-resize
