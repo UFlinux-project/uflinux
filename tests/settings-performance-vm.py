@@ -102,6 +102,20 @@ def tokens(path):
     return found
 
 
+def assigned_mitigations():
+    """Values assigned in the boot policy, ignoring the explanatory comments.
+
+    Both the shipped file and the one Settings writes explain the two tokens in
+    comments, so a plain substring count cannot tell a policy line from prose.
+    """
+    values = []
+    for line in POLICY.read_text().splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "mitigations":
+            values.append(value.strip())
+    return values
+
+
 def wait_for_configured(wanted):
     for _ in range(100):
         if shared_boot().get("configured") == wanted:
@@ -120,13 +134,13 @@ try:
     assert original["applied"] == "off", original
     assert original["reboot_required"] is False, original
     assert tokens(entry) == {"off"}, entry
-    assert POLICY.read_text().count("mitigations=off") == 1, POLICY.read_text()
+    assert assigned_mitigations() == ["off"], POLICY.read_text()
 
     enabled = operation({"operation": "set-mitigations", "enabled": True})
     assert enabled["configured"] == "auto", enabled
     assert enabled["applied"] == "off", enabled
     assert enabled["reboot_required"] is True, enabled
-    assert "mitigations=auto" in POLICY.read_text(), POLICY.read_text()
+    assert assigned_mitigations() == ["auto"], POLICY.read_text()
     assert tokens(entry) == {"auto"}, entry
     wait_for_configured("auto")
 

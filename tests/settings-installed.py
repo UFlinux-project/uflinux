@@ -129,7 +129,16 @@ for _ in range(180):
     time.sleep(.5)
 else:
     raise AssertionError('Settings did not render its first frame')
-assert Path('/etc/uflinux/boot.conf').read_text().count('mitigations=off') == 1, \
+def assigned_mitigations():
+    """Values assigned in the boot policy, ignoring the explanatory comments."""
+    values = []
+    for line in Path('/etc/uflinux/boot.conf').read_text().splitlines():
+        key, separator, value = line.partition('=')
+        if separator and key.strip() == 'mitigations':
+            values.append(value.strip())
+    return values
+
+assert assigned_mitigations() == ['off'], \
     "The installed boot policy must disable the mitigations by default"
 assert 'org.uflinux.settings.boot-options' in \
     Path('/usr/share/polkit-1/actions/org.uflinux.settings.policy').read_text(), \

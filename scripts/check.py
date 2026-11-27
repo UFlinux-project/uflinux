@@ -271,8 +271,14 @@ menu = (ROOT / "aports/uflinux/uflinux-boot-menu").read_text()
 assert "printf 'mitigations=%s ' \"$(mitigations_policy)\"" in menu, \
     "boot_arguments must append the mitigation policy for every boot mode"
 assert "mitigations=*)" in menu, "boot_arguments must strip an inherited mitigations word"
-assert "mitigations=off" in (ROOT / "settings/data/uflinux-boot.conf").read_text(), \
+shipped_policy = (ROOT / "settings/data/uflinux-boot.conf").read_text()
+assert "mitigations=off" in shipped_policy, \
     "The shipped boot policy must disable the mitigations"
+# The file explains both tokens in comments, so the checks that run inside the
+# VM have to count assignments rather than occurrences of the literal.
+assert [line.partition("=")[2].strip() for line in shipped_policy.splitlines()
+        if line.partition("=")[0].strip() == "mitigations"] == ["off"], \
+    "The shipped boot policy must carry exactly one mitigations assignment"
 settings_recipe = (ROOT / "aports/uflinux-settings/APKBUILD").read_text()
 assert 'install -Dm644 data/uflinux-boot.conf "$pkgdir/etc/uflinux/boot.conf"' in settings_recipe, \
     "uflinux-settings must install the default boot policy"
