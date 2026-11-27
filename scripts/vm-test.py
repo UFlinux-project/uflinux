@@ -212,9 +212,6 @@ def splash_smoke(child, state, out):
         except RuntimeError:
             time.sleep(5)
             guest(child, restart)
-    except RuntimeError as failure:
-        context = guest(child, diagnostics)
-        raise RuntimeError(str(failure) + "\n" + context) from None
         frames = []
         with qmp(state) as request:
             for number in (1, 2):
@@ -231,6 +228,9 @@ def splash_smoke(child, state, out):
         white = sum(min(r, g, b) > 200 for r, g, b in zip(pixels[::3], pixels[1::3], pixels[2::3]))
         if blue < 20 or white < 300:
             raise RuntimeError("Splash screenshot lacks the blue spinner or original white artwork")
+    except RuntimeError as failure:
+        context = guest(child, diagnostics)
+        raise RuntimeError(str(failure) + "\n" + context) from None
     finally:
         guest(child, "/usr/libexec/uflinux-bootsplash stop; ! pgrep -x plymouthd; rc-service greetd start")
     return {"animated_frames": True, "original_logo_visible": True, "handoff_without_daemon": True,
