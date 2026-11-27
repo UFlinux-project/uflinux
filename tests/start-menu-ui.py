@@ -136,7 +136,7 @@ def menu_rows():
     frame = wait(menu, 'Start menu disappeared')
     return [[name_of(a) for a in tree(row) if role_of(a) == 'label']
             for row in tree(frame)
-            if role_of(a) == 'list item' and any(role_of(c) == 'image' for c in tree(row))]
+            if role_of(row) == 'list item' and any(role_of(c) == 'image' for c in tree(row))]
 def assert_row_is_centered(name):
     # A program name must sit at the vertical middle of its row, level with the icon.
     label = wait(lambda: find(name), 'Row %s disappeared' % name)
