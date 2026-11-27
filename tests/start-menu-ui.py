@@ -129,6 +129,14 @@ def surface_bounds(item):
     # can compare two widgets of the same window.
     rect = item.queryComponent().getExtents(pyatspi.WINDOW_COORDS)
     return (rect.x, rect.y, rect.width, rect.height)
+def menu_rows():
+    # Names of visible launcher result rows, in order. A GtkListView row exposes
+    # them through its labels, and every result row carries an icon, so requiring
+    # an image keeps the "Applications" section headers out of the list.
+    frame = wait(menu, 'Start menu disappeared')
+    return [[name_of(a) for a in tree(row) if role_of(a) == 'label']
+            for row in tree(frame)
+            if role_of(a) == 'list item' and any(role_of(c) == 'image' for c in tree(row))]
 def assert_row_is_centered(name):
     # A program name must sit at the vertical middle of its row, level with the icon.
     label = wait(lambda: find(name), 'Row %s disappeared' % name)
@@ -152,7 +160,7 @@ marker = Path(os.environ['XDG_RUNTIME_DIR']) / 'start-launch-args'
 created = []
 def fixture(key, name, extra='', executable=None):
     path = apps / ('uflinux-launcher-test-' + key + '.desktop')
-    path.write_text('[Desktop Entry]\nType=Application\nName=' + name + '\nComment=Launch catalog fixture\nKeywords=Unicode;Documents;\nIcon=utilities-terminal\nExec=' + (executable or '"' + str(helper) + '" "argument with spaces" %U') + '\n' + extra)
+    path.write_text('[Desktop Entry]\nType=Application\nName=' + name + '\nComment=Launch catalog fixture\nKeywords=Unicode;Documents;LaunchProbe;\nIcon=utilities-terminal\nExec=' + (executable or '"' + str(helper) + '" "argument with spaces" %U') + '\n' + extra)
     created.append(path)
 fixture('visible', 'UFLinux Fixture Straße')
 fixture('hidden', 'UFLinux Fixture Hidden', 'Hidden=true\n')
@@ -177,10 +185,17 @@ try:
     wait(lambda: find('Back to favorites'), 'Application browser did not open')
     command('wtype', '-k', 'Escape')
     wait(lambda: find('Favorites'), 'Escape did not return to favorites')
-    search('STRASSE documents')
+    # "launchprobe" is a keyword only the fixture carries, so the shipped catalog
+    # cannot add a second row: a keyword match with an earlier name would otherwise
+    # take row 0 (results are ranked, then sorted by name) and Return would launch
+    # that application instead.
+    search('STRASSE launchprobe')
     wait(lambda: find('UFLinux Fixture Straße'), 'Unicode/token search missed the visible fixture')
     assert_row_is_centered('UFLinux Fixture Straße')
     assert not find('UFLinux Fixture Hidden')
+    rows = menu_rows()
+    assert rows and 'UFLinux Fixture Straße' in rows[0], \
+        'Return would activate %r' % (rows[:1],)
     command('wtype', '-k', 'Down')
     command('wtype', '-k', 'Return')
     wait(lambda: marker.exists(), 'GIO did not launch the desktop file')
