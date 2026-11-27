@@ -114,7 +114,14 @@ for menu in ('start', 'network', 'sound', 'power'):
         run('uflinux-desktop', *command, '--output', output)
         assert desktop_status()['popup'] == menu
         run('uflinux-desktop', '--hide')
-        assert desktop_status()['popup'] is None
+        # `--hide` only queues the popdowns, so the status action is refreshed
+        # from the resulting visibility signals rather than by the command.
+        for _ in range(50):
+            if desktop_status()['popup'] is None:
+                break
+            time.sleep(.1)
+        else:
+            raise AssertionError('Desktop kept a popup open after --hide')
 assert desktop_pid() == desktop
 closed_pss = pss(desktop)
 with Path('/run/uflinux-settings-ui.log').open('w') as log:
@@ -165,9 +172,14 @@ assert state()['printing'] == {'installed': True, 'enabled': False, 'running': F
 system_entry = Path('/usr/share/applications/org.gnome.SimpleScan.desktop')
 scanner_entry = Path(user.pw_dir) / '.local/share/applications/org.gnome.SimpleScan.desktop'
 assert system_entry.is_file(), 'The image does not ship the Document Scanner'
-assert scanner_entry.is_file(), 'The Document Scanner override was not written for the account'
-assert 'NoDisplay=true' in scanner_entry.read_text(), \
-    'The Document Scanner must be hidden while printing is disabled'
+# The override is written by the session autostart helper, which runs in the
+# background, so give it a moment on a machine this slow.
+for _ in range(60):
+    if scanner_entry.is_file() and 'NoDisplay=true' in scanner_entry.read_text():
+        break
+    time.sleep(.5)
+else:
+    raise AssertionError('The Document Scanner is not hidden for the account')
 for page in ('network', 'displays', 'audio', 'power', 'performance', 'default-apps',
              'datetime', 'appearance', 'screen-capture', 'printing', 'about'):
     run('uflinux-settings', '--page', page)
