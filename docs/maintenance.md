@@ -22,6 +22,8 @@ For a source update:
 5. Update `uflinux`'s package version and the distribution default version. Bump
    the affected origins' `pkgrel` for packaging, flags, or patch changes without an
    upstream version change; update the exact desktop dependency at the same time.
+   `pkgrel` is also what decides whether a build recompiles an origin or reuses the
+   published package set, so leaving it unchanged means the change is not built.
 6. Run `python3 scripts/update-checksums.py` after changing local package assets,
    inspect its diff, run `scripts/check.py`, then use the full manual build matrix.
 7. Review package/boot/desktop reports before creating the version tag.

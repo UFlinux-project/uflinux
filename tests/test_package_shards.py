@@ -1,14 +1,18 @@
 """Fail closed when independent package jobs are missing, mixed or modified."""
 import importlib.util
+import io
 import json
 import os
 import re
 import subprocess
 from pathlib import Path
+import shutil
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+import urllib.error
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import builder
@@ -17,9 +21,12 @@ from test_build_inputs import stream
 spec = importlib.util.spec_from_file_location('merge_packages', builder.PROJECT / 'scripts/merge-packages.py')
 merge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(merge)
+spec = importlib.util.spec_from_file_location('reuse_packages', builder.PROJECT / 'scripts/reuse-packages.py')
+reuse = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(reuse)
 
 
-class ShardTests(unittest.TestCase):
+class FixtureMixin:
     def fixture(self, out):
         for origin, names in builder.PACKAGE_NAMES.items():
             root = out / 'package-shards/x86_64' / origin
@@ -52,6 +59,8 @@ class ShardTests(unittest.TestCase):
             for name in archives:
                 (inputs / name).write_bytes(b'fixture retained archive')
 
+
+class ShardTests(FixtureMixin, unittest.TestCase):
     def test_uflinux_recipe_packages_match_shard_allowlist(self):
         recipe = (builder.PROJECT / 'aports/uflinux/APKBUILD').read_text()
         subpackages = re.search(r'^subpackages="([^"]+)"', recipe, re.M).group(1)
@@ -104,6 +113,155 @@ class ShardTests(unittest.TestCase):
             self.assertEqual(builder.package_output(temporary, 'x86_64'), Path(temporary))
             self.assertNotEqual(builder.package_output(temporary, 'x86_64', 'connman'),
                                 builder.package_output(temporary, 'x86_64', 'uflinux-settings'))
+
+
+class FakeResponse:
+    def __init__(self, payload):
+        self.body = io.BytesIO(payload)
+        self.status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, size=-1):
+        return self.body.read(size)
+
+
+class ReuseTests(ShardTests):
+    """Published APKs may replace a compile job only as a complete origin set."""
+
+    ARCH = 'x86_64'
+    VERSION = '0.1.0'
+    REPOSITORY = 'https://example.org/apk'
+
+    def published_apk(self, filename, origin):
+        pkgver = builder.package_version(origin, self.VERSION) + '-r' + builder.package_revision(origin)
+        pkgname = filename[:-(len(pkgver) + len('.apk') + 1)]
+        info = f'pkgname = {pkgname}\npkgver = {pkgver}\norigin = {origin}\narch = {self.ARCH}\n'.encode()
+        return (stream('.SIGN.' + builder.SIGN_STREAM + '.' + builder.APPS_KEY, b'published signature')
+                + stream('.PKGINFO', info) + stream('usr/share/doc/README', b'published payload'))
+
+    def published_repository(self, origin, filenames, *, published=None, payload=None):
+        listing = json.dumps([{'version': self.VERSION,
+                               'packages': {self.ARCH: sorted(filenames if published is None else published)}}]).encode()
+
+        def open_url(url, timeout):
+            if url.endswith('/releases.json'):
+                return FakeResponse(listing)
+            name = url.rsplit('/', 1)[-1]
+            if name in filenames:
+                return FakeResponse(payload if payload is not None else self.published_apk(name, origin))
+            raise urllib.error.HTTPError(url, 404, 'missing', None, None)
+
+        return open_url
+
+    def reuse_context(self, open_url):
+        return patch.object(reuse.urllib.request, 'urlopen', side_effect=open_url)
+
+    def run_reuse(self, out, origin, open_url, outputs=None):
+        argv = ['reuse-packages.py', '--arch', self.ARCH, '--version', self.VERSION, '--outdir', str(out),
+                '--repository-url', self.REPOSITORY, '--package', origin]
+        env = {'GITHUB_SHA': 'same-commit', 'SOURCE_DATE_EPOCH': '123'}
+        if outputs is not None:
+            env['GITHUB_OUTPUT'] = str(outputs)
+        with self.reuse_context(open_url), patch('sys.argv', argv), patch.dict(os.environ, env):
+            reuse.main()
+        return None if outputs is None else outputs.read_text()
+
+    def test_the_compile_gate_skips_only_a_reused_origin(self):
+        origin = 'uflinux-regreet'
+        filenames = sorted(reuse.expected_files(origin, self.VERSION))
+        with tempfile.TemporaryDirectory() as temporary:
+            out, outputs = Path(temporary), Path(temporary) / 'output'
+            self.fixture(out)
+            shutil.rmtree(out / 'package-shards/x86_64' / origin)
+            record = self.run_reuse(out, origin, self.published_repository(origin, filenames), outputs)
+            self.assertIn('reused=true', record)
+            self.assertIn('origins=' + origin, record)
+            outputs.write_text('')
+            # An origin that always compiles must never report itself as reused,
+            # otherwise its shard would be missing from the merge.
+            self.assertIn('reused=false', self.run_reuse(out, 'musl', self.published_repository(origin, filenames), outputs))
+
+    def test_reuse_writes_a_shard_the_merge_accepts_without_a_rebuild_proof(self):
+        origin = 'uflinux-regreet'
+        filenames = sorted(reuse.expected_files(origin, self.VERSION))
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            self.fixture(out)
+            shutil.rmtree(out / 'package-shards/x86_64' / origin)
+            self.run_reuse(out, origin, self.published_repository(origin, filenames))
+            shard = out / 'package-shards/x86_64' / origin
+            record = json.loads((shard / 'metadata/x86_64/compile.json').read_text())
+            self.assertTrue(record['reused'])
+            self.assertEqual(record['reused_from'], self.REPOSITORY)
+            self.assertEqual(record['sources'], builder.LOCK)
+            self.assertEqual(sorted(record['files']), sorted(
+                ['packages/x86_64/' + name for name in filenames] +
+                ['packages/x86_64/' + builder.BUILD_KEY] +
+                ['inputs/x86_64/' + name for name in
+                 ('build-apks.tar.gz', 'sources.tar.gz', 'cargo-sources.tar.gz')]))
+            digests = set()
+            for name in ('build-apks.tar.gz', 'sources.tar.gz', 'cargo-sources.tar.gz'):
+                with tarfile.open(shard / 'inputs/x86_64' / name, 'r:gz') as archive:
+                    # A reused shard cannot supply rebuild inputs, so it retains a
+                    # deterministic empty archive that keeps the release asset set intact.
+                    self.assertEqual(archive.getnames(), ['.'])
+                digests.add(builder.sha(shard / 'inputs/x86_64' / name))
+            self.assertEqual(len(digests), 1)
+            merge.collect(out, self.ARCH, self.VERSION)
+            merged = json.loads((out / 'metadata/x86_64/compile.json').read_text())
+            self.assertEqual(merged['reused'], [origin])
+            self.assertEqual(len(merged['files']), sum(map(len, builder.PACKAGE_NAMES.values())))
+            self.assertIn('packages/x86_64/' + filenames[0], merged['files'])
+            proof = json.loads((out / 'metadata/x86_64/reproducibility.json').read_text())
+            self.assertEqual(proof['reused'], [origin])
+            self.assertEqual(len(proof['baseline']), sum(map(len, builder.PACKAGE_NAMES.values())))
+
+    def test_reuse_skips_an_origin_without_a_complete_published_set(self):
+        origin = 'uflinux-regreet'
+        filenames = sorted(reuse.expected_files(origin, self.VERSION))
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            open_url = self.published_repository(origin, filenames, published=filenames[1:])
+            with self.reuse_context(open_url):
+                self.assertEqual(reuse.plan(self.REPOSITORY, self.ARCH, self.VERSION, (origin,)), {})
+            self.run_reuse(out, origin, open_url)
+            self.assertFalse((out / 'package-shards/x86_64' / origin).exists())
+
+    def test_reuse_rejects_a_published_apk_that_is_not_the_expected_build(self):
+        origin = 'uflinux-regreet'
+        filenames = sorted(reuse.expected_files(origin, self.VERSION))
+        wrong = stream('.SIGN.' + builder.SIGN_STREAM + '.' + builder.APPS_KEY, b'sig') + stream(
+            '.PKGINFO', f'pkgname = {origin}\npkgver = 9.9.9-r9\norigin = {origin}\narch = {self.ARCH}\n'.encode()
+        ) + stream('usr/share/doc/README', b'stale payload')
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            self.run_reuse(out, origin, self.published_repository(origin, filenames, payload=wrong))
+            self.assertFalse((out / 'package-shards/x86_64' / origin).exists())
+
+    def test_merge_rejects_a_modified_reused_apk(self):
+        origin = 'uflinux-regreet'
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            self.fixture(out)
+            shard = out / 'package-shards/x86_64' / origin
+            record_path = shard / 'metadata/x86_64/compile.json'
+            record = json.loads(record_path.read_text())
+            record['reused'] = True
+            record['reused_from'] = self.REPOSITORY
+            record_path.write_text(json.dumps(record))
+            (shard / 'metadata/x86_64' / 'reproducibility.json').unlink()
+            version = builder.package_version(origin, self.VERSION) + '-r' + builder.package_revision(origin)
+            (shard / 'packages/x86_64' / (origin + '-' + version + '.apk')).write_bytes(
+                stream('.SIGN.' + builder.SIGN_STREAM + '.' + builder.APPS_KEY, b'sig')
+                + stream('.PKGINFO', f'pkgname = {origin}\npkgver = {version}\norigin = {origin}\narch = {self.ARCH}\n'.encode())
+                + stream('usr/share/example', b'tampered payload'))
+            with self.assertRaisesRegex(ValueError, 'differs from compilation record'):
+                merge.collect(out, self.ARCH, self.VERSION)
 
 
 class InputArchiveTests(unittest.TestCase):

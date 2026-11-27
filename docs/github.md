@@ -44,8 +44,13 @@ Only push events for valid version tags can publish. Manual runs never become
 release builds by supplying a private key. Protect the default branch and release
 tags according to the maintainer access you intend to grant.
 
-Compilation uses seven independent package-origin jobs per architecture, with
-separate caches and development keys and a maximum of eight concurrent jobs.
+Compilation uses nine independent package-origin jobs per architecture, with
+separate caches and development keys and a maximum of eight concurrent jobs. Each job
+first tries to reuse the origin's published packages, and only compiles when the
+repository has nothing matching to offer, so an unchanged origin costs a download
+instead of a build (see
+[published package reuse](building.md#published-package-reuse)). Every job still
+uploads a shard.
 The image job checks completeness, build identity, archive hashes and native
 reproducibility reports before signing. It downloads compile artifacts directly
 to avoid an extra upload/download of the combined package and cache archives. Release input assets retain

@@ -63,13 +63,16 @@ After each compile the Cargo and compiler caches are made world-readable: abuild
 leaves them owned by uid 1000 with mode 640, and the host user that archives or
 restores a cache directory cannot read those files otherwise.
 
-GitHub compiles seven independent origins per architecture: `connman`,
-`gpu-screen-recorder`, `simp1e-cursors`, `uflinux-regreet`, `uflinux-settings`, `xdg-desktop-portal-gtk4` and `uflinux`. PR/main builds schedule
-seven compile jobs (x86_64 only). A release tag or a full-matrix manual run schedules 42, one
+GitHub compiles nine independent origins per architecture: `connman`,
+`gpu-screen-recorder`, `musl`, `simp1e-cursors`, `uflinux`, `uflinux-rds`,
+`uflinux-regreet`, `uflinux-settings` and `xdg-desktop-portal-gtk4`. PR/main builds schedule
+nine compile jobs (x86_64 only). A release tag or a full-matrix manual run schedules one job
 per architecture and origin, with at most eight compile jobs running together.
 Each origin has its own VM, development signing key, timeout and cache. Heavy Rust
 builds and their native clean-rebuild comparisons run independently. Signing and
-ISO assembly wait for a complete validated set of APKs.
+ISO assembly wait for a complete validated set of APKs. An origin whose published
+package set is unchanged is downloaded from the repository instead of recompiled; see
+[published package reuse](#published-package-reuse).
 
 For an individual package build, use the same entry point:
 
@@ -80,7 +83,7 @@ sudo --preserve-env=APK_REPOSITORY_URL python3 scripts/reproducibility.py \
   --arch x86_64 --version 0.1.0 --package uflinux-settings
 ```
 
-Repeat independently for the other five origins. `--package` automatically uses
+Repeat independently for the other eight origins. `--package` automatically uses
 `.state/ORIGIN` and `.cache/build/ORIGIN`, writing below
 `out/package-shards/ARCH/ORIGIN`. Explicit work/cache directory overrides must
 remain distinct for concurrent builds. Shards support only `packages`/`bootstrap`
@@ -112,6 +115,49 @@ before replacing its signature stream. Development private keys are not uploaded
 Each native origin must have its clean-rebuild report before collection succeeds.
 See [local parallel-build validation](parallel-build-validation.md) for completed
 checks and their scope.
+
+## Published package reuse
+
+An origin that has not changed does not need to be compiled again: its already
+published APKs are downloaded from the repository and turned into the same kind of
+shard that a compile job writes, so `merge-packages.py`, `sign`, `image` and the
+publish gate work unchanged.
+
+```sh
+python3 scripts/reuse-packages.py --arch x86_64 --version 0.1.0 --list
+python3 scripts/reuse-packages.py --arch x86_64 --version 0.1.0 --package uflinux-regreet
+```
+
+`--list` prints the origins that can be reused and writes nothing; `--package`
+fetches one origin into `out/package-shards/ARCH/ORIGIN`. Run it before
+`scripts/build.sh --stage packages`, and compile whatever it declines to reuse.
+The script needs no root privileges and no chroot, and it uses the same
+`APK_REPOSITORY_URL` and `SOURCE_DATE_EPOCH` as the build so that a fetched shard
+and a compiled one agree on every shared build setting.
+
+An origin is reusable only when the published release history
+(`<repository>/releases.json`) already contains every APK of the origin at the exact
+`name-version-rN` the current sources describe. Since the version comes from the tag
+or `config/sources.lock.json`, the signal for "this origin changed" is the `pkgrel`
+in `aports/ORIGIN/APKBUILD`: bumping it makes the origin ineligible until the new
+build is published. Anything else counts as unchanged.
+
+The download is checked before it is kept: the APK must carry the expected origin,
+version and architecture, its embedded signature must verify against the published
+release key, and its recorded build inputs must match the current lockfile. A
+reused shard is marked as such, and `merge-packages.py` then reports it separately
+instead of demanding a clean-rebuild proof that was never produced locally.
+
+Reuse is deliberately limited. `musl`, `uflinux-rds`, `uflinux-settings`, `connman`
+and `gpu-screen-recorder` always compile, because their shards must also carry
+freshly generated BOLT, PGO and Clang profiling archives. `uflinux` is reusable only
+on a release tag that matches an already published release. If the repository is
+unreachable, `releases.json` is missing, or a downloaded APK fails any check, the
+origin simply compiles: reuse never turns a network problem into a build failure.
+
+In GitHub Actions each compile job runs the script for its own origin before
+compiling, and skips the compile and clean-rebuild steps when the fetch produced a
+complete shard. Every job still uploads a shard, so image assembly is unaffected.
 
 Thirty-four custom APKs are built: patched ConnMan (runtime/OpenRC/dev/docs/debug, seven),
 ReGreet (one), the GTK4 portal backend (one), the simp1e cursor theme (two: the

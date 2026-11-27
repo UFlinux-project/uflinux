@@ -15,7 +15,7 @@ def collect(out, arch, version):
     shards = out / 'package-shards' / arch
     if {p.name for p in shards.iterdir()} != set(PACKAGE_NAMES):
         raise ValueError('All package shards are required')
-    keys, packages, records, baseline = {}, {}, {}, {}
+    keys, packages, records, baseline, reused = {}, {}, {}, {}, []
     identity = None
     for origin, expected_names in PACKAGE_NAMES.items():
         shard = shards / origin
@@ -65,9 +65,12 @@ def collect(out, arch, version):
         if not required.issubset({p.name for p in inputs.glob('*.tar.gz')}):
             raise ValueError('Missing rebuild inputs for ' + origin)
         if arch == 'x86_64':
-            proof = json.loads((shard / 'metadata' / arch / 'reproducibility.json').read_text())
-            if not proof.get('fresh_compiler_target') or not proof.get('matched') or proof.get('baseline') != payloads or proof.get('rebuilt') != payloads:
-                raise ValueError('Reproducibility proof does not cover shard ' + origin)
+            if record.get('reused'):
+                reused.append(origin)
+            else:
+                proof = json.loads((shard / 'metadata' / arch / 'reproducibility.json').read_text())
+                if not proof.get('fresh_compiler_target') or not proof.get('matched') or proof.get('baseline') != payloads or proof.get('rebuilt') != payloads:
+                    raise ValueError('Reproducibility proof does not cover shard ' + origin)
             baseline.update(payloads)
         records[origin] = record
     # Nothing is copied into the signing input until the entire set validates.
@@ -95,7 +98,7 @@ def collect(out, arch, version):
             shutil.rmtree(target)
         shutil.copytree(shard / 'inputs' / arch, target)
     merged = dict(next(iter(records.values())))
-    merged.update(package=None, package_shards=list(PACKAGE_NAMES), files={
+    merged.update(package=None, package_shards=list(PACKAGE_NAMES), reused=reused, files={
         'packages/' + arch + '/' + name: {'sha256': sha(package), 'bytes': package.stat().st_size}
         for name, package in packages.items()})
     (metadata / 'compile.json').write_text(json.dumps(merged, indent=2) + '\n')
@@ -103,8 +106,10 @@ def collect(out, arch, version):
         (metadata / 'reproducibility.json').write_text(json.dumps({
             'arch': arch, 'version': version, 'fresh_compiler_target': True,
             'signature_streams_excluded': True, 'baseline': baseline, 'rebuilt': baseline,
-            'matched': True, 'package_shards': list(PACKAGE_NAMES)}, indent=2) + '\n')
-    print(f'Collected {len(packages)} APKs from {len(PACKAGE_NAMES)} independent {arch} jobs')
+            'matched': True, 'package_shards': list(PACKAGE_NAMES), 'reused': reused}, indent=2) + '\n')
+    compiled = len(PACKAGE_NAMES) - len(reused)
+    print(f'Collected {len(packages)} APKs from {compiled} independent {arch} jobs'
+          + (f' and {len(reused)} reused origins' if reused else ''))
 
 
 def main():

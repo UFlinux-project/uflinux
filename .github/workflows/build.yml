@@ -108,14 +108,18 @@ jobs:
           key: compile-v2-${{ matrix.arch }}-${{ matrix.package }}-${{ (matrix.settings_pgo || matrix.rds_pgo) && 'pgo-' || '' }}${{ needs.checks.outputs.cache }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             compile-v2-${{ matrix.arch }}-${{ matrix.package }}-${{ (matrix.settings_pgo || matrix.rds_pgo) && 'pgo-' || '' }}${{ needs.checks.outputs.cache }}-
+      - name: Reuse published packages
+        id: reuse
+        run: python3 scripts/reuse-packages.py --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --package '${{ matrix.package }}'
       - name: Compile without release secrets
+        if: steps.reuse.outputs.reused != 'true'
         run: |
           args=()
           if [ "${{ matrix.settings_pgo }}" = true ]; then args+=(--settings-pgo); fi
           if [ "${{ matrix.rds_pgo }}" = true ]; then args+=(--rds-pgo); fi
           timeout --signal=INT --kill-after=60s ${{ (matrix.settings_pgo || matrix.rds_pgo) && '210m' || '300m' }} sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,CARGO_BUILD_JOBS,GITHUB_REPOSITORY,GITHUB_SHA bash scripts/build.sh --arch '${{ matrix.arch }}' --version '${{ needs.checks.outputs.version }}' --stage packages --package '${{ matrix.package }}' "${args[@]}"
       - name: Compare a clean native rebuild
-        if: matrix.arch == 'x86_64'
+        if: matrix.arch == 'x86_64' && steps.reuse.outputs.reused != 'true'
         run: |
           timeout --signal=INT --kill-after=60s ${{ (matrix.settings_pgo || matrix.rds_pgo) && '120m' || '40m' }} sudo --preserve-env=SOURCE_DATE_EPOCH,APK_REPOSITORY_URL,CARGO_BUILD_JOBS,GITHUB_REPOSITORY,GITHUB_SHA python3 scripts/reproducibility.py --arch x86_64 --version '${{ needs.checks.outputs.version }}' --package '${{ matrix.package }}'
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
