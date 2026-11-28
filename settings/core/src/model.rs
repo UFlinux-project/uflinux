@@ -1406,10 +1406,11 @@ pub struct BootPolicy {
     pub mitigations: Mitigations,
 }
 
-/// What the boot loader will do on the next restart, and what the system was
-/// configured to do. `applied` is `None` when the boot entries could not be
-/// read, which is the case on a device image whose boot partition is not
-/// mounted.
+/// What the system was configured to do, and what the running kernel was
+/// actually started with. `applied` is read from the live command line rather
+/// than from the boot entries, so it is `None` on a kernel booted without the
+/// token; `reboot_required` is what says the recorded policy and the running
+/// kernel disagree.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Boot {
     pub available: bool,

@@ -2,9 +2,9 @@ use super::*;
 
 /// The Performance page owns one decision: whether the kernel applies its
 /// runtime workarounds for CPU vulnerabilities. The switch shows what the
-/// system was configured to do, and the status line reports what the boot
-/// entries will actually do next restart, since the command line is read by
-/// the firmware before anything is running.
+/// system was configured to do, and the status line compares that with the
+/// command line of the kernel that is running now, since the boot entries are
+/// read by the firmware before anything is running.
 pub fn page(app: &Rc<App>, parent: &gtk::Box) {
     parent.append(&description("UFLinux starts with the processor's runtime workarounds for CPU vulnerabilities switched off, which keeps the full speed of the machine. Enable them if this system runs code from untrusted sources directly on it, such as a shared login server or a browser opened on unknown websites."));
     let status = description("");
@@ -62,7 +62,7 @@ fn status_text(state: &Snapshot) -> String {
             }
         ),
         Some(applied) => format!(
-            "Configured: {wanted}. The boot entries ask for the workarounds {}.",
+            "Configured: {wanted}. The system is running with the workarounds {}.",
             match applied {
                 Mitigations::Off => "off",
                 Mitigations::Auto => "on",

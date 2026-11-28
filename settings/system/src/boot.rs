@@ -213,7 +213,22 @@ fn observed(root: &Path) -> Result<Vec<Option<Mitigations>>> {
     }
     Ok(values)
 }
-fn view(root: Option<&Path>, configured: Mitigations, failure: Option<String>) -> Boot {
+/// What the kernel that is running now was started with. The boot entries say
+/// what the next restart will do, so the two are read apart: a command line
+/// without the token leaves the choice to the kernel and is reported as
+/// unknown rather than guessed at.
+fn booted() -> Option<Mitigations> {
+    fs::read_to_string("/proc/cmdline")
+        .ok()
+        .as_deref()
+        .and_then(arguments_value)
+}
+fn view(
+    root: Option<&Path>,
+    configured: Mitigations,
+    failure: Option<String>,
+    booted: Option<Mitigations>,
+) -> Boot {
     let (values, reason) = match root.filter(|_| failure.is_none()) {
         Some(root) => match observed(root) {
             Err(error) => (Vec::new(), error),
@@ -221,27 +236,31 @@ fn view(root: Option<&Path>, configured: Mitigations, failure: Option<String>) -
         },
         None => (Vec::new(), failure.unwrap_or_default()),
     };
-    let applied = values
+    let entries = values
         .first()
         .filter(|first| values.iter().all(|value| value == *first))
         .copied()
         .flatten();
-    let reason = if applied.is_some() {
-        String::new()
-    } else if values.iter().any(|value| value.is_some()) {
-        "The boot entries disagree about the mitigation setting".to_string()
-    } else if !values.is_empty() {
-        "The boot entries do not mention CPU mitigations".to_string()
-    } else if !reason.is_empty() {
-        reason
+    let reason = if entries.is_none() {
+        if values.iter().any(|value| value.is_some()) {
+            "The boot entries disagree about the mitigation setting".to_string()
+        } else if !values.is_empty() {
+            "The boot entries do not mention CPU mitigations".to_string()
+        } else if !reason.is_empty() {
+            reason
+        } else {
+            "No boot entries were found on the boot partition".to_string()
+        }
+    } else if booted.is_none() {
+        "The running kernel was started without a mitigation setting".to_string()
     } else {
-        "No boot entries were found on the boot partition".to_string()
+        String::new()
     };
     Boot {
-        available: applied.is_some(),
+        available: entries.is_some(),
         configured,
-        applied,
-        reboot_required: applied.is_some_and(|applied| applied != configured),
+        applied: booted,
+        reboot_required: booted.is_some_and(|applied| applied != configured),
         reason,
     }
 }
@@ -249,8 +268,8 @@ fn view(root: Option<&Path>, configured: Mitigations, failure: Option<String>) -
 pub fn status() -> Boot {
     let configured = read_policy(Path::new(POLICY)).mitigations;
     match locate(false) {
-        Ok(directory) => view(Some(&directory.root), configured, None),
-        Err(error) => view(None, configured, Some(error)),
+        Ok(directory) => view(Some(&directory.root), configured, None, booted()),
+        Err(error) => view(None, configured, Some(error), booted()),
     }
 }
 
@@ -316,7 +335,7 @@ pub fn set(enabled: bool) -> Result<Boot> {
         revert(&changed, previous);
         return Err(error);
     }
-    Ok(view(Some(&directory.root), wanted, None))
+    Ok(view(Some(&directory.root), wanted, None, booted()))
 }
 
 #[cfg(test)]
@@ -391,7 +410,7 @@ menuentry 'UFLinux' {
         );
         // The Raspberry Pi command line carries no token, so the entries of
         // this partition disagree and the setting cannot be verified.
-        let boot = view(Some(&root), Mitigations::Off, None);
+        let boot = view(Some(&root), Mitigations::Off, None, Some(Mitigations::Off));
         assert!(!boot.available);
         assert!(boot.reason.contains("disagree"));
         fs::write(
@@ -399,14 +418,22 @@ menuentry 'UFLinux' {
             "root=/dev/mmcblk0p7 mitigations=off\n",
         )
         .unwrap();
-        let boot = view(Some(&root), Mitigations::Off, None);
+        let boot = view(Some(&root), Mitigations::Off, None, Some(Mitigations::Off));
         assert!(boot.available);
         assert_eq!(boot.applied, Some(Mitigations::Off));
         assert!(!boot.reboot_required);
         assert_eq!(
-            view(Some(&root), Mitigations::Auto, None).reboot_required,
+            view(Some(&root), Mitigations::Auto, None, Some(Mitigations::Off))
+                .reboot_required,
             true
         );
+        // The entries are in order, but a kernel started without the token has
+        // no recorded value to compare them against.
+        let boot = view(Some(&root), Mitigations::Off, None, None);
+        assert!(boot.available);
+        assert_eq!(boot.applied, None);
+        assert!(!boot.reboot_required);
+        assert!(boot.reason.contains("running kernel"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -416,9 +443,10 @@ menuentry 'UFLinux' {
             None,
             Mitigations::Off,
             Some("The boot partition is missing".into()),
+            Some(Mitigations::Off),
         );
         assert!(!boot.available);
-        assert_eq!(boot.applied, None);
+        assert_eq!(boot.applied, Some(Mitigations::Off));
         assert!(!boot.reboot_required);
         assert_eq!(boot.reason, "The boot partition is missing");
     }
