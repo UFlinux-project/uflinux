@@ -56,6 +56,8 @@ struct App {
     power_dirty: Cell<bool>,
     /// A boot-entry read is in flight; the boot partition may have to be mounted.
     boot_pending: Cell<bool>,
+    /// A boot event arrived while a read was in flight.
+    boot_dirty: Cell<bool>,
 }
 pub fn run() -> Result<()> {
     if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
@@ -71,7 +73,7 @@ pub fn run() -> Result<()> {
         // probed off the main context below and published as soon as they arrive, so
         // acquiring the bus name never waits for a sysfs or /proc fan-out.
         let app=Rc::new(App{bus:connection.clone(),system,view:RefCell::new(Snapshot{appearance,screen_capture,..Snapshot::default()}),
-            network:RefCell::new(None),bluetooth:RefCell::new(None),vpn:RefCell::new(None),audio:RefCell::new(None),audio_retry:Cell::new(false),display:RefCell::new(None),pending:RefCell::new(None),applying:Cell::new(false),publishing:Cell::new(false),restored:Cell::new(false),brightness_pending:Cell::new(false),ddc_pending:Cell::new(false),ddc_busy:Cell::new(false),ddc_dirty:Cell::new(false),reconfigure_pending:Cell::new(false),reconfigure_dirty:Cell::new(false),clock_pending:Cell::new(false),power_pending:Cell::new(false),power_dirty:Cell::new(false),boot_pending:Cell::new(false)});
+            network:RefCell::new(None),bluetooth:RefCell::new(None),vpn:RefCell::new(None),audio:RefCell::new(None),audio_retry:Cell::new(false),display:RefCell::new(None),pending:RefCell::new(None),applying:Cell::new(false),publishing:Cell::new(false),restored:Cell::new(false),brightness_pending:Cell::new(false),ddc_pending:Cell::new(false),ddc_busy:Cell::new(false),ddc_dirty:Cell::new(false),reconfigure_pending:Cell::new(false),reconfigure_dirty:Cell::new(false),clock_pending:Cell::new(false),power_pending:Cell::new(false),power_dirty:Cell::new(false),boot_pending:Cell::new(false),boot_dirty:Cell::new(false)});
         app.view.borrow_mut().displays.renderer=std::env::var("UFLINUX_RENDERER").unwrap_or_else(|_|"User-selected / compositor default".into());
         app.view.borrow_mut().displays.hdr_requested=fs::read_to_string(hdr_path()).ok().and_then(|s|files::hdr_requested(&s)).unwrap_or(false);
         app.view.borrow_mut().displays.hdr_status="Labwc applies HDR automatically where supported. Per-monitor activation is not reported by this protocol; mirroring is unavailable.".into();
@@ -352,30 +354,42 @@ impl App {
     /// may have to mount the boot partition, so the read is both off the main
     /// context and allowed only one at a time.
     fn refresh_boot(self: &Rc<Self>) {
+        // One policy write is a temporary file, a rename and a boot entry rewrite,
+        // so a single change arrives as a burst. The read started by the first of
+        // those events can still see the previous file, so the events raised while
+        // it runs are kept for one more read instead of being dropped.
         if self.boot_pending.replace(true) {
+            self.boot_dirty.set(true);
             return;
         }
         let app = self.clone();
         glib::MainContext::default().spawn_local(async move {
-            let next = app.system(&SystemAction::BootStatus {}).await;
-            app.boot_pending.set(false);
-            let state = match next {
-                Ok(value) => match serde_json::from_value(value) {
-                    Ok(state) => state,
-                    Err(_) => return,
-                },
-                // The helper may be unreachable, or the boot partition may be
-                // unreadable; what the user chose is still worth showing.
-                Err(error) => Boot {
-                    configured: app.view.borrow().boot.configured,
-                    reason: error,
-                    ..Boot::default()
-                },
-            };
-            if app.view.borrow().boot != state {
-                app.view.borrow_mut().boot = state;
-                app.publish();
+            loop {
+                let state = match app.system(&SystemAction::BootStatus {}).await {
+                    Ok(value) => match serde_json::from_value(value) {
+                        Ok(state) => state,
+                        Err(_) => break,
+                    },
+                    // The helper may be unreachable, or the boot partition may be
+                    // unreadable; what the user chose is still worth showing.
+                    Err(error) => Boot {
+                        configured: app.view.borrow().boot.configured,
+                        reason: error,
+                        ..Boot::default()
+                    },
+                };
+                if app.view.borrow().boot != state {
+                    app.view.borrow_mut().boot = state;
+                    app.publish();
+                }
+                // An event raised while this read ran still needs fresh values, so
+                // the flag is cleared only after the read it refers to has finished.
+                if !app.boot_dirty.replace(false) {
+                    app.boot_pending.set(false);
+                    return;
+                }
             }
+            app.boot_pending.set(false);
         });
     }
     fn refresh_power(self: &Rc<Self>) {
