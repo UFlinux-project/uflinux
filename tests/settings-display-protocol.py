@@ -31,6 +31,35 @@ def config(outputs):
     return [{**{k:o[k] for k in ['name','enabled','x','y','scale','transform','adaptive_sync']},'mode':o['current']} for o in outputs]
 
 
+desktop=os.environ.get('UFLINUX_DESKTOP_PID','')
+desktop_log=os.environ.get('UFLINUX_DESKTOP_LOG','')
+
+
+def died():
+    """Why the shell can never redraw, if the shell that would redraw is gone.
+    A dead desktop answers --status with the null fallback forever, which looks
+    just like a shell still rebuilding, so a hotplug cycle that kills the shell
+    has to be reported as the crash it is. A Wayland global announced and
+    withdrawn between the same two reads is fatal inside GDK's own registry
+    handling, before any of the shell's output callbacks run, and only the
+    shell's log says so."""
+    if desktop:
+        try:
+            os.kill(int(desktop),0)
+        except PermissionError:
+            return None
+        except (OSError,ValueError):
+            tail=''
+            try:
+                with open(desktop_log,errors='replace') as handle:
+                    # The fatal protocol error is the last thing the shell writes.
+                    tail=' | '.join(handle.read().splitlines()[-6:])
+            except OSError:
+                pass
+            return 'uflinux-desktop exited during the hotplug cycles'+(': '+tail if tail else '')
+    return None
+
+
 def layout():
     """The compositor's outputs plus the surfaces the shell drew for them.
 
@@ -64,7 +93,14 @@ def settle(timeout=60):
     deadline=time.time()+timeout
     steady=None
     since=0.0
-    while time.time()<deadline:
+    while True:
+        # Checked before anything else, so a shell that dies between two reads
+        # is named even on the iteration that runs out of budget.
+        dead=died()
+        if dead:
+            raise AssertionError(dead)
+        if time.time()>=deadline:
+            break
         current=layout()
         if current != steady:
             steady=current
