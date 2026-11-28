@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, SHELL_PROMPT
+from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, PASSWORD_PROMPT, SHELL_PROMPT
 
 
 class GreeterTests(unittest.TestCase):
@@ -130,6 +130,12 @@ class BootTests(unittest.TestCase):
             self.assertRegex(prompt, SHELL_PROMPT)
         # Waiting on the prompt must not be satisfied by the login banner.
         self.assertNotRegex("Welcome to UFLinux\r\n\r\nuflinux login: ", SHELL_PROMPT)
+
+    def test_password_prompt_matches_doas_and_getty(self):
+        # doas names the account and lowercases the word, getty does not. The
+        # installer asks "Password for alice:", which the boot tests match in full.
+        self.assertRegex("doas (alice@uflinux) password: ", PASSWORD_PROMPT)
+        self.assertRegex("Password: ", PASSWORD_PROMPT)
 
     def test_partial_apk_installation_fails_even_if_login_succeeds(self):
         console = "100%\r\nERROR: System state may be inconsistent: failed to write database: No space left on device\r\nuflinux login: "

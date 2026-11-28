@@ -11,6 +11,11 @@ import time
 # of them here keeps a future restyle of the prompt a one-line change.
 SHELL_PROMPT = r"(?:[$#]|\u276f) "
 
+# doas writes "doas (user@host) password: " in lower case, while the installer
+# and getty ask with a capital. Matching either keeps one expectation for every
+# prompt the boot tests answer.
+PASSWORD_PROMPT = r"[Pp]assword:"
+
 
 def press_key(request, key):
     """Release each key explicitly, including repeated password characters."""

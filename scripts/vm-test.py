@@ -16,7 +16,7 @@ import time
 
 import pexpect
 from builder import LOCK, sha
-from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, SHELL_PROMPT
+from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, PASSWORD_PROMPT, SHELL_PROMPT
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHES = json.loads((ROOT / "config/architectures.json").read_text())
@@ -78,7 +78,7 @@ def guest(child, script, admin=True):
 def login(child, user, password):
     expect_login_prompt(child)
     child.sendline(user)
-    child.expect("Password:")
+    child.expect(PASSWORD_PROMPT)
     child.sendline(password)
     child.expect(SHELL_PROMPT)
 
@@ -154,7 +154,7 @@ def grub_mode_smoke(args, state, log, installed, key, expected):
               "uflinux-test-password" if installed else "live")
         if installed:
             child.sendline("doas true")
-            child.expect("Password:")
+            child.expect(PASSWORD_PROMPT)
             child.sendline("uflinux-test-password")
             child.expect(SHELL_PROMPT)
         guest(child, "grep -qw plymouth.enable=0 /proc/cmdline; " + expected)
@@ -338,7 +338,7 @@ def main():
             # Authenticate doas normally before invoking the root-only test harness.
             guest(child, '. /etc/rc.conf.d/uflinux.conf; test "$rc_parallel" = YES', admin=False)
             child.sendline("doas true")
-            child.expect(r"[Pp]assword:")
+            child.expect(PASSWORD_PROMPT)
             child.sendline("uflinux-test-password")
             child.expect(SHELL_PROMPT)
             guest(child, "test -f /run/uflinux-splash/completed; ! pgrep -x plymouthd")
