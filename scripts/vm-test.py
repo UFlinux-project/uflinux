@@ -16,7 +16,7 @@ import time
 
 import pexpect
 from builder import LOCK, sha
-from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, PASSWORD_PROMPT, SHELL_PROMPT
+from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, PASSWORD_PROMPT, SHELL_PROMPT, root_filesystem
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHES = json.loads((ROOT / "config/architectures.json").read_text())
@@ -177,7 +177,7 @@ def gui_install_smoke(args, state, log):
         child.expect(pexpect.EOF)
     with start(args, state, log, installed=True) as child:
         login(child, "alice", "uflinux-test-password")
-        guest(child, "test $(hostname) = uflinux-gui; test $(findmnt -no FSTYPE /) = xfs",
+        guest(child, root_filesystem("xfs") + '; test "$(hostname)" = uflinux-gui',
               admin=False)
 
 
@@ -334,7 +334,7 @@ def main():
             login(child, "alice", "uflinux-test-password")
             guest(child, 'case "$(uname -r)" in *-uflinux-x86_64) ;; *) exit 1 ;; esac', admin=False)
             guest(child, f"apk info -e musl={musl} musl-utils={musl}", admin=False)
-            guest(child, "awk '$2 == \"/\" && $3 == \"xfs\" {ok=1} END {exit !ok}' /proc/mounts; test ! -e /run/uflinux-live; ! id live; apk info -e uflinux uflinux-desktop labwc linux-firmware-i915 linux-firmware-amdgpu linux-firmware-ath11k", admin=False)
+            guest(child, root_filesystem("xfs") + "; test ! -e /run/uflinux-live; ! id live; apk info -e uflinux uflinux-desktop labwc linux-firmware-i915 linux-firmware-amdgpu linux-firmware-ath11k", admin=False)
             # Authenticate doas normally before invoking the root-only test harness.
             guest(child, '. /etc/rc.conf.d/uflinux.conf; test "$rc_parallel" = YES', admin=False)
             child.sendline("doas true")

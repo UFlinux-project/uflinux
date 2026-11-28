@@ -11,7 +11,7 @@ import tempfile
 import pexpect
 
 from builder import LOCK, sha
-from vm_control import SHELL_PROMPT
+from vm_control import SHELL_PROMPT, root_filesystem
 
 spec = importlib.util.spec_from_file_location("iso_vm", Path(__file__).with_name("vm-test.py"))
 vm = importlib.util.module_from_spec(spec)
@@ -101,7 +101,7 @@ def main():
                 vm.login(child, "alice", "uflinux-test-password")
                 musl = LOCK["musl"]["version"] + "-r" + LOCK["musl"]["revision"]
                 vm.guest(child, f"apk info -e musl={musl} musl-utils={musl}; "
-                         'test "$(findmnt -no FSTYPE /)" = xfs', admin=False)
+                         + root_filesystem("xfs"), admin=False)
             result.update(xfs_install_reboot=True, musl=musl)
     if sha(args.iso) != digest:
         raise RuntimeError("ISO changed during boot verification")

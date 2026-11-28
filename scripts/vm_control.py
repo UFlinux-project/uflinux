@@ -17,6 +17,15 @@ SHELL_PROMPT = r"(?:[$#]|\u276f) "
 PASSWORD_PROMPT = r"[Pp]assword:"
 
 
+# An installed system ships alpine-base, not util-linux, so a guest command that
+# runs after the install cannot reach for findmnt. The mount table is always
+# readable, and the shell here is the plain one from alpine-base.
+def root_filesystem(fstype):
+    """Return a guest shell probe for the filesystem mounted at /."""
+    return (f"awk '$2 == \"/\" && $3 == \"{fstype}\" "
+            "{ok=1} END {exit !ok}' /proc/mounts")
+
+
 def press_key(request, key):
     """Release each key explicitly, including repeated password characters."""
     for down in (True, False):

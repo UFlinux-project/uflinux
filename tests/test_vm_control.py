@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -9,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, PASSWORD_PROMPT, SHELL_PROMPT
+from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, PASSWORD_PROMPT, SHELL_PROMPT, root_filesystem
 
 
 class GreeterTests(unittest.TestCase):
@@ -136,6 +137,22 @@ class BootTests(unittest.TestCase):
         # installer asks "Password for alice:", which the boot tests match in full.
         self.assertRegex("doas (alice@uflinux) password: ", PASSWORD_PROMPT)
         self.assertRegex("Password: ", PASSWORD_PROMPT)
+
+    def test_root_filesystem_probe_needs_no_util_linux(self):
+        # The installed system has no findmnt, so the probe may only use the
+        # shell and mount table that alpine-base always provides.
+        probe = root_filesystem("xfs")
+        self.assertNotIn("findmnt", probe)
+        with tempfile.TemporaryDirectory() as temporary:
+            mounts = Path(temporary) / "mounts"
+            command = probe.replace("/proc/mounts", str(mounts))
+            for expected, table in ((0, "/dev/vda2 / xfs rw,relatime 0 0\n"
+                                          "tmpfs /run tmpfs rw 0 0\n"),
+                                    (1, "/dev/vda2 /home xfs rw 0 0\n"
+                                          "tmpfs /run tmpfs rw 0 0\n"),
+                                    (1, "/dev/vda2 / ext4 rw 0 0\n")):
+                mounts.write_text(table)
+                self.assertEqual(subprocess.run(["sh", "-c", command]).returncode, expected, table)
 
     def test_partial_apk_installation_fails_even_if_login_succeeds(self):
         console = "100%\r\nERROR: System state may be inconsistent: failed to write database: No space left on device\r\nuflinux login: "
