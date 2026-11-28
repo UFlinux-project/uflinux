@@ -321,17 +321,22 @@ jobs:
           device='${{ matrix.device }}'
           modes=(uefi)
           if [[ "$device" == pc-* ]]; then modes+=(bios); fi
+          # The boot stages above run under sudo, so out/checks belongs to root
+          # and this unprivileged step could not create a log in it. The boot
+          # transcript gets a directory of its own, like the vm job's out/vm.
           for mode in "${modes[@]}"; do
             python3 scripts/device-vm-test.py --arch "$arch" --device "$device" --mode "$mode" \
               --image "out/devices/$arch/uflinux-${{ needs.checks.outputs.version }}-$device-$arch.img.zst" \
-              --log "out/checks/$arch/device-$device-$mode-boot.log"
+              --log "out/device-boot/$arch/device-$device-$mode-boot.log"
           done
       - name: Upload build diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: device-diagnostics-${{ matrix.device }}-${{ matrix.arch }}
-          path: out/checks/${{ matrix.arch }}
+          path: |
+            out/checks/${{ matrix.arch }}
+            out/device-boot/${{ matrix.arch }}
           if-no-files-found: ignore
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
