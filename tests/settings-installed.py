@@ -9,9 +9,10 @@ import time
 import sys
 
 def diagnostics(kind,error,traceback):
-    for name in ('uflinux-settings-ui.log', 'uflinux-desktop.log'):
-        log=Path('/run') / name
-        if log.exists(): print(name+':\n'+log.read_text(),file=sys.stderr)
+    print('uflinux-settings-ui.log:\n'+(Path('/run/uflinux-settings-ui.log').read_text() if Path('/run/uflinux-settings-ui.log').exists() else 'missing'),file=sys.stderr)
+    # The session autostart redirects the desktop supervisor's stderr into the
+    # signing-in user's runtime directory, not /run (which is root-owned).
+    if 'DESKTOP_LOG' in globals(): print('uflinux-desktop.log:\n'+(DESKTOP_LOG.read_text() if DESKTOP_LOG.exists() else 'missing'),file=sys.stderr)
     if 'frontend' in globals(): print('Primary GUI exit status:',frontend.poll(),file=sys.stderr)
     result=subprocess.run(['dmesg'],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     print('Kernel log tail:\n'+result.stdout[-6000:],file=sys.stderr)
@@ -20,6 +21,7 @@ sys.excepthook=diagnostics
 
 assert os.geteuid() == 0
 user = pwd.getpwnam("alice")
+DESKTOP_LOG = Path(f"/run/user/{user.pw_uid}/uflinux-desktop.log")
 assert len(Path("/proc/swaps").read_text().splitlines()) == 1, "Swap must be disabled"
 memory = int(next(l.split()[1] for l in Path("/proc/meminfo").read_text().splitlines() if l.startswith("MemTotal:")))
 assert memory <= 512 * 1024, "Run the reference test with 512 MiB RAM"
@@ -95,15 +97,29 @@ def desktop_pid():
             pass
     raise AssertionError('Resident desktop was not found')
 
+# "ready" only reports the start menu's catalog, and a desktop that is absent,
+# unregistered, or still loading all answer with the same fallback document, so
+# keep the last reply and the process state for the failure message.
+last_status = 'no reply'
 for _ in range(180):
     try:
-        if desktop_status()['ready']:
+        last_status = run('uflinux-desktop', '--status')
+        if json.loads(last_status)['ready']:
             break
     except (subprocess.SubprocessError, json.JSONDecodeError):
         pass
     time.sleep(.5)
 else:
-    raise AssertionError('Desktop did not become ready')
+    try:
+        alive = str(desktop_pid())
+    except AssertionError as missing:
+        alive = str(missing)
+    reason = subprocess.run(['pgrep', '-a', '-u', str(user.pw_uid), 'uflinux-desktop'],
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+    raise AssertionError('Desktop did not become ready: last status ' + last_status
+                         + ', desktop process ' + alive
+                         + ', supervisor log ' + (DESKTOP_LOG.read_text()[-2000:] if DESKTOP_LOG.exists() else 'missing')
+                         + ', desktop processes ' + (reason or 'none'))
 desktop = desktop_pid()
 initial_pss = pss(desktop)
 output = snapshot['displays']['outputs'][0]['name']

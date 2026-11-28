@@ -16,7 +16,7 @@ import time
 
 import pexpect
 from builder import LOCK, sha
-from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, PASSWORD_PROMPT, SHELL_PROMPT, root_filesystem
+from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, DOAS_PROMPT, PASSWORD_PROMPT, SHELL_PROMPT, root_filesystem
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHES = json.loads((ROOT / "config/architectures.json").read_text())
@@ -68,7 +68,11 @@ def command(args, state, installed=False, usb=False):
 def guest(child, script, admin=True):
     prefix = "doas sh -ec " if admin else "sh -ec "
     child.sendline(prefix + shlex.quote(script) + "; printf '\\nUFLINUX_RC:%s\\n' $?")
-    child.expect(r"\r*\nUFLINUX_RC:([0-9]+)\r*\n")
+    # The persist ticket expires while the long installed test runs, so an
+    # administrative command can ask again. Answering here keeps a diagnostic
+    # call from waiting out the whole pexpect timeout on the prompt.
+    while child.expect([DOAS_PROMPT, r"\r*\nUFLINUX_RC:([0-9]+)\r*\n"]) == 0:
+        child.sendline("uflinux-test-password")
     result = child.before
     if child.match.group(1) != "0":
         raise RuntimeError("Guest command failed: " + script + "\n" + result)

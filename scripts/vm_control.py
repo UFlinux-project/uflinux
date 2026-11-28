@@ -15,6 +15,10 @@ SHELL_PROMPT = r"(?:[$#]|\u276f) "
 # and getty ask with a capital. Matching either keeps one expectation for every
 # prompt the boot tests answer.
 PASSWORD_PROMPT = r"[Pp]assword:"
+# doas re-prompts once its ticket expires, which it does while the installed
+# test runs for tens of minutes. The prompt names the account, so it cannot be
+# confused with the command line echoed back by the shell.
+DOAS_PROMPT = r"doas \([^)]*\) password: "
 
 
 # An installed system ships alpine-base, not util-linux, so a guest command that

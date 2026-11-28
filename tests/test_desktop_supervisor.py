@@ -25,8 +25,12 @@ class DesktopSupervisorTests(unittest.TestCase):
 
     def test_the_session_uses_the_builtin_supervisor(self):
         autostart = AUTOSTART.read_text()
-        self.assertIn('uflinux-desktop --supervise &', autostart,
-                      'the session starts the desktop without supervision')
+        lines = [line for line in autostart.splitlines() if line.startswith('uflinux-desktop --supervise')]
+        self.assertEqual(len(lines), 1, 'the session starts the desktop exactly once')
+        self.assertTrue(lines[0].endswith('&'), 'the supervised desktop must not block the session')
+        # A crash loop is invisible unless the supervisor reports it somewhere.
+        self.assertIn('2>>"$XDG_RUNTIME_DIR/uflinux-desktop.log"', lines[0],
+                      'the supervisor reports restarts into the session log')
         # Supervision must not hold the session open past logout.
         self.assertIn('wait', autostart)
 

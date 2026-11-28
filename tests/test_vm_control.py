@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, PASSWORD_PROMPT, SHELL_PROMPT, root_filesystem
+from vm_control import qmp, memory_mib, check_boot_errors, expect_login_prompt, greeter_button, press_key, DOAS_PROMPT, PASSWORD_PROMPT, SHELL_PROMPT, root_filesystem
 
 
 class GreeterTests(unittest.TestCase):
@@ -137,6 +137,15 @@ class BootTests(unittest.TestCase):
         # installer asks "Password for alice:", which the boot tests match in full.
         self.assertRegex("doas (alice@uflinux) password: ", PASSWORD_PROMPT)
         self.assertRegex("Password: ", PASSWORD_PROMPT)
+
+    def test_doas_reprompt_is_matched_without_matching_the_shell(self):
+        # An expired ticket re-prompts in the middle of a guest command, and the
+        # diagnostics path must answer it instead of waiting for the exit marker.
+        self.assertRegex("\r\ndoas (alice@uflinux) password: ", DOAS_PROMPT)
+        # The echoed command line and the prompt must not look like a re-prompt.
+        for text in ("doas sh -ec 'ps -o pid'\r\n",
+                     "\x1b[1;36malice@uflinux \x1b[0m~ \x1b[36m❯ \x1b[0m"):
+            self.assertNotRegex(text, DOAS_PROMPT)
 
     def test_root_filesystem_probe_needs_no_util_linux(self):
         # The installed system has no findmnt, so the probe may only use the

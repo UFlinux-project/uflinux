@@ -23,7 +23,7 @@ mako &
 /usr/libexec/uflinux-settingsd &
 # The desktop supervises its own restarts, so the session needs no extra
 # interpreter to keep a window owner resident.
-uflinux-desktop --supervise &
+uflinux-desktop --supervise 2>>"$XDG_RUNTIME_DIR/uflinux-desktop.log" &
 if [ "${UFLINUX_RDS_SESSION:-0}" != 1 ] && [ -f /run/uflinux-live ] && [ ! -e "$XDG_RUNTIME_DIR/uflinux-installer-started" ]; then
 	touch "$XDG_RUNTIME_DIR/uflinux-installer-started"
 	uflinux-installer &
