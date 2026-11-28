@@ -76,19 +76,34 @@ def discover(ssid):
     deadline = time.monotonic() + 90
     next_scan = 0
     last_scan_error = None
+    rejections = 0
+    restarted = False
     while time.monotonic() < deadline:
         if time.monotonic() >= next_scan:
             try:
                 request({'action':'scan'})
                 last_scan_error = None
+                rejections = 0
             except AssertionError as error:
                 if not any(word in str(error) for word in ('Busy','InProgress','in progress','NotSupported')):raise
                 last_scan_error = str(error)
+                rejections += 1
             next_scan = time.monotonic() + 4
+            # ConnMan answers a scan with NotSupported when its Wi-Fi device has
+            # no driver bound, and it never binds one to an already registered
+            # device afterwards. The radio churn above can leave it in that
+            # state, so restart ConnMan once rather than wait out the deadline
+            # for a scan that can never start.
+            if not restarted and rejections >= 3:
+                restarted = True
+                command('rc-service', 'connman', 'restart')
+                wait_for(lambda: request()['network']['available'], 'ConnMan service restart')
+                next_scan = time.monotonic() + 4
         service=find(ssid)
         if service:return service
         time.sleep(0.5)
     raise AssertionError('Could not discover '+ssid+'; last scan error: '+str(last_scan_error)+
+                         '; technologies: '+str(request()['network']['technologies'])+
                          '; visible services: '+str([s['name'] for s in services()]))
 
 def connected(ssid):
